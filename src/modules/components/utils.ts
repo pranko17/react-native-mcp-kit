@@ -257,12 +257,14 @@ const serializeFiberUnsafe = (
 
   const name = getComponentName(fiber);
   const props = serializeProps(fiber.memoizedProps);
+  const mcpId = fiber.memoizedProps?.['data-mcp-id'] as string | undefined;
   const testID = fiber.memoizedProps?.testID as string | undefined;
   const text = getTextContent(fiber);
   const children = collectChildren(fiber, maxDepth, currentDepth);
 
   return {
     children,
+    mcpId,
     name,
     props,
     testID,
@@ -302,6 +304,12 @@ export const findAllFibers = (root: Fiber, predicate: (fiber: Fiber) => boolean)
   return results;
 };
 
+export const findByMcpId = (root: Fiber, mcpId: string): Fiber | null => {
+  return findFiber(root, (fiber) => {
+    return fiber.memoizedProps?.['data-mcp-id'] === mcpId;
+  });
+};
+
 export const findByTestID = (root: Fiber, testID: string): Fiber | null => {
   return findFiber(root, (fiber) => {
     return fiber.memoizedProps?.testID === testID;
@@ -324,6 +332,7 @@ export const findByText = (root: Fiber, text: string): Fiber | null => {
 export const findAllByQuery = (root: Fiber, query: ComponentQuery): Fiber[] => {
   return findAllFibers(root, (fiber) => {
     try {
+      if (query.mcpId && fiber.memoizedProps?.['data-mcp-id'] !== query.mcpId) return false;
       if (query.testID && fiber.memoizedProps?.testID !== query.testID) return false;
       if (query.name && getComponentName(fiber) !== query.name) return false;
       if (query.text) {

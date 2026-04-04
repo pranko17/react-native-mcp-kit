@@ -3,6 +3,7 @@ import { type McpModule } from '@/client/models/types';
 import {
   findAllByQuery,
   findByName,
+  findByMcpId,
   findByTestID,
   findByText,
   getAvailableMethods,
@@ -21,6 +22,7 @@ const FIND_SCHEMA = {
     description: 'Zero-based index when multiple components match (default: 0, i.e. first match)',
     type: 'number',
   },
+  mcpId: { description: 'data-mcp-id to search for', type: 'string' },
   name: { description: 'Component name to search for', type: 'string' },
   testID: { description: 'testID to search for', type: 'string' },
   text: { description: 'Text content to search for', type: 'string' },
@@ -40,6 +42,9 @@ export const componentsModule = (): McpModule => {
     const [name, indexStr] = segment.split(':');
     if (!name) return null;
     const idx = indexStr ? parseInt(indexStr, 10) : 0;
+
+    const allByMcpId = findAllByQuery(root, { mcpId: name });
+    if (allByMcpId.length > 0) return allByMcpId[idx] ?? null;
 
     const allByTestID = findAllByQuery(root, { testID: name });
     if (allByTestID.length > 0) return allByTestID[idx] ?? null;
@@ -63,6 +68,10 @@ export const componentsModule = (): McpModule => {
 
     const index = (args.index as number) ?? 0;
 
+    if (args.mcpId) {
+      const all = findAllByQuery(root, { mcpId: args.mcpId as string });
+      return all[index] ?? null;
+    }
     if (args.testID) {
       const all = findAllByQuery(root, { testID: args.testID as string });
       return all[index] ?? null;
@@ -157,6 +166,7 @@ export const componentsModule = (): McpModule => {
 
           const query = {
             hasProps: args.hasProps as string[] | undefined,
+            mcpId: args.mcpId as string | undefined,
             name: args.name as string | undefined,
             testID: args.testID as string | undefined,
             text: args.text as string | undefined,
@@ -165,6 +175,7 @@ export const componentsModule = (): McpModule => {
           const fibers = findAllByQuery(root, query);
           return fibers.map((fiber) => {
             return {
+              mcpId: fiber.memoizedProps?.['data-mcp-id'],
               name: getComponentName(fiber),
               props: serializeProps(fiber.memoizedProps),
               testID: fiber.memoizedProps?.testID,
@@ -176,6 +187,7 @@ export const componentsModule = (): McpModule => {
             description: 'Filter by props presence (array of prop names)',
             type: 'array',
           },
+          mcpId: { description: 'data-mcp-id to match', type: 'string' },
           name: { description: 'Component name to match', type: 'string' },
           testID: { description: 'testID to match', type: 'string' },
           text: { description: 'Text content to match (substring)', type: 'string' },
@@ -208,7 +220,9 @@ export const componentsModule = (): McpModule => {
           const root = getFiberRoot()!;
 
           let fiber = null;
-          if (args.testID) {
+          if (args.mcpId) {
+            fiber = findByMcpId(root, args.mcpId as string);
+          } else if (args.testID) {
             fiber = findByTestID(root, args.testID as string);
           } else if (args.name) {
             fiber = findByName(root, args.name as string);
@@ -223,6 +237,7 @@ export const componentsModule = (): McpModule => {
         },
         inputSchema: {
           depth: { description: 'Max depth to traverse children (default: 3)', type: 'number' },
+          mcpId: { description: 'data-mcp-id to search for', type: 'string' },
           name: { description: 'Component name to search for', type: 'string' },
           testID: { description: 'testID to search for', type: 'string' },
           text: { description: 'Text content to search for', type: 'string' },
