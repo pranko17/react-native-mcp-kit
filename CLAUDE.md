@@ -127,10 +127,13 @@ interface ToolHandler {
   description: string;
   handler: (args: Record<string, unknown>) => unknown | Promise<unknown>;
   inputSchema?: Record<string, unknown>;
+  timeout?: number; // per-tool timeout in ms (default: 10s)
 }
 ```
 
-### Built-in Modules
+### Built-in Modules (10)
+
+- **alert** — `alertModule()`: show alerts with custom buttons and styles (default/cancel/destructive). Returns pressed button. 60s timeout. Tools: show
 
 - **components** — `componentsModule()`: React fiber tree inspection. Tools:
   - `get_tree` / `get_component` / `get_children` / `get_props` / `find_all` — inspect component tree
@@ -138,15 +141,21 @@ interface ToolHandler {
   - `call_ref` / `get_ref_methods` — call methods on native instance (focus, blur, measure, etc.)
   - Search supports: `name`, `testID`, `text`, `index` (N-th match), `within` (parent path with "/" separator and ":N" index, e.g. `"Checkbox/Pressable"`, `"Button:1/View"`)
 
-- **navigation** — `navigationModule(navigationRef)`: get_state, get_current_route, get_current_route_state, navigate, push, pop, pop_to, pop_to_top, replace, reset
-
 - **console** — `consoleModule(options?)`: intercepts console.log/warn/error/info/debug, ring buffer (default 100), stack traces for error/warn. Serializes functions, class instances, circular refs, Errors, Dates, RegExp, Symbols. Tools: get_logs, get_errors, get_warnings, get_info, get_debug, clear_logs
 
 - **device** — `deviceModule()`: get_device_info, get_platform, get_dimensions, get_pixel_ratio, get_appearance, get_app_state, get_accessibility_info, get_keyboard_state, dismiss_keyboard, open_url, can_open_url, get_initial_url, open_settings, reload, vibrate
 
 - **errors** — `errorsModule()`: captures unhandled JS errors (ErrorUtils) and promise rejections (console.error interception). Tools: get_errors, get_fatal, get_stats, clear_errors
 
+- **i18next** — `i18nextModule(i18n)`: accepts i18next instance. Tools: get_info, get_resource, get_keys, translate (with interpolation), search (keys and values), change_language
+
+- **navigation** — `navigationModule(navigationRef)`: get_state, get_current_route, get_current_route_state, navigate, push, pop, pop_to, pop_to_top, replace, reset
+
 - **network** — `networkModule(options?)`: intercepts fetch and XMLHttpRequest, captures request/response bodies, headers, status, duration. Auto-ignores WebSocket, Metro, symbolicate. Tools: get_requests, get_request, get_errors, get_pending, get_stats, clear_requests
+
+- **reactQuery** — `reactQueryModule(queryClient)`: accepts QueryClient instance. Cache inspection and management. Tools: get_queries, get_data, get_stats, invalidate, refetch, remove, reset
+
+- **storage** — `storageModule(...storages)`: accepts multiple named storage adapters (MMKV, AsyncStorage, or custom). Async-compatible. Tools: get_item, set_item, delete_item, list_keys, get_all, list_storages
 
 ### Debug Logging
 
