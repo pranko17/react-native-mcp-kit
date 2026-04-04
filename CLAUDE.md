@@ -26,8 +26,8 @@ AI Agent  --stdio/MCP-->  MCP Server (Node.js)  --WebSocket-->  RN App (device)
 
 The server exposes 5 static tools (always available, no dynamic registration needed):
 
-- **`call`** — Universal proxy to call any tool registered by the RN app. Format: `call(tool: "module_method", args: '{"key": "value"}')`. Args is a JSON string.
-- **`list_tools`** — Lists all available tools from all registered modules, grouped by module.
+- **`call`** — Universal proxy to call any tool registered by the RN app. Format: `call(tool: "module_method", args: '{"key": "value"}')`. Args is a JSON string. For dynamic tools from `useMcpTool` hooks, use `_dynamic_` prefix: `call(tool: "_dynamic_logout")`.
+- **`list_tools`** — Lists all available tools from all registered modules, grouped by module. Includes dynamic tools (from `useMcpTool` hooks) with `(dynamic)` label.
 - **`connection_status`** — Check if the RN app is connected and which modules are registered.
 - **`state_get`** / **`state_list`** — Read state exposed by `useMcpState` hooks.
 
@@ -35,14 +35,18 @@ This design avoids dynamic tool registration issues — all module tools are acc
 
 ### Package Structure
 
-The package has three entry points:
+The package has four entry points:
 
 - **Root** (`src/index.ts`) — re-exports client + modules (RN-safe, no server code)
 - **Server** (`src/server/`) — Node.js MCP server + WebSocket bridge (not bundled into RN)
 - **Modules** (`src/modules/`) — built-in RN modules
+- **Babel** (`src/babel/`) — Babel plugins (testIdPlugin, stripPlugin)
 
 ```
 src/
+  babel/
+    testIdPlugin.ts         — Auto-adds data-mcp-id to JSX components (dev only)
+    stripPlugin.ts          — Removes all MCP code in production builds
   client/
     core/                   — McpClient singleton (connection, module registration)
     contexts/McpContext/    — McpContext, McpProvider (context for hooks only)
@@ -51,15 +55,19 @@ src/
     utils/                  — McpConnection (WS client), ModuleRunner
   server/
     bridge.ts               — WebSocket server, request/response dispatch
-    mcpServer.ts            — 5 static MCP tools (call, list_tools, connection_status, state_get, state_list)
+    mcpServer.ts            — 5 static MCP tools + dynamic tool tracking
     cli.ts                  — CLI entry point (npx react-native-mcp)
   modules/
+    alert/                  — Show alerts with custom buttons and styles
     components/             — React fiber tree inspection, invoke callbacks, call ref methods
     console/                — Console log capture (log/warn/error/info/debug)
     device/                 — Device info, app state, keyboard, linking, reload, vibrate
     errors/                 — Unhandled errors and promise rejections
+    i18next/                — i18next translation inspection and language management
     navigation/             — Navigation state, navigate, push, pop, replace, reset
     network/                — HTTP request interception (fetch + XMLHttpRequest)
+    reactQuery/             — React Query cache inspection and management
+    storage/                — Key-value storage inspection (MMKV, AsyncStorage, custom)
   shared/
     protocol.ts             — WebSocket message types (RegistrationMessage, ToolRequest, etc.)
 ```
@@ -81,12 +89,16 @@ McpClient.initialize({ port: 8347, debug: true });
 
 // 2. Register modules (global, can be called from anywhere after init)
 McpClient.getInstance().registerModules([
+  alertModule(),
   componentsModule(),
-  navigationModule(ref),
   consoleModule(),
   deviceModule(),
   errorsModule(),
+  i18nextModule(i18n),
+  navigationModule(ref),
   networkModule(),
+  reactQueryModule(queryClient),
+  storageModule({ adapter: storageAdapter, name: 'app' }),
 ]);
 
 // 3. McpProvider only provides context for hooks (useMcpState, useMcpTool)
@@ -100,18 +112,42 @@ Three ways to register modules:
 - **Hook**: `useMcpModule(() => module, deps)` — tied to component lifecycle
 - **Init time**: Register right after `McpClient.initialize()`
 
+### Dynamic Tools (useMcpTool)
+
+Tools registered via `useMcpTool` in React components are accessible through the `call` tool with `_dynamic_` prefix. They appear in `list_tools` under `(dynamic)` section.
+
+```typescript
+// In a React component:
+useMcpTool('logout', () => ({
+  description: 'Log out the current user',
+  handler: () => { logout(); return { success: true }; },
+}), [logout]);
+
+// Call from AI agent:
+call(tool: "_dynamic_logout")
+```
+
 ### Data Flow
 
 1. `McpClient.initialize()` opens WebSocket to bridge (port 8347)
 2. On connect + module registration, sends `RegistrationMessage` with module descriptors
 3. AI agent calls `call` tool → server sends `ToolRequest` over WS → RN app executes handler → returns `ToolResponse`
 4. `useMcpState` sends `state_update` messages → server stores in memory → AI reads via `state_get` (no WS roundtrip)
+5. `useMcpTool` sends `tool_register`/`tool_unregister` → server tracks dynamic tools → AI calls via `_dynamic_` prefix
 
 ### Dev vs Production
 
-- `useMcpState`, `useMcpTool`, `useMcpModule` check `typeof __DEV__ !== 'undefined' && __DEV__` — in production they are `() => {}` (noop)
-- `McpClient.initialize()` and `McpProvider` are wrapped in `if (__DEV__)` by the consuming app
-- Metro tree-shakes the dev branch entirely from production bundles
+Two strategies work together:
+
+1. **Noop hooks**: `useMcpState`, `useMcpTool`, `useMcpModule` check `__DEV__` — in production they are `() => {}` (noop)
+2. **Strip plugin** (Babel): Removes all MCP imports, `McpClient` calls, `<McpProvider>` JSX, and `data-mcp-id` attributes from production builds. Zero MCP code in prod bundle.
+
+With strip plugin, `if (__DEV__)` wrappers are not needed — the plugin handles removal.
+
+### Babel Plugins
+
+- **testIdPlugin** (dev only): Auto-adds `data-mcp-id` attribute to all JSX components. Format: `ComponentName:filePath:line`. Stable across re-renders. Configurable: `attr`, `separator`, `include`, `exclude`.
+- **stripPlugin** (prod only): Removes all MCP code — imports, requires, McpClient calls, McpProvider JSX, data-mcp-id attributes, useMcpState/useMcpTool calls.
 
 ### Module Interface
 
@@ -139,7 +175,7 @@ interface ToolHandler {
   - `get_tree` / `get_component` / `get_children` / `get_props` / `find_all` — inspect component tree
   - `invoke` — call any callback prop (onPress, onChangeText, etc.) with custom args
   - `call_ref` / `get_ref_methods` — call methods on native instance (focus, blur, measure, etc.)
-  - Search supports: `name`, `testID`, `text`, `index` (N-th match), `within` (parent path with "/" separator and ":N" index, e.g. `"Checkbox/Pressable"`, `"Button:1/View"`)
+  - Search supports: `name`, `testID`, `mcpId` (data-mcp-id), `text`, `index` (N-th match), `within` (parent path with "/" separator and ":N" index, e.g. `"Checkbox/Pressable"`, `"Button:1/View"`)
 
 - **console** — `consoleModule(options?)`: intercepts console.log/warn/error/info/debug, ring buffer (default 100), stack traces for error/warn. Serializes functions, class instances, circular refs, Errors, Dates, RegExp, Symbols. Tools: get_logs, get_errors, get_warnings, get_info, get_debug, clear_logs
 
@@ -155,11 +191,13 @@ interface ToolHandler {
 
 - **reactQuery** — `reactQueryModule(queryClient)`: accepts QueryClient instance. Cache inspection and management. Tools: get_queries, get_data, get_stats, invalidate, refetch, remove, reset
 
-- **storage** — `storageModule(...storages)`: accepts multiple named storage adapters (MMKV, AsyncStorage, or custom). Async-compatible. Tools: get_item, set_item, delete_item, list_keys, get_all, list_storages
+- **storage** — `storageModule(...storages)`: accepts multiple named storage adapters (MMKV, AsyncStorage, or custom). All adapter methods optional except `get`. Async-compatible. Tools: get_item, set_item, delete_item, list_keys, get_all, list_storages
 
 ### Debug Logging
 
 `McpClient.initialize({ debug: true })` enables colored console output showing all tool requests/responses. Uses original `console.log` (captured before console module intercepts it) so debug logs don't appear in the console module buffer.
+
+Colors: purple `[react-native-mcp]` tag, cyan `→` for incoming requests, green `←` for responses, red `✕` for errors.
 
 ## Code Style
 
@@ -173,6 +211,7 @@ interface ToolHandler {
 ## Key Dependencies
 
 - `@modelcontextprotocol/sdk` — MCP protocol implementation (server-side only). Imports require `.js` extension.
+- `@babel/core` — Babel plugin development (dev dependency).
 - `ws` — WebSocket server (server-side only, RN uses built-in WebSocket).
 - `zod` — Schema validation for MCP tool input schemas.
 - `tsc-alias` — Resolves `@/` path aliases in compiled output (Metro doesn't understand them).
