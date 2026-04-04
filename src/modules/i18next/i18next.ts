@@ -19,8 +19,9 @@ const flattenKeys = (obj: Record<string, unknown>, prefix = ''): string[] => {
 export const i18nextModule = (i18n: I18nLike): McpModule => {
   const getNamespaces = (): string[] => {
     const ns = i18n.options.ns ?? i18n.options.defaultNS;
-    if (!ns) return ['translation'];
-    return Array.isArray(ns) ? ns : [ns];
+    if (!ns || ns === false) return ['translation'];
+    if (Array.isArray(ns)) return ns as string[];
+    return [ns as string];
   };
 
   return {

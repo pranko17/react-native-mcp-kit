@@ -2,7 +2,7 @@ export interface QueryClientLike {
   getQueryCache: () => {
     getAll: () => Array<{
       queryHash: string;
-      queryKey: unknown[];
+      queryKey: readonly unknown[];
       state: {
         dataUpdatedAt: number;
         errorUpdatedAt: number;
@@ -13,8 +13,8 @@ export interface QueryClientLike {
       };
     }>;
   };
-  invalidateQueries: (filters?: { queryKey?: unknown[] }) => Promise<void>;
-  refetchQueries: (filters?: { queryKey?: unknown[] }) => Promise<void>;
-  removeQueries: (filters?: { queryKey?: unknown[] }) => void;
-  resetQueries: (filters?: { queryKey?: unknown[] }) => Promise<void>;
+  invalidateQueries: (filters?: { queryKey?: readonly unknown[] }) => Promise<void>;
+  refetchQueries: (filters?: { queryKey?: readonly unknown[] }) => Promise<void>;
+  removeQueries: (filters?: { queryKey?: readonly unknown[] }) => void;
+  resetQueries: (filters?: { queryKey?: readonly unknown[] }) => Promise<void>;
 }

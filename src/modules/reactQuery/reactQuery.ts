@@ -4,7 +4,7 @@ import { type QueryClientLike } from './types';
 
 const serializeQuery = (query: {
   queryHash: string;
-  queryKey: unknown[];
+  queryKey: readonly unknown[];
   state: {
     dataUpdatedAt: number;
     errorUpdatedAt: number;

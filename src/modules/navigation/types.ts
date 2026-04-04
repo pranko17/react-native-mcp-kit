@@ -17,10 +17,13 @@ export interface NavigationAction {
 
 export interface NavigationRef {
   canGoBack: () => boolean;
-  dispatch: (action: NavigationAction) => void;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  dispatch: (action: any) => void;
   getCurrentRoute: () => unknown;
   getRootState: () => unknown;
   goBack: () => void;
-  navigate: (screen: string, params?: Record<string, unknown>) => void;
-  resetRoot: (state?: Partial<NavigationState> | NavigationState) => void;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  navigate: (...args: any[]) => void;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  resetRoot: (...args: any[]) => void;
 }

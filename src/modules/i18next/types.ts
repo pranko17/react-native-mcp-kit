@@ -1,11 +1,14 @@
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export interface I18nLike {
   changeLanguage: (lng: string) => Promise<unknown>;
-  getResource: (lng: string, ns: string) => Record<string, unknown> | undefined;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  getResource: (...args: any[]) => any;
   language: string;
   languages: readonly string[];
   options: {
-    defaultNS?: string | string[];
-    ns?: string | string[];
+    defaultNS?: unknown;
+    ns?: unknown;
   };
-  t: (key: string, options?: Record<string, unknown>) => string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  t: (...args: any[]) => string;
 }
