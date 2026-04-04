@@ -15,7 +15,7 @@ export {
 } from './client/index';
 
 // Modules (safe for React Native)
-export { consoleModule, deviceModule, navigationModule } from './modules/index';
+export { consoleModule, deviceModule, navigationModule, networkModule } from './modules/index';
 
 // Protocol types
 export {
