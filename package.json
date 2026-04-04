@@ -4,6 +4,15 @@
   "description": "MCP server for React Native app state",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "bin": {
+    "react-native-mcp": "dist/server/cli.js"
+  },
+  "exports": {
+    ".": "./dist/index.js",
+    "./client": "./dist/client/index.js",
+    "./modules": "./dist/modules/index.js",
+    "./server": "./dist/server/index.js"
+  },
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch"
@@ -11,6 +20,21 @@
   "packageManager": "yarn@1.22.22+sha1.ac34549e6aa8e7ead463a7407e1c7390f61a6610",
   "devDependencies": {
     "@types/node": "^25.5.2",
-    "typescript": "^6.0.2"
+    "@types/react": "^19.2.14",
+    "@types/ws": "^8.18.1",
+    "typescript": "~5.7.0"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "ws": "^8.20.0",
+    "zod": "^4.3.6"
   }
 }
