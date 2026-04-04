@@ -20,7 +20,7 @@ export {
   consoleModule,
   deviceModule,
   errorsModule,
-  i18nModule,
+  i18nextModule,
   navigationModule,
   networkModule,
   reactQueryModule,

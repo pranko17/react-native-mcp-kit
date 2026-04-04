@@ -16,7 +16,7 @@ const flattenKeys = (obj: Record<string, unknown>, prefix = ''): string[] => {
   return keys;
 };
 
-export const i18nModule = (i18n: I18nLike): McpModule => {
+export const i18nextModule = (i18n: I18nLike): McpModule => {
   const getNamespaces = (): string[] => {
     const ns = i18n.options.ns ?? i18n.options.defaultNS;
     if (!ns) return ['translation'];
