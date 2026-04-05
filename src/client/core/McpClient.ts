@@ -138,10 +138,12 @@ export class McpClient {
 
   registerModules(modules: McpModule[]): void {
     this.log(
-      'Registering modules:',
-      modules.map((m) => {
-        return colorModule(m.name);
-      })
+      'Registering modules: ' +
+        modules
+          .map((m) => {
+            return colorModule(m.name);
+          })
+          .join(', ')
     );
     this.moduleRunner.registerModules(modules);
     this.sendRegistration();
@@ -200,12 +202,12 @@ export class McpClient {
   private sendRegistration(): void {
     const descriptors = this.moduleRunner.getModuleDescriptors();
     this.log(
-      'Sending registration: ' +
+      'Sending registration:\n ' +
         descriptors
           .map((m) => {
-            return `${colorModule(m.name)} (${m.tools.length} tools)`;
+            return `${colorModule(m.name.padEnd(12))} ${m.tools.length} tools`;
           })
-          .join('; ')
+          .join('\n ')
     );
     this.connection.send({
       modules: descriptors,
