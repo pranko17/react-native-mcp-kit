@@ -25,6 +25,7 @@ export {
   navigationModule,
   networkModule,
   reactQueryModule,
+  screenshotModule,
   storageModule,
 } from './modules/index';
 

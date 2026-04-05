@@ -7,4 +7,5 @@ export { i18nextModule } from './i18next';
 export { navigationModule } from './navigation';
 export { networkModule } from './network';
 export { reactQueryModule } from './reactQuery';
+export { screenshotModule } from './screenshot';
 export { storageModule } from './storage';

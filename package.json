@@ -1,5 +1,5 @@
 {
-  "name": "@pranko97/react-native-mcp",
+  "name": "rnmcp",
   "version": "1.0.0",
   "description": "Bidirectional MCP bridge connecting AI agents to running React Native apps",
   "license": "MIT",
@@ -71,9 +71,13 @@
     "typescript": "~5.7.0"
   },
   "peerDependencies": {
+    "@shopify/react-native-skia": ">=1.0",
     "react": ">=19"
   },
   "peerDependenciesMeta": {
+    "@shopify/react-native-skia": {
+      "optional": true
+    },
     "react": {
       "optional": true
     }
