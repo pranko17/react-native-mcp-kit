@@ -8,11 +8,13 @@ AI Agent  --stdio/MCP-->  MCP Server (Node.js)  --WebSocket-->  RN App (device)
 
 ## Features
 
-- **10 built-in modules** — navigation, components, network, console, storage, device, errors, i18next, React Query, alerts
+- **11 built-in modules** — navigation, fiber tree, screenshot, network, console, storage, device, errors, i18next, React Query, alerts
 - **React fiber inspection** — walk the component tree, read props, invoke callbacks, call ref methods
+- **Screenshots** — capture app screenshots via `@shopify/react-native-skia` with resize and JPEG compression
 - **Developer hooks** — expose state and tools from any component with `useMcpState` and `useMcpTool`
-- **Modular** — register only the modules you need, or write your own
-- **Zero production overhead** — noop hooks + Babel strip plugin removes all MCP code from prod builds
+- **Navigation history** — full log of screen transitions with timestamps and slice access
+- **Modular** — register only the modules you need, or write your own with `description` for AI context
+- **Zero production overhead** — Babel strip plugin removes all MCP code from prod builds
 - **Babel testID plugin** — auto-adds `data-mcp-id` attributes for component identification
 
 ## Quick Start
@@ -33,19 +35,28 @@ import {
   McpProvider,
   consoleModule,
   deviceModule,
+  fiberTreeModule,
   navigationModule,
   networkModule,
+  screenshotModule,
 } from 'react-native-mcp';
+import { createRef } from 'react';
+import { View } from 'react-native';
+
+const rootRef = createRef<View>();
+const navigationRef = createNavigationContainerRef();
 
 // Initialize client (call once, before any module registration)
-const client = McpClient.initialize({ debug: true, port: 8347 });
+const client = McpClient.initialize({ debug: true });
 
 // Register modules
 client.registerModules([
   consoleModule(),
   deviceModule(),
+  fiberTreeModule({ rootRef }),
   navigationModule(navigationRef),
   networkModule(),
+  screenshotModule({ rootRef }),
 ]);
 ```
 
@@ -54,11 +65,13 @@ client.registerModules([
 ```tsx
 const App = () => {
   return (
-    <NavigationContainer ref={navigationRef}>
-      <McpProvider>
-        {/* your app */}
-      </McpProvider>
-    </NavigationContainer>
+    <View ref={rootRef} collapsable={false} style={{ flex: 1 }}>
+      <NavigationContainer ref={navigationRef}>
+        <McpProvider>
+          {/* your app */}
+        </McpProvider>
+      </NavigationContainer>
+    </View>
   );
 };
 ```
@@ -95,20 +108,22 @@ Or with a custom port:
 
 1. Start Metro and run your app
 2. The AI agent connects via MCP and can now inspect and interact with your app
+3. For Android emulator, run `adb reverse tcp:8347 tcp:8347` to forward the port
 
 ## Modules
 
 | Module | Factory | Description |
 |--------|---------|-------------|
 | [alert](#alert) | `alertModule()` | Show native alerts with custom buttons and styles |
-| [components](#components) | `componentsModule()` | React fiber tree inspection, invoke callbacks, call ref methods |
+| [fiberTree](#fibertree) | `fiberTreeModule({ rootRef })` | React fiber tree inspection, invoke callbacks, call ref methods |
 | [console](#console) | `consoleModule(options?)` | Capture console.log/warn/error/info/debug |
 | [device](#device) | `deviceModule()` | Device info, app state, keyboard, linking, reload |
 | [errors](#errors) | `errorsModule(options?)` | Capture unhandled errors and promise rejections |
 | [i18next](#i18next) | `i18nextModule(i18n)` | Translation inspection and language management |
-| [navigation](#navigation) | `navigationModule(ref)` | Navigation state, navigate, push, pop, replace, reset |
+| [navigation](#navigation) | `navigationModule(ref)` | Navigation state, history, navigate, push, pop, replace, reset |
 | [network](#network) | `networkModule(options?)` | HTTP request/response interception |
 | [reactQuery](#reactquery) | `reactQueryModule(queryClient)` | React Query cache inspection and management |
+| [screenshot](#screenshot) | `screenshotModule({ rootRef })` | Capture screenshots via Skia |
 | [storage](#storage) | `storageModule(...storages)` | Key-value storage inspection (MMKV, AsyncStorage, custom) |
 
 ---
@@ -129,22 +144,22 @@ Buttons can be strings or objects with style:
 
 ```typescript
 // Simple
-call(tool: "alert_show", args: '{"title": "Confirm", "buttons": ["Cancel", "OK"]}')
+call(tool: "alert__show", args: '{"title": "Confirm", "buttons": ["Cancel", "OK"]}')
 
 // With styles
-call(tool: "alert_show", args: '{"title": "Delete?", "buttons": [{"text": "Cancel", "style": "cancel"}, {"text": "Delete", "style": "destructive"}]}')
+call(tool: "alert__show", args: '{"title": "Delete?", "buttons": [{"text": "Cancel", "style": "cancel"}, {"text": "Delete", "style": "destructive"}]}')
 ```
 
 Button styles: `default`, `cancel`, `destructive`. Returns `{ button: string, index: number }`. Timeout: 60s.
 
 ---
 
-### components
+### fiberTree
 
 React fiber tree inspection with the ability to invoke callbacks and call ref methods.
 
 ```typescript
-client.registerModules([componentsModule()]);
+client.registerModules([fiberTreeModule({ rootRef })]);
 ```
 
 **Inspection tools:**
@@ -171,39 +186,39 @@ Components can be found by `testID`, `name`, `text`, or `mcpId` (from the Babel 
 
 ```typescript
 // Find by testID
-call(tool: "components_get_component", args: '{"testID": "login-button"}')
+call(tool: "fiber_tree__get_component", args: '{"testID": "login-button"}')
 
 // Find by name within a parent
-call(tool: "components_get_component", args: '{"name": "Pressable", "within": "LoginForm"}')
+call(tool: "fiber_tree__get_component", args: '{"name": "Pressable", "within": "LoginForm"}')
 
 // Use index for multiple matches (0-based)
-call(tool: "components_get_component", args: '{"name": "TextInput", "within": "LoginForm", "index": 1}')
+call(tool: "fiber_tree__get_component", args: '{"name": "TextInput", "within": "LoginForm", "index": 1}')
 
 // Nested within path with index
-call(tool: "components_get_component", args: '{"name": "Text", "within": "Button:1/Pressable"}')
+call(tool: "fiber_tree__get_component", args: '{"name": "Text", "within": "Button:1/Pressable"}')
 ```
 
 **Invoking callbacks:**
 
 ```typescript
 // Press a button
-call(tool: "components_invoke", args: '{"testID": "submit-btn", "callback": "onPress"}')
+call(tool: "fiber_tree__invoke", args: '{"testID": "submit-btn", "callback": "onPress"}')
 
 // Type text
-call(tool: "components_invoke", args: '{"testID": "email-input", "callback": "onChangeText", "args": ["user@example.com"]}')
+call(tool: "fiber_tree__invoke", args: '{"mcpId": "Input:screens/Login:42", "callback": "onChangeText", "args": ["user@example.com"]}')
 
 // Toggle checkbox with custom args
-call(tool: "components_invoke", args: '{"name": "Checkbox", "within": "TermsForm", "callback": "onPress", "args": [true]}')
+call(tool: "fiber_tree__invoke", args: '{"name": "Checkbox", "within": "TermsForm", "callback": "onPress", "args": [true]}')
 ```
 
 **Calling ref methods:**
 
 ```typescript
 // Focus an input
-call(tool: "components_call_ref", args: '{"testID": "email-input", "method": "focus"}')
+call(tool: "fiber_tree__call_ref", args: '{"testID": "email-input", "method": "focus"}')
 
 // List available methods
-call(tool: "components_get_ref_methods", args: '{"testID": "email-input"}')
+call(tool: "fiber_tree__get_ref_methods", args: '{"testID": "email-input"}')
 ```
 
 ---
@@ -248,7 +263,7 @@ client.registerModules([deviceModule()]);
 
 | Tool | Description | Args |
 |------|-------------|------|
-| `get_device_info` | Comprehensive device info | — |
+| `get_device_info` | Comprehensive device info (platform, dimensions, pixel ratio, appearance, dev mode) | — |
 | `get_platform` | Platform (OS, version, constants) | — |
 | `get_dimensions` | Screen and window dimensions | — |
 | `get_pixel_ratio` | Pixel density and font scale | — |
@@ -309,17 +324,17 @@ client.registerModules([i18nextModule(i18n)]);
 
 ```typescript
 // Translate with interpolation
-call(tool: "i18next_translate", args: '{"key": "welcome", "options": "{\"name\": \"John\"}"}')
+call(tool: "i18n__translate", args: '{"key": "welcome", "options": "{\"name\": \"John\"}"}')
 
 // Search translations
-call(tool: "i18next_search", args: '{"query": "password"}')
+call(tool: "i18n__search", args: '{"query": "password"}')
 ```
 
 ---
 
 ### navigation
 
-Full navigation control. Accepts a React Navigation ref.
+Full navigation control with history tracking. Accepts a React Navigation ref.
 
 ```typescript
 import { createNavigationContainerRef } from '@react-navigation/native';
@@ -334,13 +349,31 @@ client.registerModules([navigationModule(navigationRef)]);
 | `get_state` | Full navigation state tree | — |
 | `get_current_route` | Current focused route | — |
 | `get_current_route_state` | Current route with nested state | — |
+| `get_history` | Log of all screen transitions | `offset?`, `limit?`, `full?: boolean` |
 | `navigate` | Navigate to screen (reuses existing) | `screen: string`, `params?: object` |
 | `push` | Push new screen onto stack | `screen: string`, `params?: object` |
 | `pop` | Pop screens | `count?: number` |
 | `pop_to` | Pop to specific screen | `screen: string`, `params?: object` |
 | `pop_to_top` | Pop to first screen | — |
+| `go_back` | Go back to previous screen | — |
 | `replace` | Replace current screen | `screen: string`, `params?: object` |
 | `reset` | Reset navigation state | `routes: Array<{name, params?}>`, `index?: number` |
+
+**Navigation history:**
+
+```typescript
+// Get simplified history (name, key, params, timestamp)
+call(tool: "navigation__get_history")
+
+// Get last 5 transitions
+call(tool: "navigation__get_history", args: '{"limit": 5}')
+
+// Get full navigation state for each transition
+call(tool: "navigation__get_history", args: '{"full": true}')
+
+// Slice: skip first 10, get next 5
+call(tool: "navigation__get_history", args: '{"offset": 10, "limit": 5}')
+```
 
 ---
 
@@ -398,10 +431,51 @@ client.registerModules([reactQueryModule(queryClient)]);
 
 ```typescript
 // Get data for a specific query
-call(tool: "reactQuery_get_data", args: '{"key": "[\"users\",\"list\"]"}')
+call(tool: "query__get_data", args: '{"key": "[\"users\",\"list\"]"}')
 
 // Invalidate all user queries
-call(tool: "reactQuery_invalidate", args: '{"key": "users"}')
+call(tool: "query__invalidate", args: '{"key": "users"}')
+```
+
+---
+
+### screenshot
+
+Capture screenshots of the app via `@shopify/react-native-skia`. Requires Skia as a peer dependency.
+
+```bash
+yarn add @shopify/react-native-skia
+```
+
+```typescript
+import { createRef } from 'react';
+import { View } from 'react-native';
+
+const rootRef = createRef<View>();
+
+client.registerModules([screenshotModule({ rootRef })]);
+
+// JSX — rootRef must have collapsable={false}
+<View ref={rootRef} collapsable={false} style={{ flex: 1 }}>
+  {/* app */}
+</View>
+```
+
+| Tool | Description | Args |
+|------|-------------|------|
+| `capture` | Capture screenshot | `format?: 'jpeg'\|'png'`, `quality?: number`, `maxWidth?: number` |
+
+Default: JPEG, quality 80, max width 600px (height scales proportionally). Images are resized via `Skia.Surface.Make` + `drawImageRectOptions` for optimal size.
+
+```typescript
+// Default (JPEG, 600px wide)
+call(tool: "screenshot__capture")
+
+// High quality PNG
+call(tool: "screenshot__capture", args: '{"format": "png", "quality": 100}')
+
+// Smaller image
+call(tool: "screenshot__capture", args: '{"maxWidth": 400, "quality": 50}')
 ```
 
 ---
@@ -449,7 +523,7 @@ Works with MMKV, AsyncStorage, or any custom adapter.
 
 ## Hooks
 
-Hooks let you expose state and tools from React components. They are no-ops in production (`__DEV__ === false`).
+Hooks let you expose state and tools from React components.
 
 ### useMcpState
 
@@ -601,10 +675,10 @@ With the strip plugin, you don't need `if (__DEV__)` guards — just write MCP c
 
 ## Dev vs Production
 
-Two strategies ensure zero production overhead:
+Two strategies for production safety:
 
-1. **Noop hooks** — `useMcpState`, `useMcpTool`, `useMcpModule` check `__DEV__` at runtime. In production they are `() => {}`.
-2. **Strip plugin** (Babel) — removes all MCP imports, calls, and JSX from the production bundle. No MCP code ships to users.
+1. **Strip plugin** (Babel) — removes all MCP imports, calls, and JSX from the production bundle. No MCP code ships to users.
+2. **Without strip plugin** — MCP code stays but WebSocket connection to non-existent server is harmless.
 
 ## MCP Server Tools
 
@@ -613,7 +687,7 @@ The server exposes 5 static tools (no dynamic registration needed):
 | Tool | Description |
 |------|-------------|
 | `call` | Universal proxy — calls any tool registered by the RN app |
-| `list_tools` | Lists all available tools grouped by module |
+| `list_tools` | Lists all available tools grouped by module with descriptions |
 | `connection_status` | Check if the RN app is connected |
 | `state_get` | Read state exposed by `useMcpState` |
 | `state_list` | List all available state keys |
@@ -621,12 +695,14 @@ The server exposes 5 static tools (no dynamic registration needed):
 **Using `call`:**
 
 ```
-call(tool: "navigation_navigate", args: '{"screen": "Settings"}')
-call(tool: "console_get_errors")
+call(tool: "navigation__navigate", args: '{"screen": "Settings"}')
+call(tool: "console__get_errors")
 call(tool: "_dynamic_logout")
 ```
 
-The `tool` argument uses `module_method` format. Dynamic tools from `useMcpTool` use the `_dynamic_` prefix.
+The `tool` argument uses `module__method` format (double underscore). Dynamic tools from `useMcpTool` use the `_dynamic_` prefix.
+
+The server includes instructions and tool annotations to help AI agents understand how to interact with the app.
 
 ## Custom Modules
 
@@ -637,6 +713,7 @@ import { type McpModule } from 'react-native-mcp';
 
 const myModule = (): McpModule => {
   return {
+    description: 'My custom module for AI agents',
     name: 'myModule',
     tools: {
       greet: {
@@ -685,10 +762,12 @@ McpClient.initialize({ debug: true });
 
 Output shows:
 
-- `[react-native-mcp]` tag (purple)
-- `->` incoming tool requests (cyan)
-- `<-` responses (green)
-- `x` errors (red)
+- `[rnmcp]` tag (bold purple)
+- Colored module names (12 bold ANSI colors, assigned by registration order)
+- Bold method names
+- `→` incoming tool requests (cyan)
+- `←` responses (green)
+- `✕` errors (red)
 
 Debug logs use the original `console.log` (captured before the console module intercepts), so they don't appear in the console module buffer.
 
@@ -698,7 +777,7 @@ Debug logs use the original `console.log` (captured before the console module in
 
 ```typescript
 // Initialize (creates singleton)
-static initialize(options?: { debug?: boolean; port?: number }): McpClient
+static initialize(options?: { debug?: boolean; host?: string; port?: number }): McpClient
 
 // Get existing instance (throws if not initialized)
 static getInstance(): McpClient
@@ -724,6 +803,7 @@ enableDebug(enabled: boolean): void
 
 ```typescript
 interface McpModule {
+  description?: string;
   name: string;
   tools: Record<string, ToolHandler>;
 }
