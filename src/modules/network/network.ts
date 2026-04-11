@@ -183,7 +183,19 @@ export const networkModule = (options?: NetworkModuleOptions): McpModule => {
 
       let responseBody: unknown;
       if (includeBodies) {
-        responseBody = tryParseBody(this.responseText);
+        const responseType = this.responseType;
+        if (responseType === '' || responseType === 'text') {
+          try {
+            responseBody = tryParseBody(this.responseText);
+          } catch {
+            responseBody = undefined;
+          }
+        } else if (responseType === 'json') {
+          responseBody = this.response;
+        } else {
+          // blob | arraybuffer | document — don't serialize binary/DOM payloads
+          responseBody = `[${responseType}]`;
+        }
       }
 
       entry.response = {
