@@ -76,12 +76,9 @@
     "typescript": "~5.7.0"
   },
   "peerDependencies": {
-    "react": ">=19"
-  },
-  "peerDependenciesMeta": {
-    "react": {
-      "optional": true
-    }
+    "react": ">=19",
+    "react-native": ">=0.79",
+    "react-native-device-info": ">=10"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
