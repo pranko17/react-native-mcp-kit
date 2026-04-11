@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { DYNAMIC_PREFIX, MODULE_SEPARATOR, type ModuleDescriptor } from '@/shared/protocol';
 
 import { type Bridge, type ClientEntry } from './bridge';
+import { type HostModule, type HostToolHandler } from './host/types';
 
 const BASE_INSTRUCTIONS = `You are connected to a running React Native app via the react-native-mcp-kit bridge.
 
@@ -16,6 +17,8 @@ Multiple React Native apps can connect simultaneously — each is identified by 
 2. Use \`list_tools\` to see all available tools per client, with descriptions and examples.
 3. Use \`call\` to invoke any tool with format: module${MODULE_SEPARATOR}method (e.g. navigation${MODULE_SEPARATOR}navigate). When more than one client is connected, specify \`clientId\`. When exactly one client is connected, \`clientId\` is optional — it's auto-picked.
 4. Use \`state_list\` / \`state_get\` to read app state exposed via useMcpState. State is scoped per client; specify \`clientId\` when multiple clients are connected.
+
+Some tools run inline on the MCP server host (e.g. \`host${MODULE_SEPARATOR}screenshot\`, \`host${MODULE_SEPARATOR}list_devices\`) and work even when no React Native client is connected. They use xcrun simctl / adb on the dev machine. When \`clientId\` is provided, host tools use that client's platform/label/deviceId as hints to resolve the target device; otherwise they prefer the device of the single connected client, falling back to the single booted sim / online device.
 `;
 
 type TextContent = { text: string; type: 'text' };
@@ -36,10 +39,35 @@ const jsonError = (msg: string): { content: TextContent[] } => {
   };
 };
 
+interface HostToolEntry {
+  handler: HostToolHandler['handler'];
+  moduleName: string;
+  toolName: string;
+  timeout?: number;
+}
+
 export class McpServerWrapper {
+  private hostModules: HostModule[];
+  private hostToolMap = new Map<string, HostToolEntry>();
   private mcp: McpServer;
 
-  constructor(private readonly bridge: Bridge) {
+  constructor(
+    private readonly bridge: Bridge,
+    hostModules: HostModule[] = []
+  ) {
+    this.hostModules = hostModules;
+    for (const mod of hostModules) {
+      for (const [toolName, tool] of Object.entries(mod.tools)) {
+        const fullName = `${mod.name}${MODULE_SEPARATOR}${toolName}`;
+        this.hostToolMap.set(fullName, {
+          handler: tool.handler,
+          moduleName: mod.name,
+          timeout: tool.timeout,
+          toolName,
+        });
+      }
+    }
+
     this.mcp = new McpServer(
       { name: 'react-native-mcp-kit', version: '1.0.0' },
       { instructions: BASE_INSTRUCTIONS }
@@ -88,6 +116,20 @@ export class McpServerWrapper {
             parsedArgs = JSON.parse(args) as Record<string, unknown>;
           } catch {
             return jsonError('Invalid JSON in args');
+          }
+        }
+
+        // Host dispatch — runs inline on the Node server, may work without any connected client
+        const hostEntry = this.hostToolMap.get(tool);
+        if (hostEntry) {
+          try {
+            const result = await hostEntry.handler(parsedArgs, {
+              bridge: this.bridge,
+              requestedClientId: clientId,
+            });
+            return { content: this.formatResult(result) };
+          } catch (err) {
+            return jsonError(`Host tool "${tool}" threw: ${(err as Error).message}`);
           }
         }
 
@@ -194,13 +236,29 @@ export class McpServerWrapper {
           };
         });
 
+        const hostToolsPayload = this.hostModules.map((mod) => {
+          return {
+            description: mod.description,
+            module: `${mod.name} (server)`,
+            tools: Object.entries(mod.tools).map(([toolName, tool]) => {
+              return {
+                description: tool.description,
+                inputSchema: tool.inputSchema,
+                name: `${mod.name}${MODULE_SEPARATOR}${toolName}`,
+              };
+            }),
+          };
+        });
+
         const payload: {
           clientCount: number;
           clients: typeof clientsPayload;
+          hostTools: typeof hostToolsPayload;
           clientError?: string;
         } = {
           clientCount: clients.length,
           clients: clientsPayload,
+          hostTools: hostToolsPayload,
         };
 
         if (clients.length === 0) {
@@ -240,6 +298,9 @@ export class McpServerWrapper {
               }),
               platform: c.platform,
             };
+          }),
+          hostModules: this.hostModules.map((m) => {
+            return m.name;
           }),
         };
         return {

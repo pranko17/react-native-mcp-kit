@@ -1,4 +1,5 @@
 import { Bridge } from './bridge';
+import { type HostModule } from './host/types';
 import { McpServerWrapper } from './mcpServer';
 import { type ServerConfig } from './types';
 
@@ -6,11 +7,21 @@ const DEFAULT_PORT = 8347;
 
 export async function createServer(config?: ServerConfig): Promise<void> {
   const port = config?.port ?? DEFAULT_PORT;
+  const hostModules: HostModule[] = config?.hostModules ?? [];
   const bridge = new Bridge(port);
-  const mcpServer = new McpServerWrapper(bridge);
+  const mcpServer = new McpServerWrapper(bridge, hostModules);
 
   await bridge.start();
-  process.stderr.write(`react-native-mcp-kit bridge listening on port ${port}\n`);
+  process.stderr.write(
+    `react-native-mcp-kit bridge listening on port ${port}` +
+      (hostModules.length > 0
+        ? ` (host modules: ${hostModules
+            .map((m) => {
+              return m.name;
+            })
+            .join(', ')})\n`
+        : '\n')
+  );
 
   await mcpServer.start();
 }
