@@ -53,6 +53,13 @@ interface ClientIdentity {
   platform?: string;
 }
 
+// react-native-device-info returns the literal string "unknown" on Android
+// emulators and some real devices when Settings.Global.DEVICE_NAME is empty.
+// Treat it the same as undefined so we can fall back to manufacturer + model.
+const isUsefulString = (value: unknown): value is string => {
+  return typeof value === 'string' && value.length > 0 && value.toLowerCase() !== 'unknown';
+};
+
 const autoDetectIdentity = (): ClientIdentity => {
   const out: ClientIdentity = {};
 
@@ -73,7 +80,9 @@ const autoDetectIdentity = (): ClientIdentity => {
     const DI = di.default ?? di;
     const appName: unknown = DI.getApplicationName?.();
     const appVersion: unknown = DI.getVersion?.();
-    const deviceName: unknown = DI.getDeviceNameSync?.() ?? DI.getModel?.();
+    const rawDeviceName: unknown = DI.getDeviceNameSync?.();
+    const model: unknown = DI.getModel?.();
+    const manufacturer: unknown = DI.getManufacturerSync?.() ?? DI.getBrand?.();
     const deviceId: unknown = DI.getUniqueIdSync?.();
 
     if (typeof appName === 'string') {
@@ -82,8 +91,10 @@ const autoDetectIdentity = (): ClientIdentity => {
     if (typeof appVersion === 'string') {
       out.appVersion = appVersion;
     }
-    if (typeof deviceName === 'string') {
-      out.label = deviceName;
+    if (isUsefulString(rawDeviceName)) {
+      out.label = rawDeviceName;
+    } else if (isUsefulString(model)) {
+      out.label = isUsefulString(manufacturer) ? `${manufacturer} ${model}` : model;
     }
     if (typeof deviceId === 'string') {
       out.deviceId = deviceId;
