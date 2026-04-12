@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,6 +14,7 @@ const SCREENSHOT_TIMEOUT_MS = 15_000;
 const SCREENSHOT_DEFAULT_WIDTH = 370;
 const SCREENSHOT_MIN_WIDTH = 64;
 const SCREENSHOT_MAX_WIDTH = 1568;
+const WEBP_QUALITY = 80;
 
 const clampWidth = (value: unknown): number => {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
@@ -25,13 +26,20 @@ const clampWidth = (value: unknown): number => {
 const resizeScreenshot = async (input: Buffer, targetWidth: number): Promise<Buffer> => {
   return sharp(input)
     .resize({ width: targetWidth, withoutEnlargement: true })
-    .png({ compressionLevel: 6 })
+    .webp({ quality: WEBP_QUALITY })
     .toBuffer();
 };
 
+const hashBuffer = (buf: Buffer): string => {
+  return createHash('sha256').update(buf).digest('hex');
+};
+
+// Per-device cache for screenshot diff
+const lastScreenshotHash = new Map<string, string>();
+
 interface ScreenshotImage {
   data: string;
-  mimeType: 'image/png';
+  mimeType: 'image/webp';
   type: 'image';
 }
 
@@ -39,11 +47,16 @@ interface ScreenshotError {
   error: string;
 }
 
+interface ScreenshotUnchanged {
+  message: string;
+  unchanged: true;
+}
+
 const captureIos = async (
   udid: string,
   runner: ProcessRunner,
   width: number
-): Promise<[ScreenshotImage] | ScreenshotError> => {
+): Promise<[ScreenshotImage] | ScreenshotUnchanged | ScreenshotError> => {
   const tmpPath = join(tmpdir(), `rnmcp-ios-${randomUUID()}.png`);
   try {
     const proc = await runner('xcrun', ['simctl', 'io', udid, 'screenshot', tmpPath], {
@@ -59,10 +72,15 @@ const captureIos = async (
     }
     const raw = await readFile(tmpPath);
     const resized = await resizeScreenshot(raw, width);
+    const hash = hashBuffer(resized);
+    if (lastScreenshotHash.get(udid) === hash) {
+      return { message: 'Screenshot unchanged since last capture.', unchanged: true };
+    }
+    lastScreenshotHash.set(udid, hash);
     return [
       {
         data: resized.toString('base64'),
-        mimeType: 'image/png',
+        mimeType: 'image/webp',
         type: 'image',
       },
     ];
@@ -84,7 +102,7 @@ const captureAndroid = async (
   serial: string,
   runner: ProcessRunner,
   width: number
-): Promise<[ScreenshotImage] | ScreenshotError> => {
+): Promise<[ScreenshotImage] | ScreenshotUnchanged | ScreenshotError> => {
   try {
     const proc = await runner('adb', ['-s', serial, 'exec-out', 'screencap', '-p'], {
       timeoutMs: SCREENSHOT_TIMEOUT_MS,
@@ -101,10 +119,15 @@ const captureAndroid = async (
       return { error: 'adb screencap returned empty output' };
     }
     const resized = await resizeScreenshot(proc.stdout, width);
+    const hash = hashBuffer(resized);
+    if (lastScreenshotHash.get(serial) === hash) {
+      return { message: 'Screenshot unchanged since last capture.', unchanged: true };
+    }
+    lastScreenshotHash.set(serial, hash);
     return [
       {
         data: resized.toString('base64'),
-        mimeType: 'image/png',
+        mimeType: 'image/webp',
         type: 'image',
       },
     ];
@@ -122,7 +145,7 @@ const captureAndroid = async (
 
 export const screenshotTool = (runner: ProcessRunner): HostToolHandler => {
   return {
-    description: `Capture a PNG screenshot from an iOS simulator or Android device, resized to save vision tokens. Default width ${SCREENSHOT_DEFAULT_WIDTH}px (pass \`width\` to override, max ${SCREENSHOT_MAX_WIDTH}). For tap targeting prefer fiber_tree__find_all bounds — screenshots are only needed for visual verification or when targeting non-React surfaces.`,
+    description: `Capture a WebP screenshot from an iOS simulator or Android device, resized to save vision tokens. Default width ${SCREENSHOT_DEFAULT_WIDTH}px (pass \`width\` to override, max ${SCREENSHOT_MAX_WIDTH}). Returns "unchanged: true" if the screen hasn't changed since the last capture (saves tokens on redundant checks). For tap targeting prefer fiber_tree__find_all bounds — screenshots are only needed for visual verification or when targeting non-React surfaces.`,
     handler: async (args, ctx) => {
       const resolved = await resolveDevice(ctx, parseResolveOptions(args), runner);
       if (!resolved.ok) {
