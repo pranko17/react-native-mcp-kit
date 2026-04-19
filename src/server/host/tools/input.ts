@@ -18,7 +18,7 @@ const SWIPE_DURATION_MAX_MS = 5_000;
 const LONG_PRESS_DURATION_DEFAULT_MS = 700;
 const DRAG_HOLD_DEFAULT_MS = 500;
 const DRAG_MOVE_DEFAULT_MS = 400;
-const BATCH_FOCUS_DELAY_DEFAULT_MS = 400;
+const BATCH_FOCUS_DELAY_DEFAULT_MS = 200;
 const BATCH_FOCUS_DELAY_MAX_MS = 5_000;
 
 const ANDROID_KEYCODES: Record<string, string> = {
@@ -471,7 +471,9 @@ interface BatchField {
 
 export const typeTextBatchTool = (runner: ProcessRunner): HostToolHandler => {
   return {
-    description: `Fill multiple text fields in one call. Each field: { x, y, text, submit? }. For each entry — tap to focus, wait focusDelayMs (default ${BATCH_FOCUS_DELAY_DEFAULT_MS}ms), then type via existing type_text semantics (select-all → paste on iOS; adb input text on Android). Stops on the first error and returns { filled, failedAt, error? }. Bump focusDelayMs to 500-800 when the tap triggers a screen transition (e.g. searchBar → search screen) and the input needs time to mount.`,
+    description: `Fill multiple text fields in one call. Each field: { x, y, text, submit? }. For each entry — tap to focus, wait focusDelayMs, then type via existing type_text semantics (select-all → paste on iOS; adb input text on Android). Stops on the first error and returns { filled, failedAt, error? }.
+
+focusDelayMs default is ${BATCH_FOCUS_DELAY_DEFAULT_MS}ms — tuned for in-place TextInputs (login / signup forms, already-mounted fields). When the tap triggers a screen transition (e.g. searchBar → SearchScreen) the target input won't be mounted yet and the typed text is lost; bump focusDelayMs to 700-800. Set to 0 when the input is already focused.`,
     handler: async (args, ctx) => {
       const resolved = await resolveDevice(ctx, parseResolveOptions(args), runner);
       if (!resolved.ok) {
