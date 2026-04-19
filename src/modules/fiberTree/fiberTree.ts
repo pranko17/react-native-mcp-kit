@@ -25,6 +25,10 @@ import {
 
 const DEFAULT_DEPTH = 10;
 
+const QUERY_LIMIT_DEFAULT = 50;
+const QUERY_LIMIT_MAX = 500;
+const QUERY_DEFAULT_FIELDS = ['mcpId', 'name', 'testID'];
+
 const FIND_SCHEMA = {
   index: {
     description: '0-based index when several components match (default: 0).',
@@ -194,11 +198,19 @@ STEP CRITERIA
   index — pick N-th match from this step; otherwise all matches fan out into the next step.
 
 SELECT (output fields)
-  ["mcpId", "name", "testID", "props", "bounds"] — default omits bounds.
-  bounds is { x, y, width, height, centerX, centerY } in PHYSICAL pixels,
-  top-left origin. Null when the fiber has no mounted host view. centerX/
+  Default ["mcpId", "name", "testID"] — props and bounds are opt-in.
+  bounds: { x, y, width, height, centerX, centerY } in PHYSICAL pixels,
+  top-left origin. null when the fiber has no mounted host view. centerX/
   centerY feed straight into host__tap.
-  Omit "props" to cut response size ~90%.
+  props: full serialized props (heavy). Pair with propsInclude:
+  ["key1","key2"] to keep only the props you actually need and avoid
+  pulling large style maps, data arrays, or nested element trees.
+
+RESPONSE
+  { matches: [...], total, truncated? } — total is the unrestricted match
+  count; when the result exceeds limit (default 50, max 500) truncated:
+  true is added and matches contains the first limit items in DFS order.
+  Narrow the query rather than cranking limit.
 
 TIPS
   mcpId format "ComponentName:file:line" — stable across renders.
@@ -420,7 +432,7 @@ TIPS
       },
       query: {
         description:
-          'Chain-based fiber search. Each step narrows the result set via `scope` + criteria; multiple matches fan out into the next step. See the module description for scope, criteria and select reference.',
+          'Chain-based fiber search. Each step narrows the result set via `scope` + criteria; multiple matches fan out into the next step. Returns { matches, total, truncated? }. See the module description for scope, criteria, select and response reference.',
         handler: async (args) => {
           const rootError = requireRoot();
           if (rootError) return rootError;
@@ -431,15 +443,25 @@ TIPS
             return { error: 'query requires a non-empty `steps` array' };
           }
 
-          const matches = runQueryChain(root, steps);
+          const limit =
+            typeof args.limit === 'number' && args.limit > 0
+              ? Math.min(Math.floor(args.limit), QUERY_LIMIT_MAX)
+              : QUERY_LIMIT_DEFAULT;
 
-          const defaultFields = ['mcpId', 'name', 'props', 'testID'];
+          const all = runQueryChain(root, steps);
+          const total = all.length;
+          const truncated = total > limit;
+          const picked = truncated ? all.slice(0, limit) : all;
+
           const fields = new Set(
-            Array.isArray(args.select) ? (args.select as string[]) : defaultFields
+            Array.isArray(args.select) ? (args.select as string[]) : QUERY_DEFAULT_FIELDS
           );
+          const propsInclude = Array.isArray(args.propsInclude)
+            ? new Set(args.propsInclude as string[])
+            : null;
 
-          return Promise.all(
-            matches.map(async (fiber) => {
+          const matches = await Promise.all(
+            picked.map(async (fiber) => {
               const result: Record<string, unknown> = {};
               if (fields.has('bounds')) {
                 result.bounds = await measureFiber(fiber);
@@ -451,7 +473,16 @@ TIPS
                 result.name = getComponentName(fiber);
               }
               if (fields.has('props')) {
-                result.props = serializeProps(fiber.memoizedProps);
+                const full = serializeProps(fiber.memoizedProps);
+                if (propsInclude) {
+                  const filtered: Record<string, unknown> = {};
+                  for (const key of propsInclude) {
+                    if (key in full) filtered[key] = full[key];
+                  }
+                  result.props = filtered;
+                } else {
+                  result.props = full;
+                }
               }
               if (fields.has('testID')) {
                 result.testID = fiber.memoizedProps?.testID;
@@ -459,13 +490,30 @@ TIPS
               return result;
             })
           );
+
+          const response: Record<string, unknown> = { matches, total };
+          if (truncated) response.truncated = true;
+          return response;
         },
         inputSchema: {
+          limit: {
+            description: `Max matches to return (default ${QUERY_LIMIT_DEFAULT}, max ${QUERY_LIMIT_MAX}). truncated: true is added when total exceeds limit.`,
+            type: 'number',
+          },
+          propsInclude: {
+            description:
+              'When select includes "props", keep only these prop names. Unknown keys are silently dropped. Omit for full serialization.',
+            examples: [
+              ['placeholder', 'value'],
+              ['title', 'disabled'],
+            ],
+            type: 'array',
+          },
           select: {
-            description: 'Output fields: mcpId, name, testID, props, bounds.',
+            description: `Output fields: mcpId, name, testID, props, bounds. Default ${JSON.stringify(QUERY_DEFAULT_FIELDS)}.`,
             examples: [
               ['mcpId', 'name', 'bounds'],
-              ['mcpId', 'testID'],
+              ['mcpId', 'name', 'props'],
             ],
             type: 'array',
           },
