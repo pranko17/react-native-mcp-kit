@@ -340,28 +340,63 @@ export const findByText = (root: Fiber, text: string): Fiber | null => {
   });
 };
 
+export const matchesQuery = (fiber: Fiber, query: ComponentQuery): boolean => {
+  try {
+    if (query.mcpId && fiber.memoizedProps?.['data-mcp-id'] !== query.mcpId) return false;
+    if (query.testID && fiber.memoizedProps?.testID !== query.testID) return false;
+    if (query.name && getComponentName(fiber) !== query.name) return false;
+    if (query.text) {
+      const content = getTextContent(fiber);
+      if (!content || !content.includes(query.text)) return false;
+    }
+    if (query.hasProps && Array.isArray(query.hasProps)) {
+      const props = fiber.memoizedProps;
+      if (!props || typeof props !== 'object') return false;
+      for (const prop of query.hasProps) {
+        if (!(prop in props)) return false;
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 export const findAllByQuery = (root: Fiber, query: ComponentQuery): Fiber[] => {
   return findAllFibers(root, (fiber) => {
-    try {
-      if (query.mcpId && fiber.memoizedProps?.['data-mcp-id'] !== query.mcpId) return false;
-      if (query.testID && fiber.memoizedProps?.testID !== query.testID) return false;
-      if (query.name && getComponentName(fiber) !== query.name) return false;
-      if (query.text) {
-        const content = getTextContent(fiber);
-        if (!content || !content.includes(query.text)) return false;
-      }
-      if (query.hasProps && Array.isArray(query.hasProps)) {
-        const props = fiber.memoizedProps;
-        if (!props || typeof props !== 'object') return false;
-        for (const prop of query.hasProps) {
-          if (!(prop in props)) return false;
-        }
-      }
-      return true;
-    } catch {
-      return false;
-    }
+    return matchesQuery(fiber, query);
   });
+};
+
+// Direct children of a fiber (one level down, not descendants).
+export const getDirectChildren = (fiber: Fiber): Fiber[] => {
+  const out: Fiber[] = [];
+  let child = fiber.child;
+  while (child) {
+    out.push(child);
+    child = child.sibling;
+  }
+  return out;
+};
+
+// Sibling fibers at the same level, excluding `fiber` itself.
+export const getSiblings = (fiber: Fiber): Fiber[] => {
+  const parent = fiber.return;
+  if (!parent) return [];
+  return getDirectChildren(parent).filter((f) => {
+    return f !== fiber;
+  });
+};
+
+// Ancestors walked upward via `fiber.return`, nearest first.
+export const getAncestors = (fiber: Fiber): Fiber[] => {
+  const out: Fiber[] = [];
+  let current = fiber.return;
+  while (current) {
+    out.push(current);
+    current = current.return;
+  }
+  return out;
 };
 
 // Find the nearest host fiber (native component) from a given fiber

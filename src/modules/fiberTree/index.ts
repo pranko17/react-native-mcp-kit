@@ -5,6 +5,10 @@ export { type ComponentQuery, type ComponentType, type SerializedComponent } fro
 export {
   findAllFibers,
   findFiber,
+  getAncestors,
   getComponentName,
+  getDirectChildren,
   getFiberRoot,
+  getSiblings,
+  matchesQuery,
 } from './utils';

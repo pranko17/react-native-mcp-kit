@@ -2,16 +2,21 @@ import { type RefObject } from 'react';
 
 import { type McpModule } from '@/client/models/types';
 
+import { type ComponentQuery } from './types';
 import {
   findAllByQuery,
   findByMcpId,
   findByName,
   findByTestID,
   findByText,
+  getAncestors,
   getAvailableMethods,
   getComponentName,
+  getDirectChildren,
   getFiberRoot,
   getNativeInstance,
+  getSiblings,
+  matchesQuery,
   measureFiber,
   serializeFiber,
   serializeProps,
@@ -39,6 +44,74 @@ const FIND_SCHEMA = {
 interface FiberTreeModuleOptions {
   rootRef?: RefObject<unknown>;
 }
+
+type QueryScope = 'ancestors' | 'children' | 'descendants' | 'parent' | 'self' | 'siblings';
+
+interface QueryStep extends ComponentQuery {
+  /**
+   * If provided, only the N-th match survives into the next step. Omit to
+   * forward every match along (fan-out across scopes on the next step).
+   */
+  index?: number;
+  /**
+   * Which fibers relative to the previous step's result are considered for this
+   * step. Defaults to 'descendants' (so the first step walks the whole tree
+   * from the fiber root). Other values walk 'parent'/'ancestors'/'siblings'/
+   * 'children'/'self'.
+   */
+  scope?: QueryScope;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Fiber = any;
+
+const collectByScope = (fiber: Fiber, scope: QueryScope): Fiber[] => {
+  switch (scope) {
+    case 'self':
+      return [fiber];
+    case 'parent':
+      return fiber.return ? [fiber.return] : [];
+    case 'ancestors':
+      return getAncestors(fiber);
+    case 'children':
+      return getDirectChildren(fiber);
+    case 'siblings':
+      return getSiblings(fiber);
+    case 'descendants':
+    default:
+      return findAllByQuery(fiber, {}).filter((f) => {
+        return f !== fiber;
+      });
+  }
+};
+
+const runQueryChain = (root: Fiber, steps: QueryStep[]): Fiber[] => {
+  let current: Fiber[] = [root];
+  for (const step of steps) {
+    const scope: QueryScope = step.scope ?? 'descendants';
+    const seen = new Set<Fiber>();
+    const collected: Fiber[] = [];
+    for (const fiber of current) {
+      for (const candidate of collectByScope(fiber, scope)) {
+        if (!seen.has(candidate)) {
+          seen.add(candidate);
+          collected.push(candidate);
+        }
+      }
+    }
+    const filtered = collected.filter((f) => {
+      return matchesQuery(f, step);
+    });
+    if (typeof step.index === 'number') {
+      const picked = filtered[step.index];
+      current = picked ? [picked] : [];
+    } else {
+      current = filtered;
+    }
+    if (current.length === 0) return [];
+  }
+  return current;
+};
 
 export const fiberTreeModule = (options?: FiberTreeModuleOptions): McpModule => {
   if (options?.rootRef) {
@@ -107,11 +180,23 @@ export const fiberTreeModule = (options?: FiberTreeModuleOptions): McpModule => 
   return {
     description: `React component tree inspection and interaction.
 
-## Finding components
-- find_all with hasProps: ["onPress"] — find all pressable elements
-- find_all with hasProps: ["onChangeText"] — find all text inputs
-- find_all with name: "Button" — find by component name
-- get_component with mcpId: "Button:screens/Login:42" — find by stable ID
+## Finding components — \`query\`
+Chain-based search. Each step filters the fibers forwarded from the
+previous step via a \`scope\` (descendants / children / parent / ancestors
+/ siblings / self) and the usual criteria (name / mcpId / testID / text /
+hasProps). First step defaults to scope 'descendants' from the root, so
+\`query({ steps: [{ hasProps: ["onPress"] }] })\` is "all pressables in the
+tree". Multi-match friendly — if a step matches many fibers, all of them
+fan out into the next step; use \`index\` on a step to pick just one.
+
+Examples:
+- [{ name: "HomeScreen" }, { name: "ProductCard" }, { testID: "favorite" }]
+    → every "favorite" testID inside every ProductCard inside HomeScreen.
+- [{ testID: "favorite-icon" }, { scope: "ancestors", name: "ProductCard", index: 0 }]
+    → the nearest enclosing ProductCard for each favorite icon.
+
+\`get_component\` still exists when you want a single match plus its full
+children subtree (for deep inspection rather than flat lists).
 
 ## Interacting
 - invoke with callback: "onPress" — press a button
@@ -119,26 +204,28 @@ export const fiberTreeModule = (options?: FiberTreeModuleOptions): McpModule => 
 - invoke with callback: "onPress", args: [true] — toggle checkbox
 - call_ref with method: "focus" — focus an input
 
-## Scoping with "within"
-- within: "LoginForm" — search only inside LoginForm
-- within: "Button:1/Pressable" — nested path with index
-
 ## Coordinates (host__tap targets)
-- Pass \`select: ["mcpId", "name", "bounds"]\` to find_all to get tap coordinates without heavy props.
+- Pass \`select: ["mcpId", "name", "bounds"]\` to \`query\` to get tap
+  coordinates without heavy props.
 - bounds = {x, y, width, height, centerX, centerY} in PHYSICAL PIXELS.
 - Use bounds.centerX/centerY directly with host__tap — no scaling needed.
-- bounds is null only when the component has no host view (unmounted, virtualized off-screen).
+- bounds is null only when the component has no host view (unmounted,
+  virtualized off-screen).
 
 ## Saving tokens with select
-- \`select\` controls which fields appear in each result: mcpId, name, testID, props, bounds.
-- Default (no select): all fields except bounds. Include "bounds" for tap coordinates.
-- Omit "props" to cut response size ~90% when you only need names/IDs.
+- \`select\` controls which fields appear in each result: mcpId, name,
+  testID, props, bounds. Default (no select): all except bounds. Omit
+  "props" to cut response size ~90% when you only need names/IDs.
 
 ## Tips
-- mcpId is stable across renders (format: ComponentName:file:line)
-- Use find_all first to discover available components, then invoke or host__tap them
-- host__tap with bounds.centerX/centerY tests the real OS gesture pipeline; invoke bypasses it and calls the prop directly (faster, immune to overlay/gesture-arbitration issues, but doesn't exercise touch handlers)
-- Use screenshot after interactions to verify results`,
+- mcpId is stable across renders (format: ComponentName:file:line).
+- Use \`query\` first to discover available components, then invoke or
+  host__tap them by mcpId/testID.
+- host__tap with bounds.centerX/centerY tests the real OS gesture
+  pipeline; invoke bypasses it and calls the prop directly (faster, immune
+  to overlay/gesture-arbitration issues, but doesn't exercise touch
+  handlers).
+- Use screenshot after interactions to verify results.`,
     name: 'fiber_tree',
     tools: {
       call_ref: {
@@ -189,75 +276,6 @@ export const fiberTreeModule = (options?: FiberTreeModuleOptions): McpModule => 
             description: 'Method name to call (e.g. "focus", "blur", "measure")',
             type: 'string',
           },
-        },
-      },
-      find_all: {
-        description:
-          'Find all components matching a query (by testID, name, text, or props presence). Supports within for scoped search. Use select to control which fields are returned — e.g. select: ["mcpId", "name", "bounds"] for tap targeting without heavy props.',
-        handler: async (args) => {
-          const rootError = requireRoot();
-          if (rootError) return rootError;
-          let root = getFiberRoot()!;
-
-          if (args.within) {
-            const path = (args.within as string).split('/');
-            for (const segment of path) {
-              root = findInRoot(root, segment);
-              if (!root) return { error: `Parent "${args.within}" not found` };
-            }
-          }
-
-          const query = {
-            hasProps: args.hasProps as string[] | undefined,
-            mcpId: args.mcpId as string | undefined,
-            name: args.name as string | undefined,
-            testID: args.testID as string | undefined,
-            text: args.text as string | undefined,
-          };
-
-          const defaultFields = ['mcpId', 'name', 'props', 'testID'];
-          const fields = new Set(
-            Array.isArray(args.select) ? (args.select as string[]) : defaultFields
-          );
-
-          const fibers = findAllByQuery(root, query);
-          return Promise.all(
-            fibers.map(async (fiber) => {
-              const result: Record<string, unknown> = {};
-              if (fields.has('bounds')) {
-                result.bounds = await measureFiber(fiber);
-              }
-              if (fields.has('mcpId')) {
-                result.mcpId = fiber.memoizedProps?.['data-mcp-id'];
-              }
-              if (fields.has('name')) {
-                result.name = getComponentName(fiber);
-              }
-              if (fields.has('props')) {
-                result.props = serializeProps(fiber.memoizedProps);
-              }
-              if (fields.has('testID')) {
-                result.testID = fiber.memoizedProps?.testID;
-              }
-              return result;
-            })
-          );
-        },
-        inputSchema: {
-          hasProps: {
-            description: 'Filter by props presence (array of prop names)',
-            type: 'array',
-          },
-          mcpId: { description: 'data-mcp-id to match', type: 'string' },
-          name: { description: 'Component name to match', type: 'string' },
-          select: {
-            description:
-              'Fields to include in each result. Available: mcpId, name, testID, props, bounds. Default (when omitted): all except bounds. Include "bounds" for physical-pixel tap coordinates. Omit "props" to save tokens.',
-            type: 'array',
-          },
-          testID: { description: 'testID to match', type: 'string' },
-          text: { description: 'Text content to match (substring)', type: 'string' },
-          within: FIND_SCHEMA.within,
         },
       },
       get_children: {
@@ -416,6 +434,78 @@ export const fiberTreeModule = (options?: FiberTreeModuleOptions): McpModule => 
           callback: {
             description: 'Name of the callback prop to call (e.g. "onPress", "onChangeText")',
             type: 'string',
+          },
+        },
+      },
+      query: {
+        description: `Chain-based component search. Each step narrows the set of
+matching fibers, starting from the fiber root. A step has a \`scope\`
+(default 'descendants' — walks the whole subtree; other values: 'children',
+'parent', 'ancestors', 'siblings', 'self') and the usual criteria
+(mcpId / testID / name / text / hasProps). If a step matches more than one
+fiber, every match is forwarded to the next step; set \`index\` on a step to
+pick just the N-th. The last step's matches are returned as a list.
+
+Examples:
+- [{ name: "HomeScreen" }, { name: "ProductCard" }]
+    → every ProductCard inside HomeScreen
+- [{ testID: "favorite-icon" }, { scope: "ancestors", name: "ProductCard", index: 0 }]
+    → the nearest enclosing ProductCard around each favorite icon
+- [{ name: "Button" }, { scope: "siblings", hasProps: ["onPress"] }]
+    → every pressable sibling of every Button
+
+Use \`select\` to control which fields come back on each match (mcpId / name /
+testID / props / bounds); default omits bounds, include "bounds" for
+host__tap coordinates, omit "props" to cut response size.`,
+        handler: async (args) => {
+          const rootError = requireRoot();
+          if (rootError) return rootError;
+          const root = getFiberRoot()!;
+
+          const steps = args.steps as QueryStep[] | undefined;
+          if (!Array.isArray(steps) || steps.length === 0) {
+            return { error: 'query requires a non-empty `steps` array' };
+          }
+
+          const matches = runQueryChain(root, steps);
+
+          const defaultFields = ['mcpId', 'name', 'props', 'testID'];
+          const fields = new Set(
+            Array.isArray(args.select) ? (args.select as string[]) : defaultFields
+          );
+
+          return Promise.all(
+            matches.map(async (fiber) => {
+              const result: Record<string, unknown> = {};
+              if (fields.has('bounds')) {
+                result.bounds = await measureFiber(fiber);
+              }
+              if (fields.has('mcpId')) {
+                result.mcpId = fiber.memoizedProps?.['data-mcp-id'];
+              }
+              if (fields.has('name')) {
+                result.name = getComponentName(fiber);
+              }
+              if (fields.has('props')) {
+                result.props = serializeProps(fiber.memoizedProps);
+              }
+              if (fields.has('testID')) {
+                result.testID = fiber.memoizedProps?.testID;
+              }
+              return result;
+            })
+          );
+        },
+        inputSchema: {
+          select: {
+            description:
+              'Fields to include in each result. Available: mcpId, name, testID, props, bounds. Default: all except bounds. Include "bounds" for physical-pixel tap coordinates, omit "props" to save tokens.',
+            type: 'array',
+          },
+          steps: {
+            description:
+              'Ordered list of query steps. Each step: { scope?, name?, mcpId?, testID?, text?, hasProps?, index? }. scope defaults to "descendants" on the first step (walks the whole tree) and on subsequent steps. See the tool description for end-to-end examples.',
+            type: 'array',
           },
         },
       },
