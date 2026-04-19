@@ -742,7 +742,9 @@ export class McpServerWrapper {
         'type' in first &&
         first.type === 'image'
       ) {
-        return result as Array<{ data: string; mimeType: string; type: 'image' }>;
+        return result as Array<
+          { data: string; mimeType: string; type: 'image' } | { text: string; type: 'text' }
+        >;
       }
     }
 

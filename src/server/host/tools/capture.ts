@@ -23,11 +23,28 @@ const clampWidth = (value: unknown): number => {
   return Math.max(SCREENSHOT_MIN_WIDTH, Math.min(SCREENSHOT_MAX_WIDTH, Math.floor(value)));
 };
 
-const resizeScreenshot = async (input: Buffer, targetWidth: number): Promise<Buffer> => {
-  return sharp(input)
+interface ResizedScreenshot {
+  buffer: Buffer;
+  height: number;
+  width: number;
+  originalHeight?: number;
+  originalWidth?: number;
+}
+
+const resizeScreenshot = async (input: Buffer, targetWidth: number): Promise<ResizedScreenshot> => {
+  const pipeline = sharp(input);
+  const meta = await pipeline.metadata();
+  const { data, info } = await pipeline
     .resize({ width: targetWidth, withoutEnlargement: true })
     .webp({ quality: WEBP_QUALITY })
-    .toBuffer();
+    .toBuffer({ resolveWithObject: true });
+  return {
+    buffer: data,
+    height: info.height,
+    originalHeight: meta.height,
+    originalWidth: meta.width,
+    width: info.width,
+  };
 };
 
 const hashBuffer = (buf: Buffer): string => {
@@ -43,6 +60,13 @@ interface ScreenshotImage {
   type: 'image';
 }
 
+interface ScreenshotText {
+  text: string;
+  type: 'text';
+}
+
+type ScreenshotResponse = [ScreenshotImage, ScreenshotText];
+
 interface ScreenshotError {
   error: string;
 }
@@ -52,11 +76,44 @@ interface ScreenshotUnchanged {
   unchanged: true;
 }
 
+interface ScreenshotMeta {
+  bytes: number;
+  height: number;
+  width: number;
+  originalHeight?: number;
+  originalWidth?: number;
+  scale?: number;
+}
+
+const buildResponse = (resized: ResizedScreenshot): ScreenshotResponse => {
+  const meta: ScreenshotMeta = {
+    bytes: resized.buffer.length,
+    height: resized.height,
+    originalHeight: resized.originalHeight,
+    originalWidth: resized.originalWidth,
+    scale: resized.originalWidth
+      ? Number((resized.width / resized.originalWidth).toFixed(3))
+      : undefined,
+    width: resized.width,
+  };
+  return [
+    {
+      data: resized.buffer.toString('base64'),
+      mimeType: 'image/webp',
+      type: 'image',
+    },
+    {
+      text: JSON.stringify(meta),
+      type: 'text',
+    },
+  ];
+};
+
 const captureIos = async (
   udid: string,
   runner: ProcessRunner,
   width: number
-): Promise<[ScreenshotImage] | ScreenshotUnchanged | ScreenshotError> => {
+): Promise<ScreenshotResponse | ScreenshotUnchanged | ScreenshotError> => {
   const tmpPath = join(tmpdir(), `rnmcp-ios-${randomUUID()}.png`);
   try {
     const proc = await runner('xcrun', ['simctl', 'io', udid, 'screenshot', tmpPath], {
@@ -72,18 +129,12 @@ const captureIos = async (
     }
     const raw = await readFile(tmpPath);
     const resized = await resizeScreenshot(raw, width);
-    const hash = hashBuffer(resized);
+    const hash = hashBuffer(resized.buffer);
     if (lastScreenshotHash.get(udid) === hash) {
       return { message: 'Screenshot unchanged since last capture.', unchanged: true };
     }
     lastScreenshotHash.set(udid, hash);
-    return [
-      {
-        data: resized.toString('base64'),
-        mimeType: 'image/webp',
-        type: 'image',
-      },
-    ];
+    return buildResponse(resized);
   } catch (err) {
     if (err instanceof ProcessNotFoundError) {
       return {
@@ -102,7 +153,7 @@ const captureAndroid = async (
   serial: string,
   runner: ProcessRunner,
   width: number
-): Promise<[ScreenshotImage] | ScreenshotUnchanged | ScreenshotError> => {
+): Promise<ScreenshotResponse | ScreenshotUnchanged | ScreenshotError> => {
   try {
     const proc = await runner('adb', ['-s', serial, 'exec-out', 'screencap', '-p'], {
       timeoutMs: SCREENSHOT_TIMEOUT_MS,
@@ -119,18 +170,12 @@ const captureAndroid = async (
       return { error: 'adb screencap returned empty output' };
     }
     const resized = await resizeScreenshot(proc.stdout, width);
-    const hash = hashBuffer(resized);
+    const hash = hashBuffer(resized.buffer);
     if (lastScreenshotHash.get(serial) === hash) {
       return { message: 'Screenshot unchanged since last capture.', unchanged: true };
     }
     lastScreenshotHash.set(serial, hash);
-    return [
-      {
-        data: resized.toString('base64'),
-        mimeType: 'image/webp',
-        type: 'image',
-      },
-    ];
+    return buildResponse(resized);
   } catch (err) {
     if (err instanceof ProcessNotFoundError) {
       return {
@@ -145,7 +190,7 @@ const captureAndroid = async (
 
 export const screenshotTool = (runner: ProcessRunner): HostToolHandler => {
   return {
-    description: `WebP screenshot, resized to save tokens. Returns { unchanged: true } when the screen hasn't changed since the last capture — cheap polling. Use fiber_tree bounds for tap targeting; screenshots are for visual verification.`,
+    description: `WebP screenshot, resized to save tokens. Response is [image, metadata] where metadata is JSON with { width, height, originalWidth, originalHeight, scale, bytes }. Returns { unchanged: true } when the screen hasn't changed since the last capture — cheap polling. Use fiber_tree bounds for tap targeting; screenshots are for visual verification.`,
     handler: async (args, ctx) => {
       const resolved = await resolveDevice(ctx, parseResolveOptions(args), runner);
       if (!resolved.ok) {
