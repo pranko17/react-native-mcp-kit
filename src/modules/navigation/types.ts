@@ -15,21 +15,22 @@ export interface NavigationAction {
   payload?: Record<string, unknown>;
 }
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// Structural shape the navigation module depends on. Kept intentionally loose
+// (any on each call shape) so React Navigation's own `NavigationContainerRef`
+// generics stay assignable without the caller needing a `as never` cast.
 export interface NavigationRef {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  addListener: (event: string, callback: (...args: any[]) => void) => () => void;
+  addListener: (event: any, callback: any) => () => void;
   canGoBack: () => boolean;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   dispatch: (action: any) => void;
   getCurrentRoute: () => unknown;
   getRootState: () => unknown;
   goBack: () => void;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   navigate: (...args: any[]) => void;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   resetRoot: (...args: any[]) => void;
   isReady?: () => boolean;
 }
+/* eslint-enable @typescript-eslint/no-explicit-any */
 
 export interface NavigationHistoryEntry {
   route: {
