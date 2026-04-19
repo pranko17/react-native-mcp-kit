@@ -55,8 +55,11 @@ export interface ComponentQuery {
    * Composes with the other fields (all AND-ed), so you can write
    * { hasProps: ["onPress"], not: { testID: "loading" } } to mean
    * "has onPress and is not the loading indicator".
+   * Pass an array to exclude multiple patterns at once; equivalent to
+   * { not: { any: [...] } } but terser.
+   * Example: { hasProps: ["onPress"], not: [{ name: "Pressable" }, { testID: "loading" }] }.
    */
-  not?: ComponentQuery;
+  not?: ComponentQuery | ComponentQuery[];
   /**
    * Match by prop values. Each entry is AND-ed.
    * Example: { placeholder: { contains: "Search" }, variant: "primary" }.

@@ -315,6 +315,8 @@ STEP CRITERIA
     Example: { any: [{ name: "Pressable" }, { name: "TouchableOpacity" }] }.
   not — nested criteria; excludes fibers that match the inner query.
     Composes with the others: { hasProps: ["onPress"], not: { testID: "loading" } }.
+    Accepts an array for multi-pattern exclusion:
+    { not: [{ name: "Pressable" }, { testID: "loading" }] }.
   index — pick N-th match from this step; otherwise all matches fan out into the next step.
 
 SELECT (output fields)

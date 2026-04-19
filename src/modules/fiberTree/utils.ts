@@ -437,8 +437,14 @@ export const matchesQuery = (fiber: Fiber, query: ComponentQuery): boolean => {
       });
       if (!anyMatched) return false;
     }
-    if (query.not && typeof query.not === 'object') {
-      if (matchesQuery(fiber, query.not)) return false;
+    if (query.not) {
+      if (Array.isArray(query.not)) {
+        for (const sub of query.not) {
+          if (matchesQuery(fiber, sub)) return false;
+        }
+      } else if (typeof query.not === 'object') {
+        if (matchesQuery(fiber, query.not)) return false;
+      }
     }
     return true;
   } catch {
