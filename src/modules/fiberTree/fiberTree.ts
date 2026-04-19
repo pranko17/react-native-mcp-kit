@@ -2,13 +2,15 @@ import { type RefObject } from 'react';
 
 import { type McpModule } from '@/client/models/types';
 
-import { type ComponentQuery } from './types';
+import { type Bounds, type ComponentQuery } from './types';
 import {
   findAllByQuery,
   findByMcpId,
   findByName,
   findByTestID,
   findByText,
+  findHostFiber,
+  findScreenFiberByRouteKey,
   getAncestors,
   getAvailableMethods,
   getComponentName,
@@ -45,11 +47,27 @@ const FIND_SCHEMA = {
   },
 };
 
+// Kept deliberately loose: the module only calls getCurrentRoute at query
+// time and gracefully no-ops when the shape is unexpected. This avoids
+// dragging in the full React Navigation ref surface.
+interface FiberTreeNavigationRef {
+  getCurrentRoute?: () => unknown;
+}
+
 interface FiberTreeModuleOptions {
+  navigationRef?: FiberTreeNavigationRef | null;
   rootRef?: RefObject<unknown>;
 }
 
-type QueryScope = 'ancestors' | 'children' | 'descendants' | 'parent' | 'self' | 'siblings';
+type QueryScope =
+  | 'ancestors'
+  | 'children'
+  | 'descendants'
+  | 'nearest_host'
+  | 'parent'
+  | 'screen'
+  | 'self'
+  | 'siblings';
 
 interface QueryStep extends ComponentQuery {
   /**
@@ -69,7 +87,21 @@ interface QueryStep extends ComponentQuery {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Fiber = any;
 
-const collectByScope = (fiber: Fiber, scope: QueryScope): Fiber[] => {
+interface QueryRuntime {
+  root: Fiber;
+  navigationRef?: FiberTreeNavigationRef | null;
+}
+
+const resolveScreenFiber = (runtime: QueryRuntime): Fiber | null => {
+  const nav = runtime.navigationRef;
+  if (!nav || typeof nav.getCurrentRoute !== 'function') return null;
+  const route = nav.getCurrentRoute() as { key?: unknown } | null | undefined;
+  const key = route && typeof route.key === 'string' ? route.key : undefined;
+  if (!key) return null;
+  return findScreenFiberByRouteKey(runtime.root, key);
+};
+
+const collectByScope = (fiber: Fiber, scope: QueryScope, runtime: QueryRuntime): Fiber[] => {
   switch (scope) {
     case 'self':
       return [fiber];
@@ -81,6 +113,17 @@ const collectByScope = (fiber: Fiber, scope: QueryScope): Fiber[] => {
       return getDirectChildren(fiber);
     case 'siblings':
       return getSiblings(fiber);
+    case 'nearest_host': {
+      const host = findHostFiber(fiber);
+      return host ? [host] : [];
+    }
+    case 'screen': {
+      const screen = resolveScreenFiber(runtime);
+      if (!screen) return [];
+      return findAllByQuery(screen, {}).filter((f) => {
+        return f !== screen;
+      });
+    }
     case 'descendants':
     default:
       return findAllByQuery(fiber, {}).filter((f) => {
@@ -89,14 +132,14 @@ const collectByScope = (fiber: Fiber, scope: QueryScope): Fiber[] => {
   }
 };
 
-const runQueryChain = (root: Fiber, steps: QueryStep[]): Fiber[] => {
-  let current: Fiber[] = [root];
+const runQueryChain = (runtime: QueryRuntime, steps: QueryStep[]): Fiber[] => {
+  let current: Fiber[] = [runtime.root];
   for (const step of steps) {
     const scope: QueryScope = step.scope ?? 'descendants';
     const seen = new Set<Fiber>();
     const collected: Fiber[] = [];
     for (const fiber of current) {
-      for (const candidate of collectByScope(fiber, scope)) {
+      for (const candidate of collectByScope(fiber, scope, runtime)) {
         if (!seen.has(candidate)) {
           seen.add(candidate);
           collected.push(candidate);
@@ -134,10 +177,59 @@ const dedupAncestors = (matches: Fiber[]): Fiber[] => {
   });
 };
 
+// Window dimensions → physical-pixel bounds rectangle for `onlyVisible` filter.
+const getVisibleRect = (): { height: number; width: number } | null => {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
+    const RN = require('react-native');
+    const { Dimensions, PixelRatio } = RN;
+    const window = Dimensions?.get?.('window');
+    const ratio = PixelRatio?.get?.() ?? 1;
+    if (!window || !Number.isFinite(window.width) || !Number.isFinite(window.height)) return null;
+    return {
+      height: window.height * ratio,
+      width: window.width * ratio,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const intersectsRect = (bounds: Bounds, rect: { height: number; width: number }): boolean => {
+  return (
+    bounds.x + bounds.width > 0 &&
+    bounds.y + bounds.height > 0 &&
+    bounds.x < rect.width &&
+    bounds.y < rect.height
+  );
+};
+
 export const fiberTreeModule = (options?: FiberTreeModuleOptions): McpModule => {
   if (options?.rootRef) {
     setRootRef(options.rootRef);
   }
+  const navigationRef = options?.navigationRef;
+
+  // Root-version keyed cache for `runQueryChain`. When React commits, the
+  // HostRoot fiber swaps — so a mismatched pointer is proof the tree changed
+  // and the cached match set for the same steps is no longer valid.
+  // Enabled by default (cache: true); `cache: false` bypasses lookup + write.
+  let cacheRoot: Fiber | null = null;
+  const cacheEntries = new Map<string, Fiber[]>();
+
+  const runCachedQuery = (runtime: QueryRuntime, steps: QueryStep[], useCache: boolean) => {
+    if (!useCache) return runQueryChain(runtime, steps);
+    if (cacheRoot !== runtime.root) {
+      cacheRoot = runtime.root;
+      cacheEntries.clear();
+    }
+    const key = JSON.stringify(steps);
+    const hit = cacheEntries.get(key);
+    if (hit) return hit;
+    const result = runQueryChain(runtime, steps);
+    cacheEntries.set(key, result);
+    return result;
+  };
 
   const findInRoot = (root: ReturnType<typeof getFiberRoot>, segment: string) => {
     if (!root) return null;
@@ -202,7 +294,14 @@ export const fiberTreeModule = (options?: FiberTreeModuleOptions): McpModule => 
     description: `React fiber tree inspection and interaction.
 
 SCOPES (query steps)
-  descendants (default) / children / parent / ancestors / siblings / self.
+  descendants (default) / children / parent / ancestors / siblings / self
+  / screen / nearest_host.
+    · screen — descendants of the currently focused React Navigation
+      screen fiber. Available when the library was initialized with a
+      navigationRef. Lets a first step skip "find current screen first".
+    · nearest_host — walks down to the first mounted HOST_COMPONENT
+      fiber. Useful before call_ref (focus/blur/measure) which require
+      a host instance.
 
 STEP CRITERIA
   name / mcpId / testID — strict equality.
@@ -212,6 +311,10 @@ STEP CRITERIA
     · primitive → strict equality.
     · { contains: "X" } / { regex: "Y" } → match via String(value); primitives only by default.
     · add deep: true → also JSON-serialize objects/arrays and match inside.
+  any — array of sub-criteria; OR semantics.
+    Example: { any: [{ name: "Pressable" }, { name: "TouchableOpacity" }] }.
+  not — nested criteria; excludes fibers that match the inner query.
+    Composes with the others: { hasProps: ["onPress"], not: { testID: "loading" } }.
   index — pick N-th match from this step; otherwise all matches fan out into the next step.
 
 SELECT (output fields)
@@ -470,9 +573,41 @@ TIPS
               ? Math.min(Math.floor(args.limit), QUERY_LIMIT_MAX)
               : QUERY_LIMIT_DEFAULT;
           const dedup = args.dedup !== false;
+          const useCache = args.cache !== false;
+          const onlyVisible = args.onlyVisible === true;
 
-          const rawMatches = runQueryChain(root, steps);
-          const all = dedup ? dedupAncestors(rawMatches) : rawMatches;
+          const runtime: QueryRuntime = { navigationRef, root };
+          const rawMatches = runCachedQuery(runtime, steps, useCache);
+          let all = dedup ? dedupAncestors(rawMatches) : rawMatches;
+
+          let visibleRect: { height: number; width: number } | null = null;
+          const boundsCache = new Map<Fiber, Bounds | null>();
+          const measure = async (fiber: Fiber): Promise<Bounds | null> => {
+            if (boundsCache.has(fiber)) return boundsCache.get(fiber) ?? null;
+            const b = await measureFiber(fiber);
+            boundsCache.set(fiber, b);
+            return b;
+          };
+
+          if (onlyVisible) {
+            visibleRect = getVisibleRect();
+            if (visibleRect) {
+              const rect = visibleRect;
+              const measured = await Promise.all(
+                all.map(async (fiber) => {
+                  return { bounds: await measure(fiber), fiber };
+                })
+              );
+              all = measured
+                .filter(({ bounds }) => {
+                  return bounds && intersectsRect(bounds, rect);
+                })
+                .map(({ fiber }) => {
+                  return fiber;
+                });
+            }
+          }
+
           const total = all.length;
           const truncated = total > limit;
           const picked = truncated ? all.slice(0, limit) : all;
@@ -488,7 +623,7 @@ TIPS
             picked.map(async (fiber) => {
               const result: Record<string, unknown> = {};
               if (fields.has('bounds')) {
-                result.bounds = await measureFiber(fiber);
+                result.bounds = await measure(fiber);
               }
               if (fields.has('mcpId')) {
                 result.mcpId = fiber.memoizedProps?.['data-mcp-id'];
@@ -520,6 +655,11 @@ TIPS
           return response;
         },
         inputSchema: {
+          cache: {
+            description:
+              'Reuse the match set when the React tree has not committed since the previous identical steps — detected via fiber root pointer equality. Default true; pass false to force a fresh traversal.',
+            type: 'boolean',
+          },
           dedup: {
             description:
               'Drop wrapper cascades — a fiber is removed when any of its ancestors is also in the match set (PressableView → Pressable → View → RCTView collapses to the topmost). Independent siblings with overlapping bounds are kept. Default true; pass false to keep every match.',
@@ -528,6 +668,11 @@ TIPS
           limit: {
             description: `Max matches to return (default ${QUERY_LIMIT_DEFAULT}, max ${QUERY_LIMIT_MAX}). truncated: true is added when total exceeds limit.`,
             type: 'number',
+          },
+          onlyVisible: {
+            description:
+              'Drop matches whose measured bounds do not intersect the current window rectangle (physical pixels). Also drops fibers with no measurable host view — usually virtualized or unmounted. Halves results on long lists.',
+            type: 'boolean',
           },
           propsInclude: {
             description:

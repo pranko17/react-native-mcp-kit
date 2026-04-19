@@ -41,9 +41,22 @@ export type PropMatcher =
   | { regex: string; deep?: boolean };
 
 export interface ComponentQuery {
+  /**
+   * OR of sub-criteria. Matches if any of the listed criteria matches.
+   * Nests arbitrarily: each sub-criteria can itself carry `any` / `not`.
+   * Example: { any: [{ name: "Pressable" }, { name: "TouchableOpacity" }] }.
+   */
+  any?: ComponentQuery[];
   hasProps?: string[];
   mcpId?: string;
   name?: string;
+  /**
+   * Negation — matches iff the inner criteria does NOT match.
+   * Composes with the other fields (all AND-ed), so you can write
+   * { hasProps: ["onPress"], not: { testID: "loading" } } to mean
+   * "has onPress and is not the loading indicator".
+   */
+  not?: ComponentQuery;
   /**
    * Match by prop values. Each entry is AND-ed.
    * Example: { placeholder: { contains: "Search" }, variant: "primary" }.

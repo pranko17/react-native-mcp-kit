@@ -47,7 +47,8 @@ export const McpProvider = ({
   const rootRef = useRef<unknown>(null);
 
   // Always-on modules — fiberTree picks up the internal root ref so apps no
-  // longer need to manage one manually.
+  // longer need to manage one manually. When navigationRef is provided, it's
+  // forwarded too so `scope: "screen"` can resolve the focused screen fiber.
   useEffect(() => {
     client.registerModules([
       alertModule(),
@@ -56,9 +57,9 @@ export const McpProvider = ({
       errorsModule(),
       logBoxModule(),
       networkModule(),
-      fiberTreeModule({ rootRef }),
+      fiberTreeModule({ navigationRef, rootRef }),
     ]);
-  }, [client]);
+  }, [client, navigationRef]);
 
   useEffect(() => {
     if (!navigationRef) return;

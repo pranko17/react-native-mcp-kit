@@ -5,6 +5,8 @@ export { type ComponentQuery, type ComponentType, type SerializedComponent } fro
 export {
   findAllFibers,
   findFiber,
+  findHostFiber,
+  findScreenFiberByRouteKey,
   getAncestors,
   getComponentName,
   getDirectChildren,

@@ -1,5 +1,5 @@
 import { type McpModule } from '@/client/models/types';
-import { findAllFibers, getComponentName, getFiberRoot } from '@/modules/fiberTree';
+import { findScreenFiberByRouteKey, getComponentName, getFiberRoot } from '@/modules/fiberTree';
 
 import { type NavigationHistoryEntry, type NavigationRef, type NavigationState } from './types';
 
@@ -71,42 +71,12 @@ const parseMcpId = (mcpId: string | undefined): { filePath?: string; line?: numb
   return { filePath: filePath || undefined, line };
 };
 
-// React Navigation internals that show up in the route.key match chain but
-// aren't the user's screen component — we walk past them to the real leaf.
-const RN_NAV_WRAPPERS = new Set([
-  'Anonymous',
-  'ForwardRef',
-  'Memo',
-  'SceneView',
-  'Screen',
-  'StaticContainer',
-]);
-
 const getScreenInfoForRouteKey = (routeKey: string | undefined): ScreenInfo | undefined => {
   if (!routeKey) return undefined;
   const root = getFiberRoot();
   if (!root) return undefined;
-  // Route keys are unique per mounted screen. React Navigation forwards the
-  // `route` prop down a short chain (SceneView → StaticContainer → …→ the
-  // user's component), so findAllFibers returns the chain in DFS order and
-  // the last non-wrapper match is the screen the developer wrote.
-  const matches = findAllFibers(root, (f) => {
-    const props = f.memoizedProps as { route?: { key?: string } } | null | undefined;
-    return props?.route?.key === routeKey;
-  });
-  if (matches.length === 0) return undefined;
-
-  let fiber = matches[matches.length - 1]!;
-  // If the deepest match is still a wrapper, walk backwards through the chain
-  // to find the first one that isn't. Guards against apps that ship their own
-  // additional Screen/Anonymous wrappers around the real component.
-  for (let i = matches.length - 1; i >= 0; i--) {
-    const candidate = matches[i]!;
-    if (!RN_NAV_WRAPPERS.has(getComponentName(candidate))) {
-      fiber = candidate;
-      break;
-    }
-  }
+  const fiber = findScreenFiberByRouteKey(root, routeKey);
+  if (!fiber) return undefined;
 
   const mcpId = firstMcpIdDescendant(fiber);
   const info: ScreenInfo = { componentName: getComponentName(fiber) };
