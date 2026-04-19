@@ -1,7 +1,15 @@
 import { type ProcessRunner } from './processRunner';
 import { screenshotTool } from './tools/capture';
 import { listDevicesTool } from './tools/devices';
-import { pressKeyTool, swipeTool, tapTool, typeTextTool } from './tools/input';
+import {
+  dragTool,
+  longPressTool,
+  pressKeyTool,
+  swipeTool,
+  tapTool,
+  typeTextBatchTool,
+  typeTextTool,
+} from './tools/input';
 import { launchAppTool, restartAppTool, terminateAppTool } from './tools/lifecycle';
 import { symbolicateTool } from './tools/symbolicate';
 import { type HostModule } from './types';
@@ -22,8 +30,10 @@ COORDINATES
   They match fiber_tree bounds.centerX/centerY — feed them directly.`,
     name: 'host',
     tools: {
+      drag: dragTool(runner),
       launch_app: launchAppTool(runner),
       list_devices: listDevicesTool(runner),
+      long_press: longPressTool(runner),
       press_key: pressKeyTool(runner),
       restart_app: restartAppTool(runner),
       screenshot: screenshotTool(runner),
@@ -32,6 +42,7 @@ COORDINATES
       tap: tapTool(runner),
       terminate_app: terminateAppTool(runner),
       type_text: typeTextTool(runner),
+      type_text_batch: typeTextBatchTool(runner),
     },
   };
 };

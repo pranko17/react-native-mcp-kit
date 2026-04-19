@@ -15,6 +15,10 @@ const INPUT_TIMEOUT_MS = 5_000;
 const SWIPE_DURATION_DEFAULT_MS = 300;
 const SWIPE_DURATION_MIN_MS = 50;
 const SWIPE_DURATION_MAX_MS = 5_000;
+const LONG_PRESS_DURATION_DEFAULT_MS = 700;
+const DRAG_HOLD_DEFAULT_MS = 500;
+const DRAG_MOVE_DEFAULT_MS = 400;
+const BATCH_FOCUS_DELAY_MS = 150;
 
 const ANDROID_KEYCODES: Record<string, string> = {
   back: 'KEYCODE_BACK',
@@ -318,6 +322,228 @@ export const typeTextTool = (runner: ProcessRunner): HostToolHandler => {
       ...NATIVE_ID_SCHEMA,
     },
     timeout: INPUT_TIMEOUT_MS,
+  };
+};
+
+const clampLongPressDuration = (value: unknown): number => {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return LONG_PRESS_DURATION_DEFAULT_MS;
+  }
+  return Math.max(SWIPE_DURATION_MIN_MS, Math.min(SWIPE_DURATION_MAX_MS, Math.floor(value)));
+};
+
+export const longPressTool = (runner: ProcessRunner): HostToolHandler => {
+  return {
+    description:
+      'Hold a touch at (x, y) for durationMs without moving. Default 700ms — above the RN Pressable long-press threshold (~500ms) with margin. Internally: zero-distance swipe; the HID touch stays down for the full duration on both platforms.',
+    handler: async (args, ctx) => {
+      const resolved = await resolveDevice(ctx, parseResolveOptions(args), runner);
+      if (!resolved.ok) {
+        return { error: resolved.error };
+      }
+      const x = parseCoord(args.x, 'x');
+      if (!x.ok) return { error: x.error };
+      const y = parseCoord(args.y, 'y');
+      if (!y.ok) return { error: y.error };
+      const durationMs = clampLongPressDuration(args.durationMs);
+      const result =
+        resolved.device.platform === 'ios'
+          ? await swipeIos(
+              resolved.device.nativeId,
+              x.value,
+              y.value,
+              x.value,
+              y.value,
+              durationMs,
+              runner
+            )
+          : await swipeAndroid(
+              resolved.device.nativeId,
+              x.value,
+              y.value,
+              x.value,
+              y.value,
+              durationMs,
+              runner
+            );
+      if ('error' in result) {
+        return { error: result.error };
+      }
+      return { device: resolved.device, durationMs, longPressed: true, x: x.value, y: y.value };
+    },
+    inputSchema: {
+      durationMs: {
+        description: `Hold duration in milliseconds. Default ${LONG_PRESS_DURATION_DEFAULT_MS}. Clamped to ${SWIPE_DURATION_MIN_MS}..${SWIPE_DURATION_MAX_MS}.`,
+        type: 'number',
+      },
+      platform: PLATFORM_ARG_SCHEMA,
+      x: { description: 'Absolute x pixel coordinate.', type: 'number' },
+      y: { description: 'Absolute y pixel coordinate.', type: 'number' },
+      ...NATIVE_ID_SCHEMA,
+    },
+    timeout: INPUT_TIMEOUT_MS + SWIPE_DURATION_MAX_MS,
+  };
+};
+
+export const dragTool = (runner: ProcessRunner): HostToolHandler => {
+  return {
+    description:
+      'Hold-then-drag gesture for swipe-to-delete, drag-to-reorder, pull-to-refresh-with-hold. Total gesture time is holdMs + durationMs (both platforms emit a single slow swipe — the hold is simulated by lingering near the start, not a true stop-then-move pause). When precise hold timing matters (e.g. iOS haptic long-press triggers), test + tune holdMs empirically.',
+    handler: async (args, ctx) => {
+      const resolved = await resolveDevice(ctx, parseResolveOptions(args), runner);
+      if (!resolved.ok) {
+        return { error: resolved.error };
+      }
+      const x1 = parseCoord(args.x1, 'x1');
+      if (!x1.ok) return { error: x1.error };
+      const y1 = parseCoord(args.y1, 'y1');
+      if (!y1.ok) return { error: y1.error };
+      const x2 = parseCoord(args.x2, 'x2');
+      if (!x2.ok) return { error: x2.error };
+      const y2 = parseCoord(args.y2, 'y2');
+      if (!y2.ok) return { error: y2.error };
+      const holdMs =
+        typeof args.holdMs === 'number' && Number.isFinite(args.holdMs) && args.holdMs >= 0
+          ? Math.min(SWIPE_DURATION_MAX_MS, Math.floor(args.holdMs))
+          : DRAG_HOLD_DEFAULT_MS;
+      const moveMs = clampSwipeDuration(args.durationMs ?? DRAG_MOVE_DEFAULT_MS);
+      const total = Math.min(SWIPE_DURATION_MAX_MS, holdMs + moveMs);
+      const result =
+        resolved.device.platform === 'ios'
+          ? await swipeIos(
+              resolved.device.nativeId,
+              x1.value,
+              y1.value,
+              x2.value,
+              y2.value,
+              total,
+              runner
+            )
+          : await swipeAndroid(
+              resolved.device.nativeId,
+              x1.value,
+              y1.value,
+              x2.value,
+              y2.value,
+              total,
+              runner
+            );
+      if ('error' in result) {
+        return { error: result.error };
+      }
+      return {
+        device: resolved.device,
+        dragged: true,
+        from: { x: x1.value, y: y1.value },
+        holdMs,
+        moveMs,
+        to: { x: x2.value, y: y2.value },
+        totalMs: total,
+      };
+    },
+    inputSchema: {
+      durationMs: {
+        description: `Move portion in milliseconds. Default ${DRAG_MOVE_DEFAULT_MS}. Clamped to ${SWIPE_DURATION_MIN_MS}..${SWIPE_DURATION_MAX_MS}.`,
+        type: 'number',
+      },
+      holdMs: {
+        description: `Hold time near start before the motion. Default ${DRAG_HOLD_DEFAULT_MS}. 0 to skip hold.`,
+        type: 'number',
+      },
+      platform: PLATFORM_ARG_SCHEMA,
+      x1: { description: 'Start x pixel coordinate.', type: 'number' },
+      x2: { description: 'End x pixel coordinate.', type: 'number' },
+      y1: { description: 'Start y pixel coordinate.', type: 'number' },
+      y2: { description: 'End y pixel coordinate.', type: 'number' },
+      ...NATIVE_ID_SCHEMA,
+    },
+    timeout: INPUT_TIMEOUT_MS + SWIPE_DURATION_MAX_MS,
+  };
+};
+
+interface BatchField {
+  text: string;
+  x: number;
+  y: number;
+  submit?: boolean;
+}
+
+export const typeTextBatchTool = (runner: ProcessRunner): HostToolHandler => {
+  return {
+    description:
+      'Fill multiple text fields in one call. Each field: { x, y, text, submit? }. For each entry — tap to focus, wait briefly for the keyboard, type via existing type_text semantics (select-all → paste on iOS; adb input text on Android), optionally submit. Stops on the first error and returns { filled, failedAt, error? }.',
+    handler: async (args, ctx) => {
+      const resolved = await resolveDevice(ctx, parseResolveOptions(args), runner);
+      if (!resolved.ok) {
+        return { error: resolved.error };
+      }
+      const fields = args.fields;
+      if (!Array.isArray(fields) || fields.length === 0) {
+        return { error: "'fields' must be a non-empty array of { x, y, text, submit? }." };
+      }
+
+      const results: Array<{ submitted: boolean; x: number; y: number }> = [];
+
+      for (let i = 0; i < fields.length; i++) {
+        const raw = fields[i] as Partial<BatchField> | null;
+        if (!raw || typeof raw !== 'object') {
+          return { error: `fields[${i}]: must be an object.`, failedAt: i, filled: results.length };
+        }
+        const x = parseCoord(raw.x, `fields[${i}].x`);
+        if (!x.ok) return { error: x.error, failedAt: i, filled: results.length };
+        const y = parseCoord(raw.y, `fields[${i}].y`);
+        if (!y.ok) return { error: y.error, failedAt: i, filled: results.length };
+        if (typeof raw.text !== 'string') {
+          return {
+            error: `fields[${i}].text must be a string.`,
+            failedAt: i,
+            filled: results.length,
+          };
+        }
+        const submit = raw.submit === true;
+
+        const focused =
+          resolved.device.platform === 'ios'
+            ? await tapIos(resolved.device.nativeId, x.value, y.value, runner)
+            : await tapAndroid(resolved.device.nativeId, x.value, y.value, runner);
+        if ('error' in focused) {
+          return { error: focused.error, failedAt: i, filled: results.length };
+        }
+
+        // Give the soft keyboard a beat to come up before typing.
+        await new Promise((r) => {
+          return setTimeout(r, BATCH_FOCUS_DELAY_MS);
+        });
+
+        const typed =
+          resolved.device.platform === 'ios'
+            ? await typeTextIos(resolved.device.nativeId, raw.text, submit, runner)
+            : await typeTextAndroid(resolved.device.nativeId, raw.text, submit, runner);
+        if ('error' in typed) {
+          return { error: typed.error, failedAt: i, filled: results.length };
+        }
+
+        results.push({ submitted: submit, x: x.value, y: y.value });
+      }
+
+      return { device: resolved.device, fields: results, filled: results.length };
+    },
+    inputSchema: {
+      fields: {
+        description:
+          'Ordered list of { x, y, text, submit? } entries. Each entry taps the coordinate to focus the input, waits briefly for the keyboard, then types the text.',
+        examples: [
+          [
+            { text: 'alice@example.com', x: 120, y: 400 },
+            { submit: true, text: 'pa55word', x: 120, y: 520 },
+          ],
+        ],
+        type: 'array',
+      },
+      platform: PLATFORM_ARG_SCHEMA,
+      ...NATIVE_ID_SCHEMA,
+    },
+    timeout: INPUT_TIMEOUT_MS * 6,
   };
 };
 
