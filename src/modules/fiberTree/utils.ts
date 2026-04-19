@@ -2,6 +2,7 @@ import {
   type Bounds,
   type ComponentQuery,
   type ComponentType,
+  type PropMatcher,
   type SerializedComponent,
 } from './types';
 
@@ -340,6 +341,25 @@ export const findByText = (root: Fiber, text: string): Fiber | null => {
   });
 };
 
+const matchPropValue = (actual: unknown, matcher: PropMatcher): boolean => {
+  if (matcher !== null && typeof matcher === 'object') {
+    if (actual === undefined || actual === null) return false;
+    const asString = String(actual);
+    if ('contains' in matcher && typeof matcher.contains === 'string') {
+      return asString.includes(matcher.contains);
+    }
+    if ('regex' in matcher && typeof matcher.regex === 'string') {
+      try {
+        return new RegExp(matcher.regex).test(asString);
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  }
+  return actual === matcher;
+};
+
 export const matchesQuery = (fiber: Fiber, query: ComponentQuery): boolean => {
   try {
     if (query.mcpId && fiber.memoizedProps?.['data-mcp-id'] !== query.mcpId) return false;
@@ -354,6 +374,13 @@ export const matchesQuery = (fiber: Fiber, query: ComponentQuery): boolean => {
       if (!props || typeof props !== 'object') return false;
       for (const prop of query.hasProps) {
         if (!(prop in props)) return false;
+      }
+    }
+    if (query.props && typeof query.props === 'object') {
+      const props = fiber.memoizedProps;
+      if (!props || typeof props !== 'object') return false;
+      for (const key of Object.keys(query.props)) {
+        if (!matchPropValue(props[key], query.props[key]!)) return false;
       }
     }
     return true;

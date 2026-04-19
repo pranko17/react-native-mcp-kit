@@ -441,10 +441,28 @@ children subtree (for deep inspection rather than flat lists).
         description: `Chain-based component search. Each step narrows the set of
 matching fibers, starting from the fiber root. A step has a \`scope\`
 (default 'descendants' — walks the whole subtree; other values: 'children',
-'parent', 'ancestors', 'siblings', 'self') and the usual criteria
-(mcpId / testID / name / text / hasProps). If a step matches more than one
-fiber, every match is forwarded to the next step; set \`index\` on a step to
-pick just the N-th. The last step's matches are returned as a list.
+'parent', 'ancestors', 'siblings', 'self') and criteria applied to the
+fibers in that scope:
+
+- \`name\` / \`mcpId\` / \`testID\` — strict equality.
+- \`text\` — substring in **rendered** text only. Does NOT look at props
+  like placeholder / accessibilityLabel — use \`props\` for those.
+- \`hasProps\` — array of prop names that must exist on the fiber.
+- \`props\` — map of prop name → expected value. The matcher can be:
+    · a primitive → strict equality ({ disabled: false }, { count: 3 });
+    · \`{ contains: "X" }\` → substring match. Coerces the actual value to a
+      string first, so it works on text-like props (placeholder,
+      accessibilityLabel, title) AND on numbers / anything else whose
+      toString() is useful.
+    · \`{ regex: "pattern" }\` → full regex test against String(value). Same
+      any-value coercion — can match numeric fields with \`^\\d+$\`, string
+      fields with arbitrary patterns, etc. Invalid patterns never match
+      instead of throwing.
+  Example: { placeholder: { contains: "Search" }, testID: { regex: "^item-\\\\d+$" }, count: 3 }.
+
+If a step matches more than one fiber, every match is forwarded to the
+next step; set \`index\` on a step to pick just the N-th. The last step's
+matches are returned as a list.
 
 Examples:
 - [{ name: "HomeScreen" }, { name: "ProductCard" }]
@@ -453,6 +471,8 @@ Examples:
     → the nearest enclosing ProductCard around each favorite icon
 - [{ name: "Button" }, { scope: "siblings", hasProps: ["onPress"] }]
     → every pressable sibling of every Button
+- [{ props: { placeholder: { contains: "Search" } } }]
+    → any input whose placeholder contains "Search"
 
 Use \`select\` to control which fields come back on each match (mcpId / name /
 testID / props / bounds); default omits bounds, include "bounds" for
@@ -504,7 +524,7 @@ host__tap coordinates, omit "props" to cut response size.`,
           },
           steps: {
             description:
-              'Ordered list of query steps. Each step: { scope?, name?, mcpId?, testID?, text?, hasProps?, index? }. scope defaults to "descendants" on the first step (walks the whole tree) and on subsequent steps. See the tool description for end-to-end examples.',
+              'Ordered list of query steps. Each step: { scope?, name?, mcpId?, testID?, text?, hasProps?, props?, index? }. props matches by value — primitive = strict equality, { contains: "X" } = substring match, { regex: "pattern" } = regex test. contains/regex both coerce the actual value to String() first, so they work on any value (strings, numbers, anything). scope defaults to "descendants" on every step. See the tool description for end-to-end examples.',
             type: 'array',
           },
         },
