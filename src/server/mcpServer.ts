@@ -17,7 +17,8 @@ Multiple React Native apps can connect simultaneously — each is identified by 
 2. Use \`list_tools\` to browse all available tool names and short descriptions. The response is compact — modules that are structurally identical across multiple clients are deduplicated into a single entry with a \`clientIds\` array, and input schemas are omitted. Narrow the listing with \`{ module }\` or \`{ clientId }\`, or pass \`{ compact: true }\` to drop module-level descriptions.
 3. Use \`describe_tool\` with \`{ tool, clientId? }\` to fetch the full input schema of a specific tool before calling it. Required when you need to know the argument shape. Host tools are resolved directly (no clientId needed). For in-app tools, omit \`clientId\` to auto-pick; specify it only when multiple clients have the same tool with different schemas.
 4. Use \`call\` to invoke any tool with format: module${MODULE_SEPARATOR}method (e.g. navigation${MODULE_SEPARATOR}navigate). When more than one client is connected, specify \`clientId\`. When exactly one client is connected, \`clientId\` is optional — it's auto-picked.
-5. Use \`state_list\` / \`state_get\` to read app state exposed via useMcpState. State is scoped per client; specify \`clientId\` when multiple clients are connected.
+5. Use \`wait_until\` to poll any tool until a predicate over its result holds (or timeout). Replaces "screenshot in a loop + sleep" for things like "wait for screen X", "wait for the spinner to disappear", "wait for network to idle".
+6. Use \`state_list\` / \`state_get\` to read app state exposed via useMcpState. State is scoped per client; specify \`clientId\` when multiple clients are connected.
 
 Some tools run inline on the MCP server host (e.g. \`host${MODULE_SEPARATOR}screenshot\`, \`host${MODULE_SEPARATOR}list_devices\`, \`host${MODULE_SEPARATOR}launch_app\`, \`host${MODULE_SEPARATOR}terminate_app\`, \`host${MODULE_SEPARATOR}restart_app\`) and work even when no React Native client is connected. They use xcrun simctl / adb on the dev machine. When \`clientId\` is provided, host tools use that client's platform/label/deviceId as hints to resolve the target device; otherwise they prefer the device of the single connected client, falling back to the single booted sim / online device. \`launch_app\`, \`terminate_app\`, and \`restart_app\` accept an \`appId\` arg (iOS bundle ID / Android package name); omit it to reuse the target client's registered \`bundleId\` from its connection metadata.
 
@@ -45,6 +46,83 @@ const jsonError = (msg: string): { content: TextContent[] } => {
   return {
     content: [{ text: JSON.stringify({ error: msg }), type: 'text' as const }],
   };
+};
+
+/**
+ * Drill into a value by dot-path. Arrays accept numeric indices and also
+ * respond to `.length` (handy for "wait until list is empty"). Returns
+ * undefined when any intermediate segment is missing.
+ */
+const resolvePath = (value: unknown, path: string | undefined): unknown => {
+  if (!path) return value;
+  let current: unknown = value;
+  for (const key of path.split('.')) {
+    if (current == null) return undefined;
+    if (Array.isArray(current)) {
+      if (key === 'length') {
+        current = current.length;
+        continue;
+      }
+      const idx = Number.parseInt(key, 10);
+      current = Number.isNaN(idx) ? undefined : current[idx];
+      continue;
+    }
+    if (typeof current === 'object') {
+      current = (current as Record<string, unknown>)[key];
+      continue;
+    }
+    return undefined;
+  }
+  return current;
+};
+
+type PredicateOp =
+  | 'contains'
+  | 'equals'
+  | 'exists'
+  | 'gt'
+  | 'gte'
+  | 'lt'
+  | 'lte'
+  | 'notContains'
+  | 'notEquals'
+  | 'notExists';
+
+const evalPredicate = (actual: unknown, op: PredicateOp, expected: unknown): boolean => {
+  switch (op) {
+    case 'exists':
+      return actual !== undefined && actual !== null;
+    case 'notExists':
+      return actual === undefined || actual === null;
+    case 'equals':
+      return Object.is(actual, expected);
+    case 'notEquals':
+      return !Object.is(actual, expected);
+    case 'contains': {
+      if (typeof actual === 'string' && typeof expected === 'string') {
+        return actual.includes(expected);
+      }
+      if (Array.isArray(actual)) return actual.includes(expected);
+      return false;
+    }
+    case 'notContains': {
+      if (typeof actual === 'string' && typeof expected === 'string') {
+        return !actual.includes(expected);
+      }
+      if (Array.isArray(actual)) return !actual.includes(expected);
+      return false;
+    }
+    case 'gt':
+      return typeof actual === 'number' && typeof expected === 'number' && actual > expected;
+    case 'gte':
+      return typeof actual === 'number' && typeof expected === 'number' && actual >= expected;
+    case 'lt':
+      return typeof actual === 'number' && typeof expected === 'number' && actual < expected;
+    case 'lte':
+      return typeof actual === 'number' && typeof expected === 'number' && actual <= expected;
+    default:
+      return false;
+  }
 };
 
 interface HostToolEntry {
@@ -205,96 +283,143 @@ export class McpServerWrapper {
             return jsonError('Invalid JSON in args');
           }
         }
+        const dispatch = await this.dispatchTool(tool, parsedArgs, clientId);
+        if (!dispatch.ok) return jsonError(dispatch.error);
+        return { content: this.formatResult(dispatch.result) };
+      }
+    );
 
-        // Host dispatch — runs inline on the Node server, may work without any connected client
-        const hostEntry = this.hostToolMap.get(tool);
-        if (hostEntry) {
+    this.mcp.registerTool(
+      'wait_until',
+      {
+        annotations: {
+          openWorldHint: true,
+          title: 'Wait Until',
+        },
+        description: `Poll a tool until its result satisfies a predicate, or timeout.
+
+Replaces "screenshot in a loop + sleep" with a declarative check. Typical use:
+  • wait for navigation to land on a screen
+  • wait for a spinner / toast to disappear
+  • wait for a fiber_tree.query to return matches (or stop returning them)
+  • wait for network.get_pending.length to hit 0
+
+PREDICATE
+  { path?: "dot.path.into.result", op, value? }
+  op: equals | notEquals | contains | notContains | exists | notExists | gt | gte | lt | lte
+  path resolves through objects and array indices; arrays also expose .length.
+
+RETURNS
+  { ok: true, attempts, elapsedMs, lastResult } when the predicate holds, or
+  { ok: false, reason, attempts, elapsedMs, lastResult?, lastError? } on timeout.`,
+        inputSchema: {
+          args: z.string().optional().describe('Arguments for the polled tool, as JSON string.'),
+          clientId: z.string().optional().describe('Target client ID, same semantics as `call`.'),
+          intervalMs: z
+            .number()
+            .optional()
+            .describe('Delay between poll attempts. Default 300, min 50, max 5000.'),
+          predicate: z
+            .object({
+              op: z.enum([
+                'contains',
+                'equals',
+                'exists',
+                'gt',
+                'gte',
+                'lt',
+                'lte',
+                'notContains',
+                'notEquals',
+                'notExists',
+              ]),
+              path: z.string().optional(),
+              value: z.unknown().optional(),
+            })
+            .describe(
+              'Predicate to apply to the tool result. `path` drills into the result; omit to evaluate the whole result.'
+            ),
+          timeoutMs: z
+            .number()
+            .optional()
+            .describe('Total wait budget. Default 10000, min 500, max 60000.'),
+          tool: z
+            .string()
+            .describe(`Tool name to poll (e.g. "navigation${MODULE_SEPARATOR}get_current_route").`),
+        },
+      },
+      async ({ args, clientId, intervalMs, predicate, timeoutMs, tool }) => {
+        let parsedArgs: Record<string, unknown> = {};
+        if (args) {
           try {
-            const result = await hostEntry.handler(parsedArgs, {
-              bridge: this.bridge,
-              requestedClientId: clientId,
-            });
-            return { content: this.formatResult(result) };
-          } catch (err) {
-            return jsonError(`Host tool "${tool}" threw: ${(err as Error).message}`);
-          }
-        }
-
-        const resolution = this.bridge.resolveClient(clientId);
-        if (!resolution.ok) {
-          return jsonError(resolution.error);
-        }
-        const client = resolution.client;
-
-        // Find the module by matching prefix in this client's modules
-        let mod: ModuleDescriptor | undefined;
-        let moduleName = '';
-        let methodName = '';
-
-        for (const m of client.modules) {
-          const prefix = `${m.name}${MODULE_SEPARATOR}`;
-          if (tool.startsWith(prefix)) {
-            mod = m;
-            moduleName = m.name;
-            methodName = tool.slice(prefix.length);
-            break;
-          }
-        }
-
-        // If no module matched, check for dynamic tool prefix or generic module__method
-        if (!mod) {
-          if (tool.startsWith(DYNAMIC_PREFIX)) {
-            moduleName = `${MODULE_SEPARATOR}dynamic`;
-            methodName = tool.slice(DYNAMIC_PREFIX.length);
-          } else {
-            const idx = tool.indexOf(MODULE_SEPARATOR);
-            if (idx <= 0) {
-              return jsonError(
-                `Invalid tool name "${tool}". Use "module${MODULE_SEPARATOR}method" format.`
-              );
-            }
-            moduleName = tool.slice(0, idx);
-            methodName = tool.slice(idx + MODULE_SEPARATOR.length);
-          }
-
-          // Try dispatching via bridge — might be a dynamic tool registered on this client
-          try {
-            const result = await this.bridge.call(client.id, moduleName, methodName, parsedArgs);
-            return { content: this.formatResult(result) };
+            parsedArgs = JSON.parse(args) as Record<string, unknown>;
           } catch {
-            const allModules = client.modules
-              .map((m) => {
-                return m.name;
-              })
-              .join(', ');
-            const dynNames = [...client.dynamicTools.keys()].join(', ');
-            return jsonError(
-              `Tool "${tool}" not found on client '${client.id}'. Modules: ${allModules || '(none)'}. Dynamic: ${dynNames || '(none)'}`
-            );
+            return jsonError('Invalid JSON in args');
           }
         }
+        const timeout = Math.max(500, Math.min(60_000, timeoutMs ?? 10_000));
+        const interval = Math.max(50, Math.min(5_000, intervalMs ?? 300));
+        const started = Date.now();
+        let attempts = 0;
+        let lastResult: unknown;
+        let lastError: string | undefined;
 
-        const toolDef = mod.tools.find((t) => {
-          return t.name === methodName;
-        });
-        if (!toolDef) {
-          return jsonError(
-            `Tool "${methodName}" not found in module "${moduleName}" on client '${client.id}'. Available: ${mod.tools
-              .map((t) => {
-                return t.name;
-              })
-              .join(', ')}`
-          );
+        while (Date.now() - started < timeout) {
+          attempts += 1;
+          const dispatch = await this.dispatchTool(tool, parsedArgs, clientId);
+          if (dispatch.ok) {
+            lastResult = dispatch.result;
+            const target = resolvePath(lastResult, predicate.path);
+            if (evalPredicate(target, predicate.op, predicate.value)) {
+              return {
+                content: [
+                  {
+                    text: JSON.stringify(
+                      {
+                        attempts,
+                        elapsedMs: Date.now() - started,
+                        lastResult,
+                        ok: true,
+                      },
+                      null,
+                      2
+                    ),
+                    type: 'text' as const,
+                  },
+                ],
+              };
+            }
+          } else {
+            lastError = dispatch.error;
+          }
+          const remaining = timeout - (Date.now() - started);
+          if (remaining <= 0) break;
+          await new Promise((r) => {
+            return setTimeout(r, Math.min(interval, remaining));
+          });
         }
 
-        const result = await this.bridge.call(
-          client.id,
-          moduleName,
-          methodName,
-          parsedArgs,
-          toolDef.timeout
-        );
-        return { content: this.formatResult(result) };
+        return {
+          content: [
+            {
+              text: JSON.stringify(
+                {
+                  attempts,
+                  elapsedMs: Date.now() - started,
+                  lastError,
+                  lastResult,
+                  ok: false,
+                  reason: lastError
+                    ? `Last dispatch failed: ${lastError}`
+                    : `Predicate did not hold within ${timeout}ms`,
+                },
+                null,
+                2
+              ),
+              type: 'text' as const,
+            },
+          ],
+        };
       }
     );
 
@@ -718,6 +843,106 @@ export class McpServerWrapper {
         );
       }
     );
+  }
+
+  /**
+   * Execute a single tool by full name, returning the raw handler result.
+   * Used by both the `call` tool and meta-tools like `wait_until` that need to
+   * invoke other tools without going through the full MCP content wrapping.
+   */
+  private async dispatchTool(
+    tool: string,
+    args: Record<string, unknown>,
+    clientId?: string
+  ): Promise<{ ok: true; result: unknown } | { error: string; ok: false }> {
+    const hostEntry = this.hostToolMap.get(tool);
+    if (hostEntry) {
+      try {
+        const result = await hostEntry.handler(args, {
+          bridge: this.bridge,
+          requestedClientId: clientId,
+        });
+        return { ok: true, result };
+      } catch (err) {
+        return { error: `Host tool "${tool}" threw: ${(err as Error).message}`, ok: false };
+      }
+    }
+
+    const resolution = this.bridge.resolveClient(clientId);
+    if (!resolution.ok) return { error: resolution.error, ok: false };
+    const client = resolution.client;
+
+    let mod: ModuleDescriptor | undefined;
+    let moduleName = '';
+    let methodName = '';
+    for (const m of client.modules) {
+      const prefix = `${m.name}${MODULE_SEPARATOR}`;
+      if (tool.startsWith(prefix)) {
+        mod = m;
+        moduleName = m.name;
+        methodName = tool.slice(prefix.length);
+        break;
+      }
+    }
+
+    if (!mod) {
+      if (tool.startsWith(DYNAMIC_PREFIX)) {
+        moduleName = `${MODULE_SEPARATOR}dynamic`;
+        methodName = tool.slice(DYNAMIC_PREFIX.length);
+      } else {
+        const idx = tool.indexOf(MODULE_SEPARATOR);
+        if (idx <= 0) {
+          return {
+            error: `Invalid tool name "${tool}". Use "module${MODULE_SEPARATOR}method" format.`,
+            ok: false,
+          };
+        }
+        moduleName = tool.slice(0, idx);
+        methodName = tool.slice(idx + MODULE_SEPARATOR.length);
+      }
+      try {
+        const result = await this.bridge.call(client.id, moduleName, methodName, args);
+        return { ok: true, result };
+      } catch {
+        const allModules = client.modules
+          .map((m) => {
+            return m.name;
+          })
+          .join(', ');
+        const dynNames = [...client.dynamicTools.keys()].join(', ');
+        return {
+          error: `Tool "${tool}" not found on client '${client.id}'. Modules: ${allModules || '(none)'}. Dynamic: ${dynNames || '(none)'}`,
+          ok: false,
+        };
+      }
+    }
+
+    const toolDef = mod.tools.find((t) => {
+      return t.name === methodName;
+    });
+    if (!toolDef) {
+      return {
+        error: `Tool "${methodName}" not found in module "${moduleName}" on client '${client.id}'. Available: ${mod.tools
+          .map((t) => {
+            return t.name;
+          })
+          .join(', ')}`,
+        ok: false,
+      };
+    }
+
+    try {
+      const result = await this.bridge.call(
+        client.id,
+        moduleName,
+        methodName,
+        args,
+        toolDef.timeout
+      );
+      return { ok: true, result };
+    } catch (err) {
+      return { error: (err as Error).message, ok: false };
+    }
   }
 
   private buildToolGroups(client: ClientEntry): ToolGroup[] {
