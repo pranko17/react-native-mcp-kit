@@ -117,6 +117,23 @@ const runQueryChain = (root: Fiber, steps: QueryStep[]): Fiber[] => {
   return current;
 };
 
+// Keep only fibers whose ancestor chain contains no other match. Removes
+// wrapper cascades (PressableView → Pressable → View → RCTView) while keeping
+// independent siblings with overlapping bounds (e.g. absolute-positioned
+// overlays). Preserves original DFS order.
+const dedupAncestors = (matches: Fiber[]): Fiber[] => {
+  if (matches.length < 2) return matches;
+  const matchSet = new Set<Fiber>(matches);
+  return matches.filter((fiber) => {
+    let p = fiber.return;
+    while (p) {
+      if (matchSet.has(p)) return false;
+      p = p.return;
+    }
+    return true;
+  });
+};
+
 export const fiberTreeModule = (options?: FiberTreeModuleOptions): McpModule => {
   if (options?.rootRef) {
     setRootRef(options.rootRef);
@@ -211,6 +228,11 @@ RESPONSE
   count; when the result exceeds limit (default 50, max 500) truncated:
   true is added and matches contains the first limit items in DFS order.
   Narrow the query rather than cranking limit.
+
+  By default wrapper cascades are deduped: a fiber is hidden when any of
+  its ancestors is also a match, so PressableView → Pressable → View →
+  RCTView collapses to the topmost PressableView. Independent siblings
+  are kept. Pass dedup: false to see every layer.
 
 TIPS
   mcpId format "ComponentName:file:line" — stable across renders.
@@ -447,8 +469,10 @@ TIPS
             typeof args.limit === 'number' && args.limit > 0
               ? Math.min(Math.floor(args.limit), QUERY_LIMIT_MAX)
               : QUERY_LIMIT_DEFAULT;
+          const dedup = args.dedup !== false;
 
-          const all = runQueryChain(root, steps);
+          const rawMatches = runQueryChain(root, steps);
+          const all = dedup ? dedupAncestors(rawMatches) : rawMatches;
           const total = all.length;
           const truncated = total > limit;
           const picked = truncated ? all.slice(0, limit) : all;
@@ -496,6 +520,11 @@ TIPS
           return response;
         },
         inputSchema: {
+          dedup: {
+            description:
+              'Drop wrapper cascades — a fiber is removed when any of its ancestors is also in the match set (PressableView → Pressable → View → RCTView collapses to the topmost). Independent siblings with overlapping bounds are kept. Default true; pass false to keep every match.',
+            type: 'boolean',
+          },
           limit: {
             description: `Max matches to return (default ${QUERY_LIMIT_DEFAULT}, max ${QUERY_LIMIT_MAX}). truncated: true is added when total exceeds limit.`,
             type: 'number',
