@@ -16,12 +16,11 @@ export const alertModule = (): McpModule => {
   };
 
   return {
-    description: 'Show native alert dialogs with custom buttons. Returns which button was pressed.',
+    description: 'Show native Alert.alert dialogs and get back which button was pressed.',
     name: 'alert',
     tools: {
       show: {
-        description:
-          'Show an alert dialog with custom buttons. Each button can have a style (default, cancel, destructive). Returns the pressed button label and index.',
+        description: 'Show an alert dialog; returns { button, index }.',
         handler: (args) => {
           const { Alert } = getRN();
           const rawButtons = args.buttons as Array<string | AlertButton> | undefined;
@@ -49,12 +48,12 @@ export const alertModule = (): McpModule => {
         },
         inputSchema: {
           buttons: {
-            description:
-              'Array of buttons. Each can be a string or {text, style?}. Style: "default", "cancel", "destructive". Default: ["OK"]',
+            description: 'Buttons — string or { text, style? }. style: default|cancel|destructive.',
+            examples: [['OK'], ['Cancel', 'OK'], [{ style: 'destructive', text: 'Delete' }]],
             type: 'array',
           },
-          message: { description: 'Alert message body', type: 'string' },
-          title: { description: 'Alert title', type: 'string' },
+          message: { description: 'Alert body.', type: 'string' },
+          title: { description: 'Alert title.', type: 'string' },
         },
         timeout: ALERT_TIMEOUT,
       },

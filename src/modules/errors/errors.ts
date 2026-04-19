@@ -66,18 +66,22 @@ export const errorsModule = (options?: ErrorsModuleOptions): McpModule => {
   };
 
   return {
-    description: 'Captured unhandled JS errors and promise rejections with stack traces.',
+    description: `Unhandled JS errors + promise rejections, with stack traces.
+
+Captures via ErrorUtils.setGlobalHandler + console.error sniffing.
+Deduplicates within a 100ms window. Buffer size configurable via
+errorsModule options.`,
     name: 'errors',
     tools: {
       clear_errors: {
-        description: 'Clear all captured errors from the buffer',
+        description: 'Clear the error buffer.',
         handler: () => {
           buffer.length = 0;
           return { success: true };
         },
       },
       get_errors: {
-        description: 'Get all captured unhandled errors and promise rejections',
+        description: 'Captured errors; filterable by source and fatal flag.',
         handler: (args) => {
           let result = [...buffer];
           if (args.source) {
@@ -96,13 +100,17 @@ export const errorsModule = (options?: ErrorsModuleOptions): McpModule => {
           return result;
         },
         inputSchema: {
-          fatal: { description: 'Filter by fatal flag (true/false)', type: 'boolean' },
-          limit: { description: 'Max number of entries to return', type: 'number' },
-          source: { description: 'Filter by source (global, promise)', type: 'string' },
+          fatal: { description: 'Filter by fatal flag.', type: 'boolean' },
+          limit: { description: 'Max entries to return.', type: 'number' },
+          source: {
+            description: 'Filter by source.',
+            examples: ['global', 'promise'],
+            type: 'string',
+          },
         },
       },
       get_fatal: {
-        description: 'Get only fatal errors',
+        description: 'Fatal errors only.',
         handler: (args) => {
           let result = buffer.filter((e) => {
             return e.isFatal;
@@ -113,11 +121,11 @@ export const errorsModule = (options?: ErrorsModuleOptions): McpModule => {
           return result;
         },
         inputSchema: {
-          limit: { description: 'Max number of entries to return', type: 'number' },
+          limit: { description: 'Max entries to return.', type: 'number' },
         },
       },
       get_stats: {
-        description: 'Get error statistics (total, by source, fatal count)',
+        description: 'Error counts — total, by source, fatal.',
         handler: () => {
           return {
             bySource: {

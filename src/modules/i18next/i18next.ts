@@ -25,22 +25,30 @@ export const i18nextModule = (i18n: I18nLike): McpModule => {
   };
 
   return {
-    description:
-      'Translation inspection: search keys/values, translate with interpolation, change language.',
+    description: `i18next translation inspection + runtime control.
+
+Works against an injected i18next instance. \`language\` and \`namespace\`
+default to the current language / first-registered namespace respectively.
+Interpolation options are passed as a JSON string to keep the schema
+flat.`,
     name: 'i18n',
     tools: {
       change_language: {
-        description: 'Change the current language',
+        description: 'Switch the active language.',
         handler: async (args) => {
           await i18n.changeLanguage(args.language as string);
           return { language: i18n.language, success: true };
         },
         inputSchema: {
-          language: { description: 'Language code (e.g. "en", "uk", "pl")', type: 'string' },
+          language: {
+            description: 'Language code.',
+            examples: ['en', 'de', 'fr'],
+            type: 'string',
+          },
         },
       },
       get_info: {
-        description: 'Get current language, available languages, and namespaces',
+        description: 'Current language + available languages + registered namespaces.',
         handler: () => {
           return {
             currentLanguage: i18n.language,
@@ -50,7 +58,7 @@ export const i18nextModule = (i18n: I18nLike): McpModule => {
         },
       },
       get_keys: {
-        description: 'List all translation keys for a language and namespace',
+        description: 'All translation keys for a language + namespace.',
         handler: (args) => {
           const lng = (args.language as string) || i18n.language;
           const ns = (args.namespace as string) || getNamespaces()[0] || 'translation';
@@ -59,12 +67,12 @@ export const i18nextModule = (i18n: I18nLike): McpModule => {
           return { keys: flattenKeys(resource), language: lng, namespace: ns };
         },
         inputSchema: {
-          language: { description: 'Language code (default: current)', type: 'string' },
-          namespace: { description: 'Namespace (default: first registered)', type: 'string' },
+          language: { description: 'Language code (default: current).', type: 'string' },
+          namespace: { description: 'Namespace (default: first registered).', type: 'string' },
         },
       },
       get_resource: {
-        description: 'Get the full translation resource for a language and namespace',
+        description: 'Full translation resource object for a language + namespace.',
         handler: (args) => {
           const lng = (args.language as string) || i18n.language;
           const ns = (args.namespace as string) || getNamespaces()[0] || 'translation';
@@ -73,12 +81,12 @@ export const i18nextModule = (i18n: I18nLike): McpModule => {
           return { language: lng, namespace: ns, resource };
         },
         inputSchema: {
-          language: { description: 'Language code (default: current)', type: 'string' },
-          namespace: { description: 'Namespace (default: first registered)', type: 'string' },
+          language: { description: 'Language code (default: current).', type: 'string' },
+          namespace: { description: 'Namespace (default: first registered).', type: 'string' },
         },
       },
       search: {
-        description: 'Search translation keys and values by substring',
+        description: 'Substring search across keys and values in every namespace.',
         handler: (args) => {
           const query = (args.query as string).toLowerCase();
           const lng = (args.language as string) || i18n.language;
@@ -98,12 +106,12 @@ export const i18nextModule = (i18n: I18nLike): McpModule => {
           return results;
         },
         inputSchema: {
-          language: { description: 'Language code (default: current)', type: 'string' },
-          query: { description: 'Search string to match against keys and values', type: 'string' },
+          language: { description: 'Language code (default: current).', type: 'string' },
+          query: { description: 'Substring to match against keys and values.', type: 'string' },
         },
       },
       translate: {
-        description: 'Translate a key with optional interpolation',
+        description: 'Translate a key, with optional interpolation.',
         handler: (args) => {
           const key = args.key as string;
           let options: Record<string, unknown> | undefined;
@@ -117,9 +125,14 @@ export const i18nextModule = (i18n: I18nLike): McpModule => {
           return { key, value: i18n.t(key, options) };
         },
         inputSchema: {
-          key: { description: 'Translation key (e.g. "auth:login.title")', type: 'string' },
+          key: {
+            description: 'Translation key.',
+            examples: ['auth:login.title', 'common:ok'],
+            type: 'string',
+          },
           options: {
-            description: 'Interpolation options as JSON (e.g. \'{"name": "John"}\')',
+            description: 'Interpolation options (JSON string).',
+            examples: ['{"name":"John"}'],
             type: 'string',
           },
         },

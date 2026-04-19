@@ -22,12 +22,18 @@ export const storageModule = (...storages: NamedStorage[]): McpModule => {
   };
 
   return {
-    description:
-      'Key-value storage inspection: get/set/delete items, list keys. Supports multiple named storages.',
+    description: `Multi-storage key-value inspection.
+
+Each registered storage has a name and an adapter (MMKV / AsyncStorage /
+custom). Only \`get\` is required on the adapter; \`set\` / \`delete\` /
+\`getAllKeys\` are optional — the corresponding tools return an
+"unsupported" error when absent. Values are JSON-parsed on read when
+possible. The \`storage\` argument picks a named store; omit to target
+the first-registered one.`,
     name: 'storage',
     tools: {
       delete_item: {
-        description: 'Delete a key from storage',
+        description: 'Delete a key.',
         handler: async (args) => {
           const storage = getStorage(args.storage as string | undefined);
           if (!storage) return { error: 'Storage not found' };
@@ -36,12 +42,12 @@ export const storageModule = (...storages: NamedStorage[]): McpModule => {
           return { key: args.key, success: true };
         },
         inputSchema: {
-          key: { description: 'Key to delete', type: 'string' },
-          storage: { description: 'Storage name (optional, defaults to first)', type: 'string' },
+          key: { description: 'Key to delete.', type: 'string' },
+          storage: { description: 'Storage name (default: first).', type: 'string' },
         },
       },
       get_all: {
-        description: 'Get all key-value pairs from storage. Values are parsed as JSON if possible.',
+        description: 'All key-value pairs; values JSON-parsed when possible.',
         handler: async (args) => {
           const storage = getStorage(args.storage as string | undefined);
           if (!storage) return { error: 'Storage not found' };
@@ -54,11 +60,11 @@ export const storageModule = (...storages: NamedStorage[]): McpModule => {
           return entries;
         },
         inputSchema: {
-          storage: { description: 'Storage name (optional, defaults to first)', type: 'string' },
+          storage: { description: 'Storage name (default: first).', type: 'string' },
         },
       },
       get_item: {
-        description: 'Get a value from storage by key. Parsed as JSON if possible.',
+        description: 'Value for one key; JSON-parsed when possible.',
         handler: async (args) => {
           const storage = getStorage(args.storage as string | undefined);
           if (!storage) return { error: 'Storage not found' };
@@ -66,12 +72,12 @@ export const storageModule = (...storages: NamedStorage[]): McpModule => {
           return { key: args.key, value: tryParseJson(value) };
         },
         inputSchema: {
-          key: { description: 'Key to read', type: 'string' },
-          storage: { description: 'Storage name (optional, defaults to first)', type: 'string' },
+          key: { description: 'Key to read.', type: 'string' },
+          storage: { description: 'Storage name (default: first).', type: 'string' },
         },
       },
       list_keys: {
-        description: 'List all keys in storage',
+        description: 'All keys in a storage.',
         handler: async (args) => {
           const storage = getStorage(args.storage as string | undefined);
           if (!storage) return { error: 'Storage not found' };
@@ -79,11 +85,11 @@ export const storageModule = (...storages: NamedStorage[]): McpModule => {
           return { keys: await storage.getAllKeys() };
         },
         inputSchema: {
-          storage: { description: 'Storage name (optional, defaults to first)', type: 'string' },
+          storage: { description: 'Storage name (default: first).', type: 'string' },
         },
       },
       list_storages: {
-        description: 'List all registered storage instances',
+        description: 'Registered storages with key counts.',
         handler: async () => {
           const result = [];
           for (const s of storages) {
@@ -96,7 +102,7 @@ export const storageModule = (...storages: NamedStorage[]): McpModule => {
         },
       },
       set_item: {
-        description: 'Set a value in storage. Objects/arrays are serialized as JSON.',
+        description: 'Write a value. Objects/arrays are stringified as JSON.',
         handler: async (args) => {
           const storage = getStorage(args.storage as string | undefined);
           if (!storage) return { error: 'Storage not found' };
@@ -106,9 +112,9 @@ export const storageModule = (...storages: NamedStorage[]): McpModule => {
           return { key: args.key, success: true };
         },
         inputSchema: {
-          key: { description: 'Key to set', type: 'string' },
-          storage: { description: 'Storage name (optional, defaults to first)', type: 'string' },
-          value: { description: 'Value to store (string or JSON)', type: 'string' },
+          key: { description: 'Key to set.', type: 'string' },
+          storage: { description: 'Storage name (default: first).', type: 'string' },
+          value: { description: 'Value (string or JSON-serializable).', type: 'string' },
         },
       },
     },

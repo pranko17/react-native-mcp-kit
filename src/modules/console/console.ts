@@ -123,45 +123,49 @@ export const consoleModule = (options?: ConsoleModuleOptions): McpModule => {
   };
 
   return {
-    description: 'Captured console.log/warn/error/info/debug output with stack traces.',
+    description: `Ring buffer of console.log/warn/error/info/debug.
+
+Complex values (Errors, Dates, class instances, cyclic refs, functions,
+Symbols) are serialized safely. Stack traces can be captured per level.
+Buffer size and captured levels are configurable via consoleModule options.`,
     name: 'console',
     tools: {
       clear_logs: {
-        description: 'Clear all console log entries from the buffer',
+        description: 'Clear the log buffer.',
         handler: () => {
           buffer.length = 0;
           return { success: true };
         },
       },
       get_debug: {
-        description: 'Get console.debug entries',
+        description: 'Return console.debug entries.',
         handler: (args) => {
           return filterByLevel('debug', args.limit as number | undefined);
         },
         inputSchema: {
-          limit: { description: 'Max number of entries to return', type: 'number' },
+          limit: { description: 'Max entries to return.', type: 'number' },
         },
       },
       get_errors: {
-        description: 'Get console.error entries',
+        description: 'Return console.error entries.',
         handler: (args) => {
           return filterByLevel('error', args.limit as number | undefined);
         },
         inputSchema: {
-          limit: { description: 'Max number of entries to return', type: 'number' },
+          limit: { description: 'Max entries to return.', type: 'number' },
         },
       },
       get_info: {
-        description: 'Get console.info entries',
+        description: 'Return console.info entries.',
         handler: (args) => {
           return filterByLevel('info', args.limit as number | undefined);
         },
         inputSchema: {
-          limit: { description: 'Max number of entries to return', type: 'number' },
+          limit: { description: 'Max entries to return.', type: 'number' },
         },
       },
       get_logs: {
-        description: 'Get all console log entries. Optionally filter by level and limit.',
+        description: 'Return all log entries, optionally filtered by level and limit.',
         handler: (args) => {
           let result = [...buffer];
           if (args.level) {
@@ -176,19 +180,20 @@ export const consoleModule = (options?: ConsoleModuleOptions): McpModule => {
         },
         inputSchema: {
           level: {
-            description: 'Filter by log level (log, warn, error, info, debug)',
+            description: 'Filter by level.',
+            examples: ['log', 'warn', 'error', 'info', 'debug'],
             type: 'string',
           },
-          limit: { description: 'Max number of entries to return', type: 'number' },
+          limit: { description: 'Max entries to return.', type: 'number' },
         },
       },
       get_warnings: {
-        description: 'Get console.warn entries',
+        description: 'Return console.warn entries.',
         handler: (args) => {
           return filterByLevel('warn', args.limit as number | undefined);
         },
         inputSchema: {
-          limit: { description: 'Max number of entries to return', type: 'number' },
+          limit: { description: 'Max entries to return.', type: 'number' },
         },
       },
     },

@@ -145,7 +145,7 @@ const captureAndroid = async (
 
 export const screenshotTool = (runner: ProcessRunner): HostToolHandler => {
   return {
-    description: `Capture a WebP screenshot from an iOS simulator or Android device, resized to save vision tokens. Default width ${SCREENSHOT_DEFAULT_WIDTH}px (pass \`width\` to override, max ${SCREENSHOT_MAX_WIDTH}). Returns "unchanged: true" if the screen hasn't changed since the last capture (saves tokens on redundant checks). For tap targeting prefer fiber_tree__find_all bounds — screenshots are only needed for visual verification or when targeting non-React surfaces.`,
+    description: `WebP screenshot, resized to save tokens. Returns { unchanged: true } when the screen hasn't changed since the last capture — cheap polling. Use fiber_tree bounds for tap targeting; screenshots are for visual verification.`,
     handler: async (args, ctx) => {
       const resolved = await resolveDevice(ctx, parseResolveOptions(args), runner);
       if (!resolved.ok) {
@@ -160,7 +160,7 @@ export const screenshotTool = (runner: ProcessRunner): HostToolHandler => {
     inputSchema: {
       platform: PLATFORM_ARG_SCHEMA,
       width: {
-        description: `Output width in pixels. Aspect ratio preserved, height auto-computed. Default ${SCREENSHOT_DEFAULT_WIDTH}. Capped to ${SCREENSHOT_MIN_WIDTH}..${SCREENSHOT_MAX_WIDTH}. Use higher values when you need to read small text; default is enough for visual verification.`,
+        description: `Output width in pixels (aspect ratio preserved). Default ${SCREENSHOT_DEFAULT_WIDTH}, clamped ${SCREENSHOT_MIN_WIDTH}..${SCREENSHOT_MAX_WIDTH}. Bump up only if you need to read small text.`,
         type: 'number',
       },
       ...NATIVE_ID_SCHEMA,

@@ -220,19 +220,22 @@ export const networkModule = (options?: NetworkModuleOptions): McpModule => {
   };
 
   return {
-    description:
-      'Intercepted HTTP requests (fetch/XHR): view request/response bodies, headers, status, duration.',
+    description: `Intercepted fetch + XMLHttpRequest — method, URL, status, duration, headers, bodies.
+
+WebSocket / Metro / symbolicate traffic is auto-ignored. Buffer size,
+body capture, and custom ignore patterns are configurable via
+networkModule options.`,
     name: 'network',
     tools: {
       clear_requests: {
-        description: 'Clear all captured network requests from the buffer',
+        description: 'Clear the request buffer.',
         handler: () => {
           buffer.length = 0;
           return { success: true };
         },
       },
       get_errors: {
-        description: 'Get only failed network requests (non-2xx status or network errors)',
+        description: 'Failed requests only (non-2xx or network errors).',
         handler: (args) => {
           let result = buffer.filter((e) => {
             return e.status === 'error';
@@ -243,11 +246,11 @@ export const networkModule = (options?: NetworkModuleOptions): McpModule => {
           return result;
         },
         inputSchema: {
-          limit: { description: 'Max number of entries to return', type: 'number' },
+          limit: { description: 'Max entries to return.', type: 'number' },
         },
       },
       get_pending: {
-        description: 'Get currently pending (in-flight) network requests',
+        description: 'In-flight requests.',
         handler: () => {
           return buffer.filter((e) => {
             return e.status === 'pending';
@@ -255,7 +258,7 @@ export const networkModule = (options?: NetworkModuleOptions): McpModule => {
         },
       },
       get_request: {
-        description: 'Get a specific network request by URL substring match',
+        description: 'Requests whose URL contains the given substring.',
         handler: (args) => {
           const urlFilter = args.url as string;
           return buffer.filter((e) => {
@@ -263,12 +266,11 @@ export const networkModule = (options?: NetworkModuleOptions): McpModule => {
           });
         },
         inputSchema: {
-          url: { description: 'URL substring to match', type: 'string' },
+          url: { description: 'URL substring.', type: 'string' },
         },
       },
       get_requests: {
-        description:
-          'Get all captured network requests. Optionally filter by method, status, or URL pattern.',
+        description: 'All captured requests; filterable by method / status / URL substring.',
         handler: (args) => {
           let result = [...buffer];
           if (args.method) {
@@ -294,14 +296,22 @@ export const networkModule = (options?: NetworkModuleOptions): McpModule => {
           return result;
         },
         inputSchema: {
-          limit: { description: 'Max number of entries to return', type: 'number' },
-          method: { description: 'Filter by HTTP method (GET, POST, etc.)', type: 'string' },
-          status: { description: 'Filter by status (pending, success, error)', type: 'string' },
-          url: { description: 'Filter by URL substring', type: 'string' },
+          limit: { description: 'Max entries to return.', type: 'number' },
+          method: {
+            description: 'HTTP method filter.',
+            examples: ['GET', 'POST', 'PUT', 'DELETE'],
+            type: 'string',
+          },
+          status: {
+            description: 'Status filter.',
+            examples: ['pending', 'success', 'error'],
+            type: 'string',
+          },
+          url: { description: 'URL substring filter.', type: 'string' },
         },
       },
       get_stats: {
-        description: 'Get network request statistics (total, by status, by method)',
+        description: 'Counts — total, by status, by method.',
         handler: () => {
           const byMethod: Record<string, number> = {};
           const byStatus: Record<string, number> = { error: 0, pending: 0, success: 0 };

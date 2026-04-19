@@ -7,7 +7,7 @@ import { SCREENSHOT_TIMEOUT_MS } from './capture';
 export const listDevicesTool = (runner: ProcessRunner): HostToolHandler => {
   return {
     description:
-      'List all iOS simulators (booted or not) and Android devices (online or offline) visible via xcrun simctl / adb. Each device is annotated with connected=true and a clientId when it matches a currently-connected React Native client. Connected devices appear first in each platform group.',
+      'Enumerate visible iOS simulators + Android devices. Connected clients are annotated with their clientId; connected devices are listed first in each platform group.',
     handler: async (_args, ctx) => {
       return enrichDevicesWithClientStatus(ctx.bridge, runner);
     },

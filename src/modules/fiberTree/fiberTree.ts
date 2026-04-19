@@ -27,16 +27,16 @@ const DEFAULT_DEPTH = 10;
 
 const FIND_SCHEMA = {
   index: {
-    description: 'Zero-based index when multiple components match (default: 0, i.e. first match)',
+    description: '0-based index when several components match (default: 0).',
     type: 'number',
   },
-  mcpId: { description: 'data-mcp-id to search for', type: 'string' },
-  name: { description: 'Component name to search for', type: 'string' },
-  testID: { description: 'testID to search for', type: 'string' },
-  text: { description: 'Text content to search for', type: 'string' },
+  mcpId: { description: 'Stable data-mcp-id to match.', type: 'string' },
+  name: { description: 'Component name to match.', type: 'string' },
+  testID: { description: 'testID to match.', type: 'string' },
+  text: { description: 'Rendered text substring (not prop values).', type: 'string' },
   within: {
-    description:
-      'Search within a parent component path. Use "/" for nesting, ":N" for index. E.g. "Checkbox/Pressable", "Button:1/View"',
+    description: 'Parent component path. "/" nests, ":N" picks index.',
+    examples: ['LoginForm', 'Button:1/Pressable', 'TabBar/TabBarItem:2'],
     type: 'string',
   },
 };
@@ -178,59 +178,37 @@ export const fiberTreeModule = (options?: FiberTreeModuleOptions): McpModule => 
   };
 
   return {
-    description: `React component tree inspection and interaction.
+    description: `React fiber tree inspection and interaction.
 
-## Finding components — \`query\`
-Chain-based search. Each step filters the fibers forwarded from the
-previous step via a \`scope\` (descendants / children / parent / ancestors
-/ siblings / self) and the usual criteria (name / mcpId / testID / text /
-hasProps). First step defaults to scope 'descendants' from the root, so
-\`query({ steps: [{ hasProps: ["onPress"] }] })\` is "all pressables in the
-tree". Multi-match friendly — if a step matches many fibers, all of them
-fan out into the next step; use \`index\` on a step to pick just one.
+SCOPES (query steps)
+  descendants (default) / children / parent / ancestors / siblings / self.
 
-Examples:
-- [{ name: "HomeScreen" }, { name: "ProductCard" }, { testID: "favorite" }]
-    → every "favorite" testID inside every ProductCard inside HomeScreen.
-- [{ testID: "favorite-icon" }, { scope: "ancestors", name: "ProductCard", index: 0 }]
-    → the nearest enclosing ProductCard for each favorite icon.
+STEP CRITERIA
+  name / mcpId / testID — strict equality.
+  text — substring match in RENDERED text only (not prop values).
+  hasProps — array of prop names that must exist.
+  props — map of prop → matcher:
+    · primitive → strict equality.
+    · { contains: "X" } / { regex: "Y" } → match via String(value); primitives only by default.
+    · add deep: true → also JSON-serialize objects/arrays and match inside.
+  index — pick N-th match from this step; otherwise all matches fan out into the next step.
 
-\`get_component\` still exists when you want a single match plus its full
-children subtree (for deep inspection rather than flat lists).
+SELECT (output fields)
+  ["mcpId", "name", "testID", "props", "bounds"] — default omits bounds.
+  bounds is { x, y, width, height, centerX, centerY } in PHYSICAL pixels,
+  top-left origin. Null when the fiber has no mounted host view. centerX/
+  centerY feed straight into host__tap.
+  Omit "props" to cut response size ~90%.
 
-## Interacting
-- invoke with callback: "onPress" — press a button
-- invoke with callback: "onChangeText", args: ["text"] — type into input
-- invoke with callback: "onPress", args: [true] — toggle checkbox
-- call_ref with method: "focus" — focus an input
-
-## Coordinates (host__tap targets)
-- Pass \`select: ["mcpId", "name", "bounds"]\` to \`query\` to get tap
-  coordinates without heavy props.
-- bounds = {x, y, width, height, centerX, centerY} in PHYSICAL PIXELS.
-- Use bounds.centerX/centerY directly with host__tap — no scaling needed.
-- bounds is null only when the component has no host view (unmounted,
-  virtualized off-screen).
-
-## Saving tokens with select
-- \`select\` controls which fields appear in each result: mcpId, name,
-  testID, props, bounds. Default (no select): all except bounds. Omit
-  "props" to cut response size ~90% when you only need names/IDs.
-
-## Tips
-- mcpId is stable across renders (format: ComponentName:file:line).
-- Use \`query\` first to discover available components, then invoke or
-  host__tap them by mcpId/testID.
-- host__tap with bounds.centerX/centerY tests the real OS gesture
-  pipeline; invoke bypasses it and calls the prop directly (faster, immune
-  to overlay/gesture-arbitration issues, but doesn't exercise touch
-  handlers).
-- Use screenshot after interactions to verify results.`,
+TIPS
+  mcpId format "ComponentName:file:line" — stable across renders.
+  Use query to locate, then invoke (bypasses gesture pipeline) or host__tap
+  with bounds (real OS touch) to act.`,
     name: 'fiber_tree',
     tools: {
       call_ref: {
         description:
-          'Call a method on the native ref/instance of a component (e.g. focus, blur, measure). Use get_ref_methods first to see available methods.',
+          "Call a method on a component's native ref (focus, blur, measure, …). Use get_ref_methods first to see what's available.",
         handler: (args) => {
           const rootError = requireRoot();
           if (rootError) return rootError;
@@ -271,15 +249,16 @@ children subtree (for deep inspection rather than flat lists).
         },
         inputSchema: {
           ...FIND_SCHEMA,
-          args: { description: 'Arguments to pass to the method as array', type: 'array' },
+          args: { description: 'Arguments passed to the method.', type: 'array' },
           method: {
-            description: 'Method name to call (e.g. "focus", "blur", "measure")',
+            description: 'Method name to call.',
+            examples: ['focus', 'blur', 'measure'],
             type: 'string',
           },
         },
       },
       get_children: {
-        description: 'Get children of a component found by testID, name, or text',
+        description: 'Get the children subtree of a single component.',
         handler: (args) => {
           const rootError = requireRoot();
           if (rootError) return rootError;
@@ -293,12 +272,12 @@ children subtree (for deep inspection rather than flat lists).
         },
         inputSchema: {
           ...FIND_SCHEMA,
-          depth: { description: 'Max depth to traverse (default: 10)', type: 'number' },
+          depth: { description: 'Max traversal depth (default: 10).', type: 'number' },
         },
       },
       get_component: {
         description:
-          'Find a component by testID, name, or text and return its details. Use select to control root-level fields — e.g. select: ["name", "bounds"] to include tap coordinates without props.',
+          'Find one component and return its details with children subtree (deep inspection). Use `query` for a flat list of matches.',
         handler: async (args) => {
           const rootError = requireRoot();
           if (rootError) return rootError;
@@ -334,20 +313,21 @@ children subtree (for deep inspection rather than flat lists).
           return serialized;
         },
         inputSchema: {
-          depth: { description: 'Max depth to traverse children (default: 3)', type: 'number' },
-          mcpId: { description: 'data-mcp-id to search for', type: 'string' },
-          name: { description: 'Component name to search for', type: 'string' },
+          depth: { description: 'Max child traversal depth (default: 10).', type: 'number' },
+          mcpId: { description: 'Stable data-mcp-id to match.', type: 'string' },
+          name: { description: 'Component name to match.', type: 'string' },
           select: {
             description:
-              'Fields to include on root node. Available: name, props, bounds. Include "bounds" for tap coordinates. Omit "props" to save tokens. Children are always included.',
+              'Fields to include on the root node. Available: name, props, bounds. Children are always included.',
+            examples: [['name', 'bounds']],
             type: 'array',
           },
-          testID: { description: 'testID to search for', type: 'string' },
-          text: { description: 'Text content to search for', type: 'string' },
+          testID: { description: 'testID to match.', type: 'string' },
+          text: { description: 'Rendered text substring.', type: 'string' },
         },
       },
       get_props: {
-        description: 'Get all props of a component found by testID, name, or text',
+        description: 'Get all props of one component.',
         handler: (args) => {
           const rootError = requireRoot();
           if (rootError) return rootError;
@@ -363,7 +343,7 @@ children subtree (for deep inspection rather than flat lists).
         inputSchema: FIND_SCHEMA,
       },
       get_ref_methods: {
-        description: 'List available methods on the native ref/instance of a component',
+        description: "List available methods on a component's native ref.",
         handler: (args) => {
           const rootError = requireRoot();
           if (rootError) return rootError;
@@ -384,8 +364,7 @@ children subtree (for deep inspection rather than flat lists).
         inputSchema: FIND_SCHEMA,
       },
       get_tree: {
-        description:
-          'Get the React component tree. Returns component names, types, props, and testIDs.',
+        description: 'Dump the full React component tree from the root fiber.',
         handler: (args) => {
           const rootError = requireRoot();
           if (rootError) return rootError;
@@ -395,12 +374,12 @@ children subtree (for deep inspection rather than flat lists).
           return serializeFiber(root, depth);
         },
         inputSchema: {
-          depth: { description: 'Max depth to traverse (default: 3)', type: 'number' },
+          depth: { description: 'Max traversal depth (default: 10).', type: 'number' },
         },
       },
       invoke: {
         description:
-          'Call any callback prop on a component found by testID, name, or text. Use this to simulate press, scroll, text input, or any other interaction. Bypasses the OS gesture pipeline — faster and immune to overlay/gesture-arbitration issues, but does not exercise touch handlers. Prefer host__tap (with fiber_tree bounds) when you want to test the real user touch path.',
+          'Call a callback prop on a component (onPress, onChangeText, onValueChange, …). Bypasses the OS gesture pipeline — for real touch testing use host__tap with query bounds.',
         handler: (args) => {
           const rootError = requireRoot();
           if (rootError) return rootError;
@@ -428,56 +407,20 @@ children subtree (for deep inspection rather than flat lists).
         inputSchema: {
           ...FIND_SCHEMA,
           args: {
-            description: 'Arguments to pass to the callback as array (e.g. [true] or ["text"])',
+            description: 'Arguments passed to the callback.',
+            examples: [[true], ['text']],
             type: 'array',
           },
           callback: {
-            description: 'Name of the callback prop to call (e.g. "onPress", "onChangeText")',
+            description: 'Callback prop name.',
+            examples: ['onPress', 'onChangeText', 'onValueChange'],
             type: 'string',
           },
         },
       },
       query: {
-        description: `Chain-based component search. Each step narrows the set of
-matching fibers, starting from the fiber root. A step has a \`scope\`
-(default 'descendants' — walks the whole subtree; other values: 'children',
-'parent', 'ancestors', 'siblings', 'self') and criteria applied to the
-fibers in that scope:
-
-- \`name\` / \`mcpId\` / \`testID\` — strict equality.
-- \`text\` — substring in **rendered** text only. Does NOT look at props
-  like placeholder / accessibilityLabel — use \`props\` for those.
-- \`hasProps\` — array of prop names that must exist on the fiber.
-- \`props\` — map of prop name → expected value. The matcher can be:
-    · a primitive → strict equality ({ disabled: false }, { count: 3 });
-    · \`{ contains: "X" }\` / \`{ regex: "Y" }\` → substring / regex match
-      against String(value). Applies only to primitive values by default;
-      non-primitive props (objects/arrays/functions) don't match.
-    · Same with \`deep: true\` → opts the matcher into JSON-serialized values
-      for objects/arrays (circular-safe, functions/symbols replaced, length
-      capped). Use it when you need to reach inside nested prop values, e.g.
-      \`{ item: { contains: "\\"title\\":\\"Hello\\"", deep: true } }\` hits
-      a prop like { item: { title: "Hello" } }.
-    · Invalid regex never matches instead of throwing.
-  Example: { placeholder: { contains: "Search" }, testID: { regex: "^item-\\\\d+$" }, count: 3 }.
-
-If a step matches more than one fiber, every match is forwarded to the
-next step; set \`index\` on a step to pick just the N-th. The last step's
-matches are returned as a list.
-
-Examples:
-- [{ name: "HomeScreen" }, { name: "ProductCard" }]
-    → every ProductCard inside HomeScreen
-- [{ testID: "favorite-icon" }, { scope: "ancestors", name: "ProductCard", index: 0 }]
-    → the nearest enclosing ProductCard around each favorite icon
-- [{ name: "Button" }, { scope: "siblings", hasProps: ["onPress"] }]
-    → every pressable sibling of every Button
-- [{ props: { placeholder: { contains: "Search" } } }]
-    → any input whose placeholder contains "Search"
-
-Use \`select\` to control which fields come back on each match (mcpId / name /
-testID / props / bounds); default omits bounds, include "bounds" for
-host__tap coordinates, omit "props" to cut response size.`,
+        description:
+          'Chain-based fiber search. Each step narrows the result set via `scope` + criteria; multiple matches fan out into the next step. See the module description for scope, criteria and select reference.',
         handler: async (args) => {
           const rootError = requireRoot();
           if (rootError) return rootError;
@@ -519,13 +462,22 @@ host__tap coordinates, omit "props" to cut response size.`,
         },
         inputSchema: {
           select: {
-            description:
-              'Fields to include in each result. Available: mcpId, name, testID, props, bounds. Default: all except bounds. Include "bounds" for physical-pixel tap coordinates, omit "props" to save tokens.',
+            description: 'Output fields: mcpId, name, testID, props, bounds.',
+            examples: [
+              ['mcpId', 'name', 'bounds'],
+              ['mcpId', 'testID'],
+            ],
             type: 'array',
           },
           steps: {
             description:
-              'Ordered list of query steps. Each step: { scope?, name?, mcpId?, testID?, text?, hasProps?, props?, index? }. props matches by value — primitive = strict equality, { contains: "X" } = substring, { regex: "pattern" } = regex. contains/regex default to primitives only; add `deep: true` to also match inside objects/arrays (JSON-serialized). scope defaults to "descendants" on every step. See the tool description for examples.',
+              'Ordered steps: [{ scope?, name?, mcpId?, testID?, text?, hasProps?, props?, index? }]. See module description for full semantics.',
+            examples: [
+              [{ hasProps: ['onPress'] }],
+              [{ name: 'HomeScreen' }, { name: 'ProductCard' }],
+              [{ testID: 'favorite-icon' }, { index: 0, name: 'ProductCard', scope: 'ancestors' }],
+              [{ props: { placeholder: { contains: 'Search' } } }],
+            ],
             type: 'array',
           },
         },

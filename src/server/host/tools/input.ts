@@ -164,7 +164,7 @@ const pressKeyAndroid = (
 export const tapTool = (runner: ProcessRunner): HostToolHandler => {
   return {
     description:
-      'Tap at absolute pixel coordinates (x, y), top-left origin. Coordinates match fiber_tree bounds.centerX/centerY — feed them directly. Goes through the OS gesture pipeline, so use this (over fiber_tree__invoke) whenever you want to exercise the real touch path. Android: adb shell input tap. iOS: bundled ios-hid binary (HID injection into iOS Simulator via SimulatorKit).',
+      'Tap at physical-pixel (x, y). Goes through the real OS gesture pipeline — prefer over fiber_tree__invoke when you want touch semantics (Pressable feedback, gesture responders, hit-test).',
     handler: async (args, ctx) => {
       const resolved = await resolveDevice(ctx, parseResolveOptions(args), runner);
       if (!resolved.ok) {
@@ -202,7 +202,7 @@ export const tapTool = (runner: ProcessRunner): HostToolHandler => {
 export const swipeTool = (runner: ProcessRunner): HostToolHandler => {
   return {
     description:
-      'Swipe (or scroll) from (x1, y1) to (x2, y2) on the target device. Coordinates are absolute pixels, top-left origin. durationMs defaults to 300 and is clamped to 50..5000. Android: adb shell input swipe. iOS: bundled ios-hid binary (HID injection into iOS Simulator via SimulatorKit).',
+      'Swipe / scroll from (x1, y1) to (x2, y2) in physical pixels. durationMs default 300, clamped 50..5000.',
     handler: async (args, ctx) => {
       const resolved = await resolveDevice(ctx, parseResolveOptions(args), runner);
       if (!resolved.ok) {
@@ -279,7 +279,7 @@ export const swipeTool = (runner: ProcessRunner): HostToolHandler => {
 export const typeTextTool = (runner: ProcessRunner): HostToolHandler => {
   return {
     description:
-      'Type text into the currently focused input field on the target device. Replaces existing text (select-all then paste). Pass submit=true to press ENTER after typing. iOS accepts any unicode (pastes via simctl pbcopy + Cmd+A/Cmd+V, immune to keyboard-layout). Android is ASCII-only — `adb shell input text` lacks a codepath for non-ASCII, so the tool refuses it with an explanatory error. For Cyrillic/CJK/emoji on Android, drive the target via fiber_tree__invoke on onChangeText instead.',
+      "Type text into the focused input (replaces existing content — select-all then paste). submit:true presses ENTER after typing. iOS: unicode via clipboard paste, keyboard-layout immune. Android: ASCII only (adb input text limitation); for non-Latin scripts use fiber_tree__invoke on the input's onChangeText instead.",
     handler: async (args, ctx) => {
       const resolved = await resolveDevice(ctx, parseResolveOptions(args), runner);
       if (!resolved.ok) {
@@ -323,7 +323,7 @@ export const typeTextTool = (runner: ProcessRunner): HostToolHandler => {
 
 export const pressKeyTool = (runner: ProcessRunner): HostToolHandler => {
   return {
-    description: `Press a hardware/semantic key on the target device. Android: adb shell input keyevent. iOS: bundled ios-hid binary (HID keyboard/button events via SimulatorKit). Accepted key names: ${KEY_NAMES.join(', ')}. On iOS back/menu/power/volume_up/volume_down are not available.`,
+    description: `Press a hardware/semantic key. Accepted: ${KEY_NAMES.join(', ')}. iOS lacks back / menu / power / volume_up / volume_down.`,
     handler: async (args, ctx) => {
       const resolved = await resolveDevice(ctx, parseResolveOptions(args), runner);
       if (!resolved.ok) {

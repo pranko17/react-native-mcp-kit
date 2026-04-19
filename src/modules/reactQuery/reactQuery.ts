@@ -42,12 +42,15 @@ export const reactQueryModule = (queryClient: QueryClientLike): McpModule => {
   };
 
   return {
-    description:
-      'React Query cache: inspect queries, get cached data, invalidate, refetch, reset, remove.',
+    description: `React Query cache inspection + mutation.
+
+Query keys are passed as JSON strings to preserve array structure — e.g.
+'["users","list"]' or '"users"'. Omit \`key\` on invalidate / refetch /
+remove / reset to target every cached query at once.`,
     name: 'query',
     tools: {
       get_data: {
-        description: 'Get the cached data for a specific query by key',
+        description: 'Cached data for one query by exact key.',
         handler: (args) => {
           const key = parseKey(args.key as string);
           const queries = getAllQueries();
@@ -68,14 +71,14 @@ export const reactQueryModule = (queryClient: QueryClientLike): McpModule => {
         },
         inputSchema: {
           key: {
-            description: 'Query key as JSON string (e.g. \'["users"]\' or \'"users"\')',
+            description: 'Query key (JSON string).',
+            examples: ['["users"]', '["users","list"]', '"users"'],
             type: 'string',
           },
         },
       },
       get_queries: {
-        description:
-          'List all cached queries with their status, fetch status, and timestamps. Does not include data — use get_data for that.',
+        description: 'List cached queries (status/fetchStatus/timestamps, no data).',
         handler: (args) => {
           let queries = getAllQueries();
           if (args.status) {
@@ -92,15 +95,16 @@ export const reactQueryModule = (queryClient: QueryClientLike): McpModule => {
           return queries.map(serializeQuery);
         },
         inputSchema: {
-          key: { description: 'Filter by key substring', type: 'string' },
+          key: { description: 'Substring filter on the serialized key.', type: 'string' },
           status: {
-            description: 'Filter by status (pending, error, success)',
+            description: 'Filter by status.',
+            examples: ['pending', 'error', 'success'],
             type: 'string',
           },
         },
       },
       get_stats: {
-        description: 'Get query cache statistics',
+        description: 'Cache counts — total, by status, by fetchStatus.',
         handler: () => {
           const queries = getAllQueries();
           const byStatus: Record<string, number> = {};
@@ -113,8 +117,7 @@ export const reactQueryModule = (queryClient: QueryClientLike): McpModule => {
         },
       },
       invalidate: {
-        description:
-          'Invalidate queries, marking them as stale. They will refetch on next use. Pass key to target specific queries, or omit to invalidate all.',
+        description: 'Mark queries stale (will refetch on next use). Omit key for all.',
         handler: async (args) => {
           const filters = args.key ? { queryKey: parseKey(args.key as string) } : undefined;
           await queryClient.invalidateQueries(filters);
@@ -122,14 +125,14 @@ export const reactQueryModule = (queryClient: QueryClientLike): McpModule => {
         },
         inputSchema: {
           key: {
-            description: 'Query key to invalidate as JSON string (omit to invalidate all)',
+            description: 'Query key (JSON string). Omit to invalidate all.',
+            examples: ['["users"]'],
             type: 'string',
           },
         },
       },
       refetch: {
-        description:
-          'Refetch queries immediately. Pass key to target specific queries, or omit to refetch all.',
+        description: 'Refetch queries immediately. Omit key for all.',
         handler: async (args) => {
           const filters = args.key ? { queryKey: parseKey(args.key as string) } : undefined;
           await queryClient.refetchQueries(filters);
@@ -137,14 +140,14 @@ export const reactQueryModule = (queryClient: QueryClientLike): McpModule => {
         },
         inputSchema: {
           key: {
-            description: 'Query key to refetch as JSON string (omit to refetch all)',
+            description: 'Query key (JSON string). Omit to refetch all.',
+            examples: ['["users"]'],
             type: 'string',
           },
         },
       },
       remove: {
-        description:
-          'Remove queries from cache entirely. Pass key to target specific queries, or omit to clear all.',
+        description: 'Remove queries from cache entirely. Omit key for all.',
         handler: (args) => {
           const filters = args.key ? { queryKey: parseKey(args.key as string) } : undefined;
           queryClient.removeQueries(filters);
@@ -152,14 +155,14 @@ export const reactQueryModule = (queryClient: QueryClientLike): McpModule => {
         },
         inputSchema: {
           key: {
-            description: 'Query key to remove as JSON string (omit to remove all)',
+            description: 'Query key (JSON string). Omit to remove all.',
+            examples: ['["users"]'],
             type: 'string',
           },
         },
       },
       reset: {
-        description:
-          'Reset queries to initial state (clears data and error). Pass key to target specific queries.',
+        description: 'Reset queries to initial state (clears data + error). Omit key for all.',
         handler: async (args) => {
           const filters = args.key ? { queryKey: parseKey(args.key as string) } : undefined;
           await queryClient.resetQueries(filters);
@@ -167,7 +170,8 @@ export const reactQueryModule = (queryClient: QueryClientLike): McpModule => {
         },
         inputSchema: {
           key: {
-            description: 'Query key to reset as JSON string (omit to reset all)',
+            description: 'Query key (JSON string). Omit to reset all.',
+            examples: ['["users"]'],
             type: 'string',
           },
         },

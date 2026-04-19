@@ -174,20 +174,27 @@ export const navigationModule = (navigation: NavigationRef): McpModule => {
   };
 
   return {
-    description:
-      'React Navigation control: get current route/state/history, navigate, push, pop, replace, reset, go_back.',
+    description: `React Navigation control + 100-entry transition history.
+
+SCREEN ENRICHMENT
+  get_current_route and get_current_route_state include a \`screen\` field
+  pointing at the React component rendering the focused route:
+    screen: { componentName, mcpId?, filePath?, line? }
+  componentName is the developer's component (RN Navigation wrappers are
+  skipped). mcpId / filePath / line come from the first data-mcp-id inside
+  the screen — the rendering site, ready for fiber_tree follow-ups.`,
     name: 'navigation',
     tools: {
       get_current_route: {
         description:
-          'Get the currently focused route name, params and a `screen` field with the rendering component name + first data-mcp-id inside it (handy for fiber_tree follow-ups).',
+          'Focused route name, params, and a `screen` field for the rendering component.',
         handler: () => {
           return withScreenInfo(navigation.getCurrentRoute() as { key?: unknown } | null);
         },
       },
       get_current_route_state: {
         description:
-          'Get the full state of the currently focused route including params, key, nested navigator state, and a `screen` field with rendering component info.',
+          'Full state of the focused route — params, key, nested navigator state, and a `screen` field with rendering component info.',
         handler: () => {
           const rootState = navigation.getRootState() as NavigationState | undefined;
           if (!rootState) return { error: 'No navigation state available' };
@@ -196,7 +203,7 @@ export const navigationModule = (navigation: NavigationRef): McpModule => {
       },
       get_history: {
         description:
-          'Get navigation history — a log of all screen transitions with timestamps. Use "full: true" to include full navigation state for each entry.',
+          'Screen transition log (up to 100 entries) with timestamps. Pass full:true for per-entry navigation state.',
         handler: (args) => {
           const offset = (args.offset as number) ?? 0;
           const limit = (args.limit as number) ?? 50;
@@ -223,27 +230,21 @@ export const navigationModule = (navigation: NavigationRef): McpModule => {
         },
         inputSchema: {
           full: {
-            description: 'Include full navigation state for each entry (default: false)',
+            description: 'Include full navigation state per entry (default: false).',
             type: 'boolean',
           },
-          limit: {
-            description: 'Max entries to return (default: 50)',
-            type: 'number',
-          },
-          offset: {
-            description: 'Start index (default: 0)',
-            type: 'number',
-          },
+          limit: { description: 'Max entries to return (default: 50).', type: 'number' },
+          offset: { description: 'Start index (default: 0).', type: 'number' },
         },
       },
       get_state: {
-        description: 'Get the full navigation state tree',
+        description: 'Full navigation state tree.',
         handler: () => {
           return navigation.getRootState();
         },
       },
       go_back: {
-        description: 'Go back to the previous screen',
+        description: 'Go back to the previous screen.',
         handler: () => {
           if (navigation.canGoBack()) {
             navigation.goBack();
@@ -253,7 +254,7 @@ export const navigationModule = (navigation: NavigationRef): McpModule => {
         },
       },
       navigate: {
-        description: 'Navigate to a screen. Reuses existing screen if it exists in the stack.',
+        description: 'Navigate to a screen — reuses it if already in the stack.',
         handler: (args) => {
           navigation.navigate(args.screen as string, args.params as Record<string, unknown>);
           return {
@@ -262,12 +263,12 @@ export const navigationModule = (navigation: NavigationRef): McpModule => {
           };
         },
         inputSchema: {
-          params: { description: 'Optional route params', type: 'object' },
-          screen: { description: 'Screen name to navigate to', type: 'string' },
+          params: { description: 'Optional route params.', type: 'object' },
+          screen: { description: 'Screen name to navigate to.', type: 'string' },
         },
       },
       pop: {
-        description: 'Pop one or more screens from the stack',
+        description: 'Pop one or more screens off the stack.',
         handler: (args) => {
           const count = (args.count as number) || 1;
           navigation.dispatch({ payload: { count }, type: 'POP' });
@@ -277,11 +278,11 @@ export const navigationModule = (navigation: NavigationRef): McpModule => {
           };
         },
         inputSchema: {
-          count: { description: 'Number of screens to pop (default: 1)', type: 'number' },
+          count: { description: 'Screens to pop (default: 1).', type: 'number' },
         },
       },
       pop_to: {
-        description: 'Pop back to a specific screen in the stack',
+        description: 'Pop back to a specific screen.',
         handler: (args) => {
           navigation.dispatch({
             payload: { name: args.screen as string, params: args.params },
@@ -293,12 +294,12 @@ export const navigationModule = (navigation: NavigationRef): McpModule => {
           };
         },
         inputSchema: {
-          params: { description: 'Optional route params', type: 'object' },
-          screen: { description: 'Screen name to pop back to', type: 'string' },
+          params: { description: 'Optional route params.', type: 'object' },
+          screen: { description: 'Screen name to pop back to.', type: 'string' },
         },
       },
       pop_to_top: {
-        description: 'Pop to the first screen in the stack',
+        description: 'Pop to the first screen in the stack.',
         handler: () => {
           navigation.dispatch({ type: 'POP_TO_TOP' });
           return {
@@ -308,8 +309,7 @@ export const navigationModule = (navigation: NavigationRef): McpModule => {
         },
       },
       push: {
-        description:
-          'Push a new screen onto the stack. Always adds a new entry even if the screen already exists.',
+        description: 'Push a new screen — always adds a new stack entry, even for duplicates.',
         handler: (args) => {
           navigation.dispatch({
             payload: { name: args.screen as string, params: args.params },
@@ -321,12 +321,12 @@ export const navigationModule = (navigation: NavigationRef): McpModule => {
           };
         },
         inputSchema: {
-          params: { description: 'Optional route params', type: 'object' },
-          screen: { description: 'Screen name to push', type: 'string' },
+          params: { description: 'Optional route params.', type: 'object' },
+          screen: { description: 'Screen name to push.', type: 'string' },
         },
       },
       replace: {
-        description: 'Replace the current screen with a new one',
+        description: 'Replace the current screen with a new one.',
         handler: (args) => {
           navigation.dispatch({
             payload: { name: args.screen as string, params: args.params },
@@ -338,12 +338,12 @@ export const navigationModule = (navigation: NavigationRef): McpModule => {
           };
         },
         inputSchema: {
-          params: { description: 'Optional route params', type: 'object' },
-          screen: { description: 'Screen name to replace with', type: 'string' },
+          params: { description: 'Optional route params.', type: 'object' },
+          screen: { description: 'Screen name to replace with.', type: 'string' },
         },
       },
       reset: {
-        description: 'Reset the current navigator state to specified routes',
+        description: 'Reset the current navigator state to a specified routes list.',
         handler: (args) => {
           const routes = args.routes as Array<{ name: string; params?: Record<string, unknown> }>;
           const index = (args.index as number) ?? routes.length - 1;
@@ -362,8 +362,12 @@ export const navigationModule = (navigation: NavigationRef): McpModule => {
           };
         },
         inputSchema: {
-          index: { description: 'Index of the active route (default: last)', type: 'number' },
-          routes: { description: 'Array of routes [{name, params?}]', type: 'array' },
+          index: { description: 'Active route index (default: last).', type: 'number' },
+          routes: {
+            description: 'Routes list.',
+            examples: [[{ name: 'Home' }, { name: 'Profile', params: { id: 42 } }]],
+            type: 'array',
+          },
         },
       },
     },

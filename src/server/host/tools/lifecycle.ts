@@ -233,14 +233,14 @@ const resolveLaunchTarget = async (
 
 const APPID_SCHEMA = {
   description:
-    'iOS bundle ID or Android package name. Optional when targeting a connected client whose registration metadata includes bundleId.',
+    'iOS bundle ID or Android package name. Optional when a connected client already registered its bundleId.',
+  examples: ['com.example.app', 'com.example.android'],
   type: 'string',
 } as const;
 
 export const launchAppTool = (runner: ProcessRunner): HostToolHandler => {
   return {
-    description:
-      "Launch an installed app on a booted iOS simulator (xcrun simctl launch) or Android emulator/device (adb shell monkey). Pass `appId` explicitly (iOS bundle ID or Android package name), or omit it to fall back to the target client's registered bundleId metadata. Target device resolution: explicit `udid`/`serial` > outer `clientId` > `platform` + auto-pick > bare scan. Real iOS devices are not supported.",
+    description: 'Launch an installed app on a booted simulator / emulator / device.',
     handler: async (args, ctx) => {
       const target = await resolveLaunchTarget(ctx, args, runner);
       if (!target.ok) {
@@ -271,8 +271,7 @@ export const launchAppTool = (runner: ProcessRunner): HostToolHandler => {
 
 export const terminateAppTool = (runner: ProcessRunner): HostToolHandler => {
   return {
-    description:
-      "Terminate (force-stop) an installed app on a booted iOS simulator (xcrun simctl terminate) or Android emulator/device (adb shell am force-stop). Pass `appId` explicitly or omit it to fall back to the target client's registered bundleId metadata. Target device resolution: explicit `udid`/`serial` > outer `clientId` > `platform` + auto-pick > bare scan. Real iOS devices are not supported.",
+    description: 'Force-stop an installed app on the target device.',
     handler: async (args, ctx) => {
       const target = await resolveLaunchTarget(ctx, args, runner);
       if (!target.ok) {
@@ -306,7 +305,7 @@ const RESTART_TEARDOWN_DELAY_MS = 200;
 export const restartAppTool = (runner: ProcessRunner): HostToolHandler => {
   return {
     description:
-      "Terminate then immediately relaunch an installed app on iOS simulator or Android device. Equivalent to host__terminate_app followed by host__launch_app, but in a single call. Pass `appId` explicitly or omit it to fall back to the target client's registered bundleId metadata. Target device resolution: explicit `udid`/`serial` > outer `clientId` > `platform` + auto-pick > bare scan. Real iOS devices are not supported.",
+      'Terminate then immediately relaunch an app (host__terminate_app + host__launch_app in one call, with a short teardown delay).',
     handler: async (args, ctx) => {
       const target = await resolveLaunchTarget(ctx, args, runner);
       if (!target.ok) {

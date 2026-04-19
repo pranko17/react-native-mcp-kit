@@ -7,8 +7,18 @@ import { type HostModule } from './types';
 
 export const hostModule = (runner: ProcessRunner): HostModule => {
   return {
-    description:
-      'OS-level operations that run on the MCP server host via xcrun simctl / adb. Works when the React Native app is hung, disconnected, or not installed.',
+    description: `OS-level device control executed on the MCP server host. Works even when the React Native app is hung, disconnected, or not yet installed.
+
+BACKENDS
+  iOS input (tap / swipe / type_text / press_key) goes through the bundled
+  ios-hid binary — HID injection into iOS Simulator via SimulatorKit. No
+  WebDriverAgent, no idb, no Appium server.
+  Android input / screenshots go through adb (input / screencap / monkey
+  / am force-stop).
+
+COORDINATES
+  All (x, y) / (x1, y1, x2, y2) are in PHYSICAL pixels, top-left origin.
+  They match fiber_tree bounds.centerX/centerY — feed them directly.`,
     name: 'host',
     tools: {
       launch_app: launchAppTool(runner),

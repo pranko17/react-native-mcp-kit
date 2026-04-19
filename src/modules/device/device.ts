@@ -8,25 +8,27 @@ export const deviceModule = (): McpModule => {
   };
 
   return {
-    description: 'Device info, app state, keyboard, linking, accessibility, reload, vibration.',
+    description: `Device + platform introspection, plus a few imperative actions (open URL, dismiss keyboard, reload, vibrate).
+
+Dimension helpers return values in both logical DP and physical pixels —
+physical pixel helpers (screenPixels / windowPixels in get_dimensions)
+match what host__tap / adb input tap consume.`,
     name: 'device',
     tools: {
-      // === Linking ===
       can_open_url: {
-        description: 'Check if a URL can be opened by an installed app',
+        description: 'Check if a URL can be opened by an installed app.',
         handler: async (args) => {
           const { Linking } = getRN();
           const canOpen = await Linking.canOpenURL(args.url as string);
           return { canOpen, url: args.url };
         },
         inputSchema: {
-          url: { description: 'URL to check', type: 'string' },
+          url: { description: 'URL to check.', type: 'string' },
         },
       },
 
-      // === Keyboard ===
       dismiss_keyboard: {
-        description: 'Dismiss the currently visible keyboard',
+        description: 'Dismiss the currently visible keyboard.',
         handler: () => {
           const { Keyboard } = getRN();
           Keyboard.dismiss();
@@ -34,9 +36,8 @@ export const deviceModule = (): McpModule => {
         },
       },
 
-      // === Accessibility ===
       get_accessibility_info: {
-        description: 'Get accessibility settings (screen reader, reduce motion, bold text, etc.)',
+        description: 'Screen reader / reduce motion / bold text settings.',
         handler: async () => {
           const { AccessibilityInfo } = getRN();
           const [isScreenReaderEnabled, isReduceMotionEnabled] = await Promise.all([
@@ -50,28 +51,24 @@ export const deviceModule = (): McpModule => {
         },
       },
 
-      // === App State ===
       get_app_state: {
-        description: 'Get current app state (active, background, inactive)',
+        description: 'App lifecycle state: active / background / inactive.',
         handler: () => {
           const { AppState } = getRN();
           return { state: AppState.currentState };
         },
       },
 
-      // === Appearance ===
       get_appearance: {
-        description: 'Get current color scheme (light, dark, or null)',
+        description: 'Current color scheme: light / dark / null.',
         handler: () => {
           const { Appearance } = getRN();
           return { colorScheme: Appearance.getColorScheme() };
         },
       },
 
-      // === Device Info ===
       get_device_info: {
-        description:
-          'Get comprehensive device info: platform, OS version, dimensions, pixel ratio, appearance',
+        description: 'Platform, OS version, dimensions, pixel ratio, appearance, dev flag.',
         handler: () => {
           const { Appearance, Dimensions, PixelRatio, Platform } = getRN();
           return {
@@ -93,8 +90,7 @@ export const deviceModule = (): McpModule => {
       },
 
       get_dimensions: {
-        description:
-          'Get screen and window dimensions in BOTH logical DP and physical pixels. `screen`/`window` hold the raw React Native values (DP, with scale/fontScale). `screenPixels`/`windowPixels` are width/height multiplied by `pixelRatio` — these match what host__tap / adb shell input tap consume.',
+        description: 'Screen + window dimensions in both DP (raw RN) and physical pixels.',
         handler: () => {
           const { Dimensions, PixelRatio } = getRN();
           const ratio = PixelRatio.get();
@@ -117,7 +113,7 @@ export const deviceModule = (): McpModule => {
       },
 
       get_initial_url: {
-        description: 'Get the URL that launched the app (deep link)',
+        description: 'Deep link that launched the app, if any.',
         handler: async () => {
           const { Linking } = getRN();
           const url = await Linking.getInitialURL();
@@ -126,7 +122,7 @@ export const deviceModule = (): McpModule => {
       },
 
       get_keyboard_state: {
-        description: 'Check if keyboard is currently visible and get its metrics',
+        description: 'Keyboard visibility + metrics.',
         handler: () => {
           const { Keyboard } = getRN();
           return {
@@ -137,7 +133,7 @@ export const deviceModule = (): McpModule => {
       },
 
       get_pixel_ratio: {
-        description: 'Get device pixel density and font scale',
+        description: 'Pixel density + font scale.',
         handler: () => {
           const { PixelRatio } = getRN();
           return {
@@ -147,8 +143,7 @@ export const deviceModule = (): McpModule => {
         },
       },
       get_platform: {
-        description:
-          'Get platform info (OS, version, constants including model, brand, manufacturer on Android)',
+        description: 'OS, version, native constants (model/brand/manufacturer on Android).',
         handler: () => {
           const { Platform } = getRN();
           return {
@@ -159,7 +154,7 @@ export const deviceModule = (): McpModule => {
         },
       },
       open_settings: {
-        description: 'Open the app settings page in device settings',
+        description: 'Open the app settings page in device settings.',
         handler: async () => {
           const { Linking } = getRN();
           await Linking.openSettings();
@@ -167,20 +162,19 @@ export const deviceModule = (): McpModule => {
         },
       },
       open_url: {
-        description: 'Open a URL with the appropriate installed app (browser, maps, phone, etc.)',
+        description: 'Open a URL with the appropriate installed app.',
         handler: async (args) => {
           const { Linking } = getRN();
           await Linking.openURL(args.url as string);
           return { success: true, url: args.url };
         },
         inputSchema: {
-          url: { description: 'URL to open', type: 'string' },
+          url: { description: 'URL to open.', type: 'string' },
         },
       },
 
-      // === App Control ===
       reload: {
-        description: 'Reload the app (dev mode only, like pressing R in Metro)',
+        description: 'Reload the app (dev mode only — like pressing R in Metro).',
         handler: () => {
           const { DevSettings } = getRN();
           DevSettings.reload();
@@ -188,9 +182,8 @@ export const deviceModule = (): McpModule => {
         },
       },
 
-      // === Vibration ===
       vibrate: {
-        description: 'Vibrate the device',
+        description: 'Vibrate the device.',
         handler: (args) => {
           const { Vibration } = getRN();
           const duration = (args.duration as number) || 400;
@@ -198,7 +191,7 @@ export const deviceModule = (): McpModule => {
           return { success: true };
         },
         inputSchema: {
-          duration: { description: 'Vibration duration in ms (default: 400)', type: 'number' },
+          duration: { description: 'Duration in ms (default: 400).', type: 'number' },
         },
       },
     },
