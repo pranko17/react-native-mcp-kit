@@ -99,12 +99,26 @@ const swipeAndroid = (
   );
 };
 
+// `adb shell input text` maps characters through the default virtual keyboard
+// keymap, which only covers ASCII. Anything outside that set crashes the input
+// service with an opaque "Attempt to get length of null array" NPE. Refuse it
+// up front with an actionable message.
+// eslint-disable-next-line no-control-regex
+const NON_ASCII_RE = /[^\x00-\x7F]/;
+
 const typeTextAndroid = async (
   serial: string,
   text: string,
   submit: boolean,
   runner: ProcessRunner
 ): Promise<{ ok: true } | AppTargetError> => {
+  if (NON_ASCII_RE.test(text)) {
+    return {
+      error:
+        'Android type_text only supports ASCII — `adb shell input text` has no code path for non-ASCII characters. Workarounds: tap the target field then drive the content some other way (e.g. fiber_tree__invoke on onChangeText), or paste from the device clipboard via a helper app.',
+    };
+  }
+
   // Select all + delete existing text first (consistent with iOS behavior).
   // `input keycombination` sends keys simultaneously (Ctrl+A = select all).
   try {
@@ -265,7 +279,7 @@ export const swipeTool = (runner: ProcessRunner): HostToolHandler => {
 export const typeTextTool = (runner: ProcessRunner): HostToolHandler => {
   return {
     description:
-      'Type text into the currently focused input field on the target device. Replaces existing text (select-all then paste). Pass submit=true to press ENTER after typing. Android: adb shell input text (shell metacharacters and whitespace escaped automatically). iOS: bundled ios-hid binary pastes via simctl pbcopy + Cmd+A / Cmd+V to avoid keyboard-layout issues.',
+      'Type text into the currently focused input field on the target device. Replaces existing text (select-all then paste). Pass submit=true to press ENTER after typing. iOS accepts any unicode (pastes via simctl pbcopy + Cmd+A/Cmd+V, immune to keyboard-layout). Android is ASCII-only — `adb shell input text` lacks a codepath for non-ASCII, so the tool refuses it with an explanatory error. For Cyrillic/CJK/emoji on Android, drive the target via fiber_tree__invoke on onChangeText instead.',
     handler: async (args, ctx) => {
       const resolved = await resolveDevice(ctx, parseResolveOptions(args), runner);
       if (!resolved.ok) {

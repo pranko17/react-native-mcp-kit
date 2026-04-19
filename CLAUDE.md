@@ -40,7 +40,7 @@ Server instructions + tool annotations (`readOnlyHint`, `openWorldHint`, `title`
 
 Exposed when `hostModule` is passed to `createServer` (the default in `cli.ts`). Adds host-side tools that don't need the RN app to be connected:
 
-- **Input** (`host/tools/input.ts`): `host__tap`, `host__swipe`, `host__type_text`, `host__press_key`. All coordinates are **PHYSICAL PIXELS** and match the `bounds` returned by `fiber_tree` — feed `bounds.centerX` / `bounds.centerY` straight into `host__tap`.
+- **Input** (`host/tools/input.ts`): `host__tap`, `host__swipe`, `host__type_text`, `host__press_key`. All coordinates are **PHYSICAL PIXELS** and match the `bounds` returned by `fiber_tree` — feed `bounds.centerX` / `bounds.centerY` straight into `host__tap`. `host__type_text` on Android is **ASCII-only** (preflight check) because `adb shell input text` routes through a KeyCharacterMap that lacks non-ASCII entries; use `fiber_tree__invoke` on `onChangeText` for Cyrillic/CJK/emoji on Android.
 - **Capture** (`host/tools/capture.ts`): `host__screenshot` — WebP, auto-resized, diff-cached via SHA-256 per device (returns `unchanged: true` when identical to last capture).
 - **Lifecycle** (`host/tools/lifecycle.ts`): `host__launch_app`, `host__terminate_app`, `host__restart_app`. `appId` optional when a connected client registered its `bundleId`.
 - **Devices** (`host/tools/devices.ts`): `host__list_devices` — annotates each device with `connected: true` / `clientId` when it matches a live client.
