@@ -11,7 +11,7 @@ const DEFAULT_MAX_ENTRIES = 50;
 
 // Match both the V8 `    at method (file:line:col)` and Hermes / JSC
 // `method@file:line:col` stack formats. Keep parsing lightweight — full
-// symbolication lives in host__symbolicate so the agent can resolve frames
+// symbolication lives in metro__symbolicate so the agent can resolve frames
 // back to source paths against Metro's sourcemaps on demand.
 const parseStack = (stack: string | undefined): StackFrame[] | undefined => {
   if (!stack) return undefined;
@@ -122,7 +122,7 @@ errorsModule options.`,
       },
       get_errors: {
         description:
-          'Captured errors; filterable by source / fatal / time range. Default: omits raw `stack` string (keeps `stackFrames`). Pass includeStack: true to get both. Use `host__symbolicate` on stackFrames to resolve bundled paths back to source.',
+          'Captured errors; filterable by source / fatal / time range. Default: omits raw `stack` string (keeps `stackFrames`). Pass includeStack: true to get both. Use `metro__symbolicate` on stackFrames to resolve bundled paths back to source.',
         handler: (args) => {
           let result = [...buffer];
           if (args.source) {
@@ -168,7 +168,7 @@ errorsModule options.`,
           fatal: { description: 'Filter by fatal flag.', type: 'boolean' },
           includeStack: {
             description:
-              'Include the raw `stack` string alongside parsed `stackFrames`. Default false — stackFrames already carries the structured form for host__symbolicate.',
+              'Include the raw `stack` string alongside parsed `stackFrames`. Default false — stackFrames already carries the structured form for metro__symbolicate.',
             type: 'boolean',
           },
           limit: { description: 'Max entries to return (applied last).', type: 'number' },

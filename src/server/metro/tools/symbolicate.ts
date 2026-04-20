@@ -1,6 +1,6 @@
 import { type HostToolHandler } from '@/server/host/types';
+import { resolveMetroUrl } from '@/server/metro/resolveMetroUrl';
 
-const DEFAULT_METRO = 'http://localhost:8081';
 const METRO_TIMEOUT_MS = 5_000;
 const DEFAULT_MAX_FRAMES = 10;
 const MAX_FRAMES_CEILING = 100;
@@ -105,16 +105,7 @@ TOKEN-SAVING DEFAULTS
     handler: async (args, ctx) => {
       const stack = args.stack as string | undefined;
       const frames = args.frames as StackFrame[] | undefined;
-      const clientResolution = ctx.bridge.resolveClient(
-        (args.clientId as string | undefined) ?? ctx.requestedClientId
-      );
-      const clientDevServerUrl = clientResolution.ok
-        ? clientResolution.client.devServer?.url
-        : undefined;
-      const metroUrl = ((args.metroUrl as string) || clientDevServerUrl || DEFAULT_METRO).replace(
-        /\/$/,
-        ''
-      );
+      const metroUrl = resolveMetroUrl(args, ctx);
 
       const includeFramework = args.includeFrameworkFrames === true;
       const fullPaths = args.fullPaths === true;
@@ -222,7 +213,7 @@ TOKEN-SAVING DEFAULTS
         type: 'number',
       },
       metroUrl: {
-        description: `Base URL of the Metro dev server. Overrides the URL reported by the connected client. Default "${DEFAULT_METRO}".`,
+        description: `Base URL of the Metro dev server. Overrides the URL reported by the connected client. Default "http://localhost:8081".`,
         type: 'string',
       },
       stack: {

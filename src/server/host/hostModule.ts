@@ -11,7 +11,6 @@ import {
   typeTextTool,
 } from './tools/input';
 import { launchAppTool, restartAppTool, terminateAppTool } from './tools/lifecycle';
-import { symbolicateTool } from './tools/symbolicate';
 import { tapFiberTool } from './tools/tapFiber';
 import { type HostModule } from './types';
 
@@ -39,7 +38,6 @@ COORDINATES
       restart_app: restartAppTool(runner),
       screenshot: screenshotTool(runner),
       swipe: swipeTool(runner),
-      symbolicate: symbolicateTool(),
       tap: tapTool(runner),
       tap_fiber: tapFiberTool(),
       terminate_app: terminateAppTool(runner),

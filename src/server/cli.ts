@@ -2,6 +2,7 @@
 
 import { hostModule } from './host';
 import { runProcess } from './host/processRunner';
+import { metroModule } from './metro';
 
 import { createServer } from './index';
 
@@ -19,7 +20,7 @@ for (let i = 0; i < args.length; i++) {
 }
 
 createServer({
-  hostModules: disableHost ? [] : [hostModule(runProcess)],
+  hostModules: disableHost ? [] : [hostModule(runProcess), metroModule()],
   port,
 }).catch((error: Error) => {
   process.stderr.write(`Failed to start server: ${error.message}\n`);
