@@ -102,10 +102,19 @@ TOKEN-SAVING DEFAULTS
   - Only the top ${DEFAULT_MAX_FRAMES} frames returned.
   - Absolute paths are shortened relative to the MCP server's cwd.
   Opt-out via includeFrameworkFrames / maxFrames / fullPaths.`,
-    handler: async (args) => {
+    handler: async (args, ctx) => {
       const stack = args.stack as string | undefined;
       const frames = args.frames as StackFrame[] | undefined;
-      const metroUrl = ((args.metroUrl as string) || DEFAULT_METRO).replace(/\/$/, '');
+      const clientResolution = ctx.bridge.resolveClient(
+        (args.clientId as string | undefined) ?? ctx.requestedClientId
+      );
+      const clientDevServerUrl = clientResolution.ok
+        ? clientResolution.client.devServer?.url
+        : undefined;
+      const metroUrl = ((args.metroUrl as string) || clientDevServerUrl || DEFAULT_METRO).replace(
+        /\/$/,
+        ''
+      );
 
       const includeFramework = args.includeFrameworkFrames === true;
       const fullPaths = args.fullPaths === true;
@@ -178,6 +187,11 @@ TOKEN-SAVING DEFAULTS
       }
     },
     inputSchema: {
+      clientId: {
+        description:
+          'Target client ID — used to pick up the Metro URL the app was actually loaded from (falls back to `metroUrl` or the hardcoded default).',
+        type: 'string',
+      },
       frames: {
         description:
           'Parsed stack frames: [{ file, lineNumber, column, methodName? }]. Takes precedence over `stack` when both are provided.',
@@ -208,7 +222,7 @@ TOKEN-SAVING DEFAULTS
         type: 'number',
       },
       metroUrl: {
-        description: `Base URL of the Metro dev server. Default "${DEFAULT_METRO}".`,
+        description: `Base URL of the Metro dev server. Overrides the URL reported by the connected client. Default "${DEFAULT_METRO}".`,
         type: 'string',
       },
       stack: {

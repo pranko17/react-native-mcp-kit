@@ -5,6 +5,7 @@ import { type WebSocket } from 'ws';
 
 import {
   type ClientMessage,
+  type DevServerInfo,
   MODULE_SEPARATOR,
   type ModuleDescriptor,
   PROTOCOL_VERSION,
@@ -32,6 +33,7 @@ export interface ClientEntry {
   readonly appName?: string;
   readonly appVersion?: string;
   readonly bundleId?: string;
+  readonly devServer?: DevServerInfo;
   readonly deviceId?: string;
   readonly label?: string;
   readonly platform?: string;
@@ -223,6 +225,7 @@ export class Bridge {
           appVersion: message.appVersion,
           bundleId: message.bundleId,
           connectedAt: Date.now(),
+          devServer: message.devServer,
           deviceId: message.deviceId,
           dynamicTools: new Map(),
           id,

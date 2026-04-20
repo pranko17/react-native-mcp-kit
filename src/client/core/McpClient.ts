@@ -2,6 +2,7 @@ import { type McpModule, type ToolHandler } from '@/client/models/types';
 import { McpConnection } from '@/client/utils/connection';
 import { ModuleRunner } from '@/client/utils/moduleRunner';
 import {
+  type DevServerInfo,
   MODULE_SEPARATOR,
   PROTOCOL_VERSION,
   type ServerMessage,
@@ -54,6 +55,7 @@ interface ClientIdentity {
   appName?: string;
   appVersion?: string;
   bundleId?: string;
+  devServer?: DevServerInfo;
   deviceId?: string;
   label?: string;
   platform?: string;
@@ -64,6 +66,36 @@ interface ClientIdentity {
 // Treat it the same as undefined so we can fall back to manufacturer + model.
 const isUsefulString = (value: unknown): value is string => {
   return typeof value === 'string' && value.length > 0 && value.toLowerCase() !== 'unknown';
+};
+
+// RN ships `getDevServer()` which reads NativeSourceCode.scriptURL — this is
+// the actual Metro origin the bundle was loaded from. In production builds the
+// script URL is a local file and `bundleLoadedFromServer` is false; we skip
+// the field in that case so Metro-facing tools fail fast.
+const detectDevServer = (): DevServerInfo | undefined => {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
+    const mod = require('react-native/Libraries/Core/Devtools/getDevServer');
+    const getDevServer = (mod.default ?? mod) as () => {
+      bundleLoadedFromServer: boolean;
+      url: string;
+    };
+    const info = getDevServer();
+    if (!info.bundleLoadedFromServer || typeof info.url !== 'string') {
+      return undefined;
+    }
+    const url = info.url.replace(/\/$/, '');
+    const parsed = new URL(url);
+    const port = parsed.port ? Number(parsed.port) : parsed.protocol === 'https:' ? 443 : 80;
+    return {
+      bundleLoadedFromServer: true,
+      host: parsed.hostname,
+      port,
+      url,
+    };
+  } catch {
+    return undefined;
+  }
 };
 
 const autoDetectIdentity = (): ClientIdentity => {
@@ -78,6 +110,11 @@ const autoDetectIdentity = (): ClientIdentity => {
     }
   } catch {
     // not running inside a React Native bundle — that's fine
+  }
+
+  const devServer = detectDevServer();
+  if (devServer) {
+    out.devServer = devServer;
   }
 
   try {
@@ -190,6 +227,7 @@ export class McpClient {
     appVersion?: string;
     bundleId?: string;
     debug?: boolean;
+    devServer?: DevServerInfo;
     deviceId?: string;
     host?: string;
     label?: string;
@@ -211,6 +249,7 @@ export class McpClient {
       appName: options?.appName ?? auto.appName,
       appVersion: options?.appVersion ?? auto.appVersion,
       bundleId: options?.bundleId ?? auto.bundleId,
+      devServer: options?.devServer ?? auto.devServer,
       deviceId: options?.deviceId ?? auto.deviceId,
       label: options?.label ?? auto.label,
       platform: options?.platform ?? auto.platform,
@@ -323,6 +362,7 @@ export class McpClient {
       appName: this.identity.appName,
       appVersion: this.identity.appVersion,
       bundleId: this.identity.bundleId,
+      devServer: this.identity.devServer,
       deviceId: this.identity.deviceId,
       label: this.identity.label,
       modules: descriptors,

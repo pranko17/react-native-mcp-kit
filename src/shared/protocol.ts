@@ -32,6 +32,20 @@ export interface ModuleDescriptor {
   description?: string;
 }
 
+/**
+ * Metro dev-server origin the app was loaded from, detected in the client via
+ * `getDevServer()` (`react-native/Libraries/Core/Devtools/getDevServer`).
+ * Absent in production builds (where the bundle is loaded from disk) and when
+ * detection fails. Server-side `metro__*` tools (symbolicate, reload, etc.)
+ * use this instead of hardcoding `localhost:8081`.
+ */
+export interface DevServerInfo {
+  bundleLoadedFromServer: boolean;
+  host: string;
+  port: number;
+  url: string;
+}
+
 export interface RegistrationMessage {
   modules: ModuleDescriptor[];
   protocolVersion: number;
@@ -39,6 +53,7 @@ export interface RegistrationMessage {
   appName?: string;
   appVersion?: string;
   bundleId?: string;
+  devServer?: DevServerInfo;
   deviceId?: string;
   label?: string;
   platform?: string;
