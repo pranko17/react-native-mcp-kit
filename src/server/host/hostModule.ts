@@ -12,6 +12,7 @@ import {
 } from './tools/input';
 import { launchAppTool, restartAppTool, terminateAppTool } from './tools/lifecycle';
 import { symbolicateTool } from './tools/symbolicate';
+import { tapFiberTool } from './tools/tapFiber';
 import { type HostModule } from './types';
 
 export const hostModule = (runner: ProcessRunner): HostModule => {
@@ -40,6 +41,7 @@ COORDINATES
       swipe: swipeTool(runner),
       symbolicate: symbolicateTool(),
       tap: tapTool(runner),
+      tap_fiber: tapFiberTool(),
       terminate_app: terminateAppTool(runner),
       type_text: typeTextTool(runner),
       type_text_batch: typeTextBatchTool(runner),

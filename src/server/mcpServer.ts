@@ -19,7 +19,7 @@ Multiple React Native apps can connect simultaneously — each is identified by 
 4. Use \`call\` to invoke any tool with format: module${MODULE_SEPARATOR}method (e.g. navigation${MODULE_SEPARATOR}navigate). When more than one client is connected, specify \`clientId\`. When exactly one client is connected, \`clientId\` is optional — it's auto-picked. \`args\` accepts either a plain object or a JSON string — prefer objects to avoid quote escaping.
 5. Use \`wait_until\` to poll any tool until a predicate over its result holds (or timeout). Replaces "screenshot in a loop + sleep" for things like "wait for screen X", "wait for the spinner to disappear", "wait for network to idle". Predicate supports compound forms: { all: [...] } (AND), { any: [...] } (OR), { not: predicate }.
 6. Use \`assert\` for a single-shot checkpoint after actions — same predicate vocabulary as wait_until, returns { pass, actual, expected?, result? }. Natural pair: do action → wait_until → assert.
-7. Use \`tap_fiber\` to collapse "fiber_tree__query → host__tap at bounds" into one call. Pass fiber_tree steps; if exactly one fiber matches, its center is tapped. Ambiguous match returns the candidate list so you can add \`index\` or narrow the chain.
+7. Use \`host${MODULE_SEPARATOR}tap_fiber\` to collapse "fiber_tree__query → host__tap at bounds" into one call. Pass fiber_tree steps; if exactly one fiber matches, its center is tapped. Ambiguous match returns the candidate list so you can add \`index\` or narrow the chain.
 8. Use \`state_list\` / \`state_get\` to read app state exposed via useMcpState. State is scoped per client; specify \`clientId\` when multiple clients are connected.
 
 Some tools run inline on the MCP server host (e.g. \`host${MODULE_SEPARATOR}screenshot\`, \`host${MODULE_SEPARATOR}list_devices\`, \`host${MODULE_SEPARATOR}launch_app\`, \`host${MODULE_SEPARATOR}terminate_app\`, \`host${MODULE_SEPARATOR}restart_app\`) and work even when no React Native client is connected. They use xcrun simctl / adb on the dev machine. When \`clientId\` is provided, host tools use that client's platform/label/deviceId as hints to resolve the target device; otherwise they prefer the device of the single connected client, falling back to the single booted sim / online device. \`launch_app\`, \`terminate_app\`, and \`restart_app\` accept an \`appId\` arg (iOS bundle ID / Android package name); omit it to reuse the target client's registered \`bundleId\` from its connection metadata.
@@ -545,138 +545,6 @@ Useful after wait_until as a checkpoint — the pair reads "do action → wait �
     );
 
     this.mcp.registerTool(
-      'tap_fiber',
-      {
-        annotations: {
-          openWorldHint: true,
-          title: 'Tap Fiber',
-        },
-        description: `Locate a fiber via fiber_tree__query and tap its center through host__tap — one round-trip instead of two.
-
-Requires exactly one resolved match after the chain. Pass \`index\` when the chain legitimately yields multiple and you want the Nth (same semantics as fiber_tree__query's step-level index, but applied to the final match set). Pass \`scroll: true\` to bail out early with { tappable: false, reason: "off-screen", bounds } when the fiber is outside the viewport — the agent can then scroll_to before tapping.
-
-Returns { tapped: true, mcpId?, name, bounds, device } on success. On ambiguity: { error: "N matches, pass index or narrow steps", candidates: [...] }. On no match: { error: "no match" }. On unmounted (bounds null): { error: "fiber has no measurable host view" }.`,
-        inputSchema: {
-          clientId: z.string().optional().describe('Target client ID, same semantics as `call`.'),
-          index: z
-            .number()
-            .optional()
-            .describe('Pick the Nth match when the chain returns multiple (0-based).'),
-          steps: z
-            .array(z.record(z.string(), z.unknown()))
-            .describe('Same shape as fiber_tree__query steps — ordered criteria + optional scope.'),
-        },
-      },
-      async ({ clientId, index, steps }) => {
-        if (!Array.isArray(steps) || steps.length === 0) {
-          return jsonError('tap_fiber requires a non-empty `steps` array.');
-        }
-        const queryResult = await this.dispatchTool(
-          `fiber_tree${MODULE_SEPARATOR}query`,
-          { limit: 10, select: ['bounds', 'mcpId', 'name', 'testID'], steps },
-          clientId
-        );
-        if (!queryResult.ok) return jsonError(`fiber_tree__query failed: ${queryResult.error}`);
-        const result = queryResult.result as {
-          matches?: Array<{
-            bounds?: { centerX: number; centerY: number } | null;
-            mcpId?: string;
-            name?: string;
-            testID?: string;
-          }>;
-          total?: number;
-        };
-        const matches = result.matches ?? [];
-        if (matches.length === 0) {
-          return {
-            content: [
-              {
-                text: JSON.stringify(
-                  { error: 'no match for given steps', total: result.total ?? 0 },
-                  null,
-                  2
-                ),
-                type: 'text' as const,
-              },
-            ],
-          };
-        }
-        if (matches.length > 1 && typeof index !== 'number') {
-          return {
-            content: [
-              {
-                text: JSON.stringify(
-                  {
-                    candidates: matches.map((m) => {
-                      return {
-                        bounds: m.bounds ?? null,
-                        mcpId: m.mcpId,
-                        name: m.name,
-                        testID: m.testID,
-                      };
-                    }),
-                    error: `${matches.length} matches — pass \`index\` or narrow \`steps\`.`,
-                    total: result.total ?? matches.length,
-                  },
-                  null,
-                  2
-                ),
-                type: 'text' as const,
-              },
-            ],
-          };
-        }
-        const pick = matches[typeof index === 'number' ? index : 0];
-        if (!pick) {
-          return jsonError(`index ${index} out of range (have ${matches.length}).`);
-        }
-        if (!pick.bounds) {
-          return {
-            content: [
-              {
-                text: JSON.stringify(
-                  {
-                    error: 'fiber has no measurable host view — likely unmounted / virtualized.',
-                    mcpId: pick.mcpId,
-                    name: pick.name,
-                  },
-                  null,
-                  2
-                ),
-                type: 'text' as const,
-              },
-            ],
-          };
-        }
-        const tapResult = await this.dispatchTool(
-          `host${MODULE_SEPARATOR}tap`,
-          { x: pick.bounds.centerX, y: pick.bounds.centerY },
-          clientId
-        );
-        if (!tapResult.ok) return jsonError(`host__tap failed: ${tapResult.error}`);
-        return {
-          content: [
-            {
-              text: JSON.stringify(
-                {
-                  bounds: pick.bounds,
-                  device: (tapResult.result as { device?: unknown }).device,
-                  mcpId: pick.mcpId,
-                  name: pick.name,
-                  tapped: true,
-                  testID: pick.testID,
-                },
-                null,
-                2
-              ),
-              type: 'text' as const,
-            },
-          ],
-        };
-      }
-    );
-
-    this.mcp.registerTool(
       'list_tools',
       {
         annotations: {
@@ -1113,6 +981,9 @@ Returns { tapped: true, mcpId?, name, bounds, device } on success. On ambiguity:
       try {
         const result = await hostEntry.handler(args, {
           bridge: this.bridge,
+          dispatch: (nextTool, nextArgs, nextClientId) => {
+            return this.dispatchTool(nextTool, nextArgs, nextClientId ?? clientId);
+          },
           requestedClientId: clientId,
         });
         return { ok: true, result };
