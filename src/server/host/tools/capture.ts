@@ -11,7 +11,7 @@ import { ProcessNotFoundError, type ProcessRunner } from '@/server/host/processR
 import { type HostToolHandler } from '@/server/host/types';
 
 const SCREENSHOT_TIMEOUT_MS = 15_000;
-const SCREENSHOT_DEFAULT_WIDTH = 370;
+const SCREENSHOT_DEFAULT_WIDTH = 280;
 const SCREENSHOT_MIN_WIDTH = 64;
 const SCREENSHOT_MAX_WIDTH = 1568;
 const WEBP_QUALITY = 80;
@@ -23,26 +23,87 @@ const clampWidth = (value: unknown): number => {
   return Math.max(SCREENSHOT_MIN_WIDTH, Math.min(SCREENSHOT_MAX_WIDTH, Math.floor(value)));
 };
 
+interface Region {
+  height: number;
+  width: number;
+  x: number;
+  y: number;
+}
+
+const parseRegion = (raw: unknown): Region | { error: string } | null => {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    return { error: 'region must be an object { x, y, width, height }.' };
+  }
+  const r = raw as Record<string, unknown>;
+  const x = Number(r.x);
+  const y = Number(r.y);
+  const width = Number(r.width);
+  const height = Number(r.height);
+  if (
+    !Number.isFinite(x) ||
+    !Number.isFinite(y) ||
+    !Number.isFinite(width) ||
+    !Number.isFinite(height)
+  ) {
+    return { error: 'region.x / y / width / height must all be finite numbers.' };
+  }
+  if (width <= 0 || height <= 0) {
+    return { error: 'region.width and region.height must be positive.' };
+  }
+  return {
+    height: Math.floor(height),
+    width: Math.floor(width),
+    x: Math.max(0, Math.floor(x)),
+    y: Math.max(0, Math.floor(y)),
+  };
+};
+
 interface ResizedScreenshot {
   buffer: Buffer;
   height: number;
   width: number;
   originalHeight?: number;
   originalWidth?: number;
+  region?: Region;
 }
 
-const resizeScreenshot = async (input: Buffer, targetWidth: number): Promise<ResizedScreenshot> => {
+const resizeScreenshot = async (
+  input: Buffer,
+  targetWidth: number,
+  region: Region | null
+): Promise<ResizedScreenshot> => {
   const pipeline = sharp(input);
   const meta = await pipeline.metadata();
-  const { data, info } = await pipeline
+  const origW = meta.width ?? 0;
+  const origH = meta.height ?? 0;
+
+  let appliedRegion: Region | undefined;
+  let stage = pipeline;
+  if (region && origW > 0 && origH > 0) {
+    // Clip region to the actual image bounds so agents can pass fiber
+    // bounds without guarding the edges.
+    const left = Math.min(region.x, origW - 1);
+    const top = Math.min(region.y, origH - 1);
+    const w = Math.min(region.width, origW - left);
+    const h = Math.min(region.height, origH - top);
+    if (w > 0 && h > 0) {
+      stage = pipeline.extract({ height: h, left, top, width: w });
+      appliedRegion = { height: h, width: w, x: left, y: top };
+    }
+  }
+
+  const { data, info } = await stage
     .resize({ width: targetWidth, withoutEnlargement: true })
     .webp({ quality: WEBP_QUALITY })
     .toBuffer({ resolveWithObject: true });
+
   return {
     buffer: data,
     height: info.height,
-    originalHeight: meta.height,
-    originalWidth: meta.width,
+    originalHeight: origH || undefined,
+    originalWidth: origW || undefined,
+    region: appliedRegion,
     width: info.width,
   };
 };
@@ -82,18 +143,27 @@ interface ScreenshotMeta {
   width: number;
   originalHeight?: number;
   originalWidth?: number;
+  /**
+   * Applied crop rectangle in ORIGINAL device pixels — absent when the full
+   * screen was captured. Agent maps image pixel (px, py) back to device pixel
+   * as (region.x + px / scale, region.y + py / scale).
+   */
+  region?: Region;
   scale?: number;
 }
 
 const buildResponse = (resized: ResizedScreenshot): ScreenshotResponse => {
+  // `scale` = image-to-source ratio. When a region was cropped it's the
+  // image/region ratio; otherwise it's image/full-screen. Agents use it for
+  // pixel-back-to-device math.
+  const sourceWidth = resized.region?.width ?? resized.originalWidth;
   const meta: ScreenshotMeta = {
     bytes: resized.buffer.length,
     height: resized.height,
     originalHeight: resized.originalHeight,
     originalWidth: resized.originalWidth,
-    scale: resized.originalWidth
-      ? Number((resized.width / resized.originalWidth).toFixed(3))
-      : undefined,
+    region: resized.region,
+    scale: sourceWidth ? Number((resized.width / sourceWidth).toFixed(3)) : undefined,
     width: resized.width,
   };
   return [
@@ -112,7 +182,8 @@ const buildResponse = (resized: ResizedScreenshot): ScreenshotResponse => {
 const captureIos = async (
   udid: string,
   runner: ProcessRunner,
-  width: number
+  width: number,
+  region: Region | null
 ): Promise<ScreenshotResponse | ScreenshotUnchanged | ScreenshotError> => {
   const tmpPath = join(tmpdir(), `rnmcp-ios-${randomUUID()}.png`);
   try {
@@ -128,7 +199,7 @@ const captureIos = async (
       };
     }
     const raw = await readFile(tmpPath);
-    const resized = await resizeScreenshot(raw, width);
+    const resized = await resizeScreenshot(raw, width, region);
     const hash = hashBuffer(resized.buffer);
     if (lastScreenshotHash.get(udid) === hash) {
       return { message: 'Screenshot unchanged since last capture.', unchanged: true };
@@ -152,7 +223,8 @@ const captureIos = async (
 const captureAndroid = async (
   serial: string,
   runner: ProcessRunner,
-  width: number
+  width: number,
+  region: Region | null
 ): Promise<ScreenshotResponse | ScreenshotUnchanged | ScreenshotError> => {
   try {
     const proc = await runner('adb', ['-s', serial, 'exec-out', 'screencap', '-p'], {
@@ -169,7 +241,7 @@ const captureAndroid = async (
     if (proc.stdout.length === 0) {
       return { error: 'adb screencap returned empty output' };
     }
-    const resized = await resizeScreenshot(proc.stdout, width);
+    const resized = await resizeScreenshot(proc.stdout, width, region);
     const hash = hashBuffer(resized.buffer);
     if (lastScreenshotHash.get(serial) === hash) {
       return { message: 'Screenshot unchanged since last capture.', unchanged: true };
@@ -190,22 +262,39 @@ const captureAndroid = async (
 
 export const screenshotTool = (runner: ProcessRunner): HostToolHandler => {
   return {
-    description: `WebP screenshot, resized to save tokens. Response is [image, metadata] where metadata is JSON with { width, height, originalWidth, originalHeight, scale, bytes }. Returns { unchanged: true } when the screen hasn't changed since the last capture — cheap polling. Use fiber_tree bounds for tap targeting; screenshots are for visual verification.`,
+    description: `WebP screenshot, resized to save vision tokens. Response is [image, metadata] where metadata is JSON with { width, height, originalWidth, originalHeight, scale, bytes, region? }.
+
+TOKEN BUDGETING
+  • Vision tokens are driven by image area. Default width ${SCREENSHOT_DEFAULT_WIDTH} gives a readable full-screen view at ~300 tokens. Bump only to read small text.
+  • Pass \`region: { x, y, width, height }\` (physical device pixels) to crop to a single element — typical tap-target shrinks to ~20-60 vision tokens. Grab the rect from fiber_tree__query bounds.
+  • { unchanged: true } is returned when the resized bytes are identical to the previous capture — cheap polling.
+
+Use fiber_tree bounds for tap targeting; screenshots are for visual verification of what the UI looks like right now.`,
     handler: async (args, ctx) => {
       const resolved = await resolveDevice(ctx, parseResolveOptions(args), runner);
       if (!resolved.ok) {
         return { error: resolved.error };
       }
       const width = clampWidth(args.width);
-      if (resolved.device.platform === 'ios') {
-        return captureIos(resolved.device.nativeId, runner, width);
+      const region = parseRegion(args.region);
+      if (region && 'error' in region) {
+        return { error: region.error };
       }
-      return captureAndroid(resolved.device.nativeId, runner, width);
+      if (resolved.device.platform === 'ios') {
+        return captureIos(resolved.device.nativeId, runner, width, region);
+      }
+      return captureAndroid(resolved.device.nativeId, runner, width, region);
     },
     inputSchema: {
       platform: PLATFORM_ARG_SCHEMA,
+      region: {
+        description:
+          'Crop rectangle in original device pixels (top-left origin). Out-of-bounds values are clipped. Typical use: pass fiber_tree bounds ({ x, y, width, height }) to snapshot just one component. Omitted = full screen.',
+        examples: [{ height: 128, width: 900, x: 60, y: 200 }],
+        type: 'object',
+      },
       width: {
-        description: `Output width in pixels (aspect ratio preserved). Default ${SCREENSHOT_DEFAULT_WIDTH}, clamped ${SCREENSHOT_MIN_WIDTH}..${SCREENSHOT_MAX_WIDTH}. Bump up only if you need to read small text.`,
+        description: `Output width in image pixels (aspect ratio preserved, applied AFTER cropping). Default ${SCREENSHOT_DEFAULT_WIDTH}, clamped ${SCREENSHOT_MIN_WIDTH}..${SCREENSHOT_MAX_WIDTH}. Bump up only if you need to read small text.`,
         type: 'number',
       },
       ...NATIVE_ID_SCHEMA,
