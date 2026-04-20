@@ -1,6 +1,6 @@
 {
   "name": "react-native-mcp-kit",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Bidirectional MCP bridge connecting AI agents to running React Native apps",
   "license": "MIT",
   "author": "Aliaksei Pranko",
