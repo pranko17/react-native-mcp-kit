@@ -15,6 +15,19 @@ export default function stripPlugin({ types: t }: { types: typeof BabelTypes }):
   return {
     name: 'react-native-mcp-kit-strip',
     visitor: {
+      // Remove `X.__mcp_hooks = [...]` metadata assignments emitted by the
+      // companion test-id-plugin (X is either a component or a custom-hook
+      // function name).
+      AssignmentExpression(path) {
+        const { left } = path.node;
+        if (!t.isMemberExpression(left)) return;
+        if (!t.isIdentifier(left.property, { name: '__mcp_hooks' })) return;
+        const parent = path.parentPath;
+        if (parent.isExpressionStatement()) {
+          parent.remove();
+        }
+      },
+
       // Remove require('react-native-mcp-kit')
       CallExpression(path, state) {
         const opts = (state.opts ?? {}) as PluginOptions;

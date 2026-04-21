@@ -22,6 +22,7 @@ import {
   measureFiber,
   serializeFiber,
   serializeProps,
+  serializeValue,
   setRootRef,
 } from './utils';
 
@@ -37,6 +38,284 @@ const WAIT_INTERVAL_DEFAULT = 300;
 const WAIT_INTERVAL_MIN = 100;
 
 type WaitUntil = 'appear' | 'disappear';
+
+interface HookMeta {
+  kind: string;
+  name: string;
+  /**
+   * For Custom-kind entries: reference to the custom-hook function. If that
+   * function was also processed by the test-id-plugin (which runs on all
+   * files including node_modules by default), it will have its own
+   * `__mcp_hooks` array. At read time we recursively expand these so the
+   * flattened metadata mirrors the real hook-slot sequence React allocated.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  fn?: any;
+}
+
+// Parse a name pattern: `/regex/flags` → RegExp matcher; anything else →
+// exact-string matcher. Same convention as log_box__ignore.
+const parseNamePattern = (raw: string): ((n: string) => boolean) => {
+  const m = raw.match(/^\/(.+)\/([gimsuy]*)$/);
+  if (m && m[1] !== undefined) {
+    try {
+      const rx = new RegExp(m[1], m[2] ?? '');
+      return (n) => {
+        return rx.test(n);
+      };
+    } catch {
+      return (n) => {
+        return n === raw;
+      };
+    }
+  }
+  return (n) => {
+    return n === raw;
+  };
+};
+
+const HOOK_DEFAULT_MAX_DEPTH = 3;
+
+// Try to treat `current` as a React component / native view instance and
+// collapse it to a compact identifier. Native views expose
+// `_internalFiberInstanceHandleDEV` / `_reactInternals`; class instances
+// expose `_reactInternals`. If we find a fiber, we surface its mcpId /
+// testID / component name so the agent can follow up via `query` if needed.
+// If it doesn't look like a component, return null to signal "serialize
+// normally".
+const resolveComponentRef = (current: unknown): Record<string, unknown> | null => {
+  if (current === null || current === undefined) return null;
+  if (typeof current !== 'object') return null;
+  const obj = current as Record<string, unknown>;
+
+  // Pick up a fiber from the typical internal fields used by RN / React.
+  const fiber =
+    (obj._reactInternals as Fiber | undefined) ??
+    (obj._reactInternalFiber as Fiber | undefined) ??
+    (obj._internalFiberInstanceHandleDEV as Fiber | undefined) ??
+    (obj._internalInstanceHandle as Fiber | undefined);
+
+  const hasNativeTag = '_nativeTag' in obj;
+  if (!fiber && !hasNativeTag) return null;
+
+  const out: Record<string, unknown> = { __componentRef: true };
+
+  if (fiber) {
+    const props = fiber.memoizedProps as Record<string, unknown> | null | undefined;
+    const mcpId = props?.['data-mcp-id'];
+    const testID = props?.testID;
+    if (mcpId) out.mcpId = mcpId;
+    if (testID) out.testID = testID;
+    const typeName =
+      (fiber.type as { displayName?: string; name?: string } | null | undefined)?.displayName ??
+      (fiber.type as { displayName?: string; name?: string } | null | undefined)?.name;
+    if (typeName) out.componentName = typeName;
+  }
+
+  if (hasNativeTag) {
+    out.nativeTag = obj._nativeTag;
+    const viewConfig = obj.viewConfig as { uiViewClassName?: string } | undefined;
+    if (viewConfig?.uiViewClassName) out.viewClass = viewConfig.uiViewClassName;
+  }
+
+  return out;
+};
+
+// Recognise React's effect-record shape: `{ tag: number, create: function,
+// deps: null | unknown[] }` with optional `inst` / `destroy` / `next`.
+// useState / useReducer / useContext memoizedState values of this exact
+// shape in real user code are astronomically unlikely, so we treat this as
+// a reliable "definitely not a state slot" signal.
+const looksLikeEffectRecord = (raw: unknown): boolean => {
+  if (!raw || typeof raw !== 'object') return false;
+  const r = raw as Record<string, unknown>;
+  return (
+    typeof r.tag === 'number' &&
+    typeof r.create === 'function' &&
+    (r.deps === null || r.deps === undefined || Array.isArray(r.deps))
+  );
+};
+
+// Recognise the useRef shape: `{ current: X }` with NO other keys. A useState
+// value that is literally an object whose sole own-key is "current" is so
+// improbable in real code that we treat it as a reliable "this slot is a
+// ref, not a state" signal — lets State/Custom skip ref slots that leaked in
+// through custom-hook internals.
+const looksLikeRefShape = (raw: unknown): boolean => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+  const keys = Object.keys(raw as object);
+  return keys.length === 1 && keys[0] === 'current';
+};
+
+// Shape-verify a hook slot's memoizedState against its expected kind. When
+// a custom hook internally uses multiple built-in hooks, our static metadata
+// understates the number of slots — every subsequent pairing drifts. By
+// requiring a structural match before consuming a metadata entry we can
+// swallow "internal" slots and keep the rest aligned. Permissive kinds
+// (State / Reducer / Context / Custom) reject only obvious mis-matches
+// (currently: the effect-record shape).
+const shapeMatchesKind = (raw: unknown, kind: string): boolean => {
+  switch (kind) {
+    case 'Ref':
+      return !!raw && typeof raw === 'object' && 'current' in (raw as object);
+    case 'Memo':
+    case 'Callback':
+      return Array.isArray(raw) && raw.length === 2 && (raw[1] === null || Array.isArray(raw[1]));
+    case 'Effect':
+    case 'LayoutEffect':
+    case 'InsertionEffect':
+      return looksLikeEffectRecord(raw);
+    case 'Transition':
+      return Array.isArray(raw) && raw.length === 2;
+    case 'State':
+    case 'Reducer':
+    case 'Context':
+    case 'Custom':
+      // Permissive but not blind — drop obvious effect-node and ref-shape
+      // slots so State/Custom metadata doesn't swallow internals of
+      // preceding custom hooks.
+      return !looksLikeEffectRecord(raw) && !looksLikeRefShape(raw);
+    default:
+      return true;
+  }
+};
+
+const serializeHookValue = (raw: unknown, kind: string, maxDepth: number): unknown => {
+  const walk = (v: unknown): unknown => {
+    return serializeValue(v, new WeakSet<object>(), 0, maxDepth);
+  };
+  switch (kind) {
+    case 'Ref': {
+      if (!raw || typeof raw !== 'object' || !('current' in (raw as object))) {
+        return walk(raw);
+      }
+      const current = (raw as { current: unknown }).current;
+      const componentRef = resolveComponentRef(current);
+      if (componentRef) {
+        return { current: componentRef };
+      }
+      return { current: walk(current) };
+    }
+    case 'Memo':
+    case 'Callback':
+      if (Array.isArray(raw) && raw.length === 2) {
+        return { deps: raw[1], value: walk(raw[0]) };
+      }
+      return walk(raw);
+    case 'Effect':
+    case 'LayoutEffect':
+    case 'InsertionEffect': {
+      // React's hook slot for effects holds { tag, create, destroy, deps, next }.
+      // Only `deps` is safe and useful to surface.
+      const effect = raw as { deps?: unknown } | null | undefined;
+      return effect && typeof effect === 'object' && 'deps' in effect
+        ? { deps: effect.deps ?? null }
+        : null;
+    }
+    default:
+      return walk(raw);
+  }
+};
+
+// Flatten a metadata array by recursively inlining custom-hook sub-metadata.
+// Stops on cycles (hook references itself) and on Custom entries whose `fn`
+// isn't annotated (library hooks that bypassed the babel plugin — usually
+// pre-compiled node_modules). Such unannotated entries stay as single
+// records and rely on shape-check for alignment.
+const flattenHookMeta = (
+  meta: HookMeta[],
+  via: string[] = [],
+  seen: WeakSet<object> = new WeakSet()
+): Array<HookMeta & { via: string[] }> => {
+  const out: Array<HookMeta & { via: string[] }> = [];
+  for (const entry of meta) {
+    const fn = entry.fn;
+    const sub: HookMeta[] | undefined =
+      fn && typeof fn === 'function' && Array.isArray(fn.__mcp_hooks) ? fn.__mcp_hooks : undefined;
+    if (sub && !seen.has(fn as object)) {
+      seen.add(fn as object);
+      out.push(...flattenHookMeta(sub, [...via, entry.name], seen));
+      seen.delete(fn as object);
+    } else {
+      out.push({ ...entry, via });
+    }
+  }
+  return out;
+};
+
+const extractHooks = (
+  fiber: Fiber,
+  filter: {
+    kindsSet: Set<string> | null;
+    maxDepth: number;
+    nameMatchers: Array<(n: string) => boolean> | null;
+    withValues: boolean;
+  }
+): Array<{ kind: string; name: string; value?: unknown; via?: string[] }> | null => {
+  const rawMeta = (fiber.type as { __mcp_hooks?: HookMeta[] } | null | undefined)?.__mcp_hooks;
+  if (!Array.isArray(rawMeta)) return null;
+
+  const meta = flattenHookMeta(rawMeta);
+
+  const out: Array<{ kind: string; name: string; value?: unknown; via?: string[] }> = [];
+  let state = fiber.memoizedState;
+  let metaIdx = 0;
+
+  // Walk the fiber's hook chain and pair each slot with the next metadata
+  // entry whose `kind` is shape-compatible with the slot. Strongly-shaped
+  // kinds (Ref / Memo / Callback / Effect) match only the corresponding
+  // React hook shape. Permissive kinds (State / Reducer / Context / Custom)
+  // reject obvious mismatches (effect-record, ref-shape) so they don't
+  // swallow slots belonging to preceding custom hooks. Slots that don't
+  // match the current metadata entry are skipped (presumed internals of a
+  // preceding custom hook), preserving downstream alignment at the cost of
+  // occasionally losing a slot.
+  while (state && metaIdx < meta.length) {
+    const entry = meta[metaIdx];
+    if (!entry) {
+      metaIdx++;
+      continue;
+    }
+    if (!shapeMatchesKind(state.memoizedState, entry.kind)) {
+      state = state.next;
+      continue;
+    }
+
+    const { kind, name, via } = entry;
+    const passesKind = !filter.kindsSet || filter.kindsSet.has(kind);
+    const passesName =
+      !filter.nameMatchers ||
+      filter.nameMatchers.some((m) => {
+        return m(name);
+      });
+    if (passesKind && passesName) {
+      const record: { kind: string; name: string; value?: unknown; via?: string[] } = {
+        kind,
+        name,
+      };
+      if (filter.withValues) {
+        let value: unknown;
+        try {
+          value = serializeHookValue(state.memoizedState, kind, filter.maxDepth);
+          // Final cycle / non-serialisable check — the MCP bridge will
+          // stringify this for transport, so bail now rather than killing
+          // the whole response if one stray value carries a cycle past our
+          // WeakSet (e.g. Proxy, lazy getter, native-bridged object).
+          JSON.stringify(value);
+        } catch {
+          value = '[Unserialisable value]';
+        }
+        record.value = value;
+      }
+      if (via && via.length > 0) record.via = via;
+      out.push(record);
+    }
+
+    metaIdx++;
+    state = state.next;
+  }
+  return out;
+};
 
 const FIND_SCHEMA = {
   index: {
@@ -598,6 +877,29 @@ TIPS
             ? new Set(args.propsInclude as string[])
             : null;
 
+          const hooksIncludeRaw = args.hooksInclude as
+            | {
+                kinds?: string[];
+                maxDepthInValues?: number;
+                names?: string[];
+                withValues?: boolean;
+              }
+            | undefined;
+          const hookKindsSet =
+            hooksIncludeRaw && Array.isArray(hooksIncludeRaw.kinds)
+              ? new Set(hooksIncludeRaw.kinds)
+              : null;
+          const hookNameMatchers =
+            hooksIncludeRaw && Array.isArray(hooksIncludeRaw.names)
+              ? hooksIncludeRaw.names.map(parseNamePattern)
+              : null;
+          const hookWithValues = hooksIncludeRaw?.withValues === true;
+          const hookMaxDepth =
+            typeof hooksIncludeRaw?.maxDepthInValues === 'number' &&
+            hooksIncludeRaw.maxDepthInValues >= 0
+              ? Math.min(Math.floor(hooksIncludeRaw.maxDepthInValues), 8)
+              : HOOK_DEFAULT_MAX_DEPTH;
+
           const runtime: QueryRuntime = { navigationRef, root };
 
           const runOnce = async (
@@ -663,6 +965,14 @@ TIPS
                 }
                 if (fields.has('testID')) {
                   result.testID = fiber.memoizedProps?.testID;
+                }
+                if (fields.has('hooks')) {
+                  result.hooks = extractHooks(fiber, {
+                    kindsSet: hookKindsSet,
+                    maxDepth: hookMaxDepth,
+                    nameMatchers: hookNameMatchers,
+                    withValues: hookWithValues,
+                  });
                 }
                 return result;
               })
@@ -768,6 +1078,16 @@ TIPS
               'Drop wrapper cascades — a fiber is removed when any of its ancestors is also in the match set (PressableView → Pressable → View → RCTView collapses to the topmost). Independent siblings with overlapping bounds are kept. Default true; pass false to keep every match.',
             type: 'boolean',
           },
+          hooksInclude: {
+            description:
+              'When select includes "hooks": `kinds` (State | Reducer | Memo | Callback | Ref | Effect | LayoutEffect | InsertionEffect | Context | Transition | DeferredValue | Id | SyncExternalStore | ImperativeHandle | Custom) and `names` (exact or `/regex/flags`) filter the list. Lean by default — entries carry only { kind, name, via? }; pass `withValues: true` for resolved values. `maxDepthInValues` caps value recursion (default 3, max 8).',
+            examples: [
+              { kinds: ['State', 'Memo'] },
+              { names: ['count', 'scrollRef'], withValues: true },
+              { kinds: ['State'], names: ['/^is/'], withValues: true },
+            ],
+            type: 'object',
+          },
           limit: {
             description: `Max matches to return (default ${QUERY_LIMIT_DEFAULT}, max ${QUERY_LIMIT_MAX}). truncated: true is added when total exceeds limit.`,
             type: 'number',
@@ -787,10 +1107,11 @@ TIPS
             type: 'array',
           },
           select: {
-            description: `Output fields: mcpId, name, testID, props, bounds. Default ${JSON.stringify(QUERY_DEFAULT_FIELDS)}.`,
+            description: `Output fields: mcpId, name, testID, props, bounds, hooks. Default ${JSON.stringify(QUERY_DEFAULT_FIELDS)}.`,
             examples: [
               ['mcpId', 'name', 'bounds'],
               ['mcpId', 'name', 'props'],
+              ['mcpId', 'hooks'],
             ],
             type: 'array',
           },

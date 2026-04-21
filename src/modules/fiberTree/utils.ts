@@ -95,9 +95,14 @@ const getComponentType = (fiber: Fiber): ComponentType => {
 
 const MAX_VALUE_DEPTH = 3;
 
-const serializeValue = (value: unknown, seen = new WeakSet<object>(), depth = 0): unknown => {
+export const serializeValue = (
+  value: unknown,
+  seen: WeakSet<object> = new WeakSet<object>(),
+  depth = 0,
+  maxDepth: number = MAX_VALUE_DEPTH
+): unknown => {
   if (value === null || value === undefined) return value;
-  if (depth > MAX_VALUE_DEPTH) return '[...]';
+  if (depth > maxDepth) return '[...]';
 
   if (typeof value === 'function') {
     return `[Function: ${value.name || 'anonymous'}]`;
@@ -128,7 +133,7 @@ const serializeValue = (value: unknown, seen = new WeakSet<object>(), depth = 0)
 
   if (Array.isArray(value)) {
     return value.slice(0, 10).map((item) => {
-      return serializeValue(item, seen, depth + 1);
+      return serializeValue(item, seen, depth + 1, maxDepth);
     });
   }
 
@@ -138,7 +143,12 @@ const serializeValue = (value: unknown, seen = new WeakSet<object>(), depth = 0)
     for (const key of keys.slice(0, 20)) {
       if (key.startsWith('__')) continue;
       try {
-        result[key] = serializeValue((value as Record<string, unknown>)[key], seen, depth + 1);
+        result[key] = serializeValue(
+          (value as Record<string, unknown>)[key],
+          seen,
+          depth + 1,
+          maxDepth
+        );
       } catch {
         result[key] = '[Error]';
       }
