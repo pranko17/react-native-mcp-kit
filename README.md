@@ -80,9 +80,14 @@ If the dependency lives deeper in the tree (e.g. the `QueryClient` is created in
 
 Two plugins ship under `react-native-mcp-kit/babel`. You want both.
 
-**`test-id-plugin`** — compiles every capitalized JSX element with a stable `data-mcp-id="ComponentName:path/to/file:line"` attribute. `fiber_tree` uses this attribute as an identifier that survives renders, minification, and refactors. Without the plugin you can still find components by `name` or `testID`, but mcpId is what makes "find the nth occurrence of `ComponentName` on a specific line" reliable across a large codebase. Run this in **development**.
+**`test-id-plugin`** — two transforms, one pass:
 
-**`strip-plugin`** — strips every trace of mcp-kit from a bundle: imports from `react-native-mcp-kit`, calls to `McpClient.*` / `useMcpState` / `useMcpTool` / `useMcpModule`, the `<McpProvider>` JSX wrapper (its children are preserved), and every `data-mcp-id` attribute. Run this in **production** and none of the library code reaches your users.
+- Stamps every capitalized JSX element with a stable `data-mcp-id="ComponentName:path/to/file:line"` attribute. `fiber_tree` uses this to identify a component across renders, minification, and refactors. Without it you can still find components by `name` or `testID`, but mcpId is what makes "find the nth `ProductCard` on a specific line" reliable across a large codebase.
+- Attaches `__mcp_hooks` metadata to each component function and each custom-hook function (`/^use[A-Z]/` with hook calls in body). This is how `fiber_tree__query` with `select: ["hooks"]` recovers hook names (`count`, `scrollRef`, …) instead of `State[0]` / `Ref[2]`. The plugin runs on `node_modules` too, so library hooks from react-redux / react-query get annotated automatically.
+
+Run in **development**.
+
+**`strip-plugin`** — strips every trace of mcp-kit from a bundle: imports from `react-native-mcp-kit`, calls to `McpClient.*` / `useMcpState` / `useMcpTool` / `useMcpModule`, the `<McpProvider>` JSX wrapper (its children are preserved), `data-mcp-id` attributes, and `__mcp_hooks = [...]` metadata assignments. Run this in **production** and none of the library code reaches your users.
 
 ```js
 // babel.config.js
@@ -100,7 +105,7 @@ module.exports = (api) => {
 
 Both plugins accept options (attribute name, include/exclude lists, extra import sources, extra function names to strip) when you need to customize — pass them as the 2nd array element in the usual babel style. Defaults cover the common case.
 
-After editing `babel.config.js`, clear Metro's cache once: `yarn start --reset-cache`.
+After editing `babel.config.js` — or after installing / upgrading `react-native-mcp-kit` — clear Metro's cache once: `yarn start --reset-cache`. Metro aggressively caches transformed files, and until it re-runs the plugin on `node_modules`, `__mcp_hooks` annotations for library hooks will be missing and `fiber_tree__query` with `select: ["hooks"]` will return `null`.
 
 ### 3. Configure the MCP server
 
@@ -284,6 +289,8 @@ The heart of UI inspection. Search the component tree via a chained `query`: eac
 Wrapper cascades (`PressableView → Pressable → View → RCTView`) collapse to the topmost by default, so overlapping matches don't drown the result. `bounds` come back in physical pixels and pair directly with `host__tap` — or use `host__tap_fiber` for the locate-and-tap shortcut.
 
 Pass `waitFor: { until: 'appear' | 'disappear', timeout?, interval?, stable? }` to poll the same query until the target state is reached — e.g. `waitFor: { until: 'appear', stable: 300 }` waits for a screen to mount and hold stable for 300ms. Response carries `{ waited, attempts, elapsedMs, timedOut, stableFor? }` alongside the usual matches.
+
+Pass `select: ["hooks"]` to read a component's hooks — `useState` / `useMemo` / `useCallback` / `useRef` / `useEffect` / custom hooks — with variable names recovered from source by the test-id-plugin. Each entry carries `{ kind, name, via? }` (lean by default); add `hooksInclude: { withValues: true }` for resolved values. `kinds` and `names` (exact or `/regex/flags`) filter the list. `via` reports the custom-hook chain a slot came from, so when a component does `useMySelector()` which internally calls `useSyncExternalStoreWithSelector`, the resulting `State` entry arrives with `via: ["mySelector"]` and you can still trace it back. Works against library hooks (react-query, react-redux) because the test-id-plugin runs on `node_modules` too.
 
 ### i18n
 

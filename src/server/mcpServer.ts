@@ -50,6 +50,8 @@ Some tools run inline on the MCP server host (e.g. \`host${MODULE_SEPARATOR}scre
 Gesture tools: \`host${MODULE_SEPARATOR}tap\` / \`host${MODULE_SEPARATOR}long_press\` / \`host${MODULE_SEPARATOR}swipe\` / \`host${MODULE_SEPARATOR}drag\` / \`host${MODULE_SEPARATOR}type_text\` / \`host${MODULE_SEPARATOR}type_text_batch\` / \`host${MODULE_SEPARATOR}press_key\` work on both platforms with no external daemons: Android via \`adb shell input\`, iOS via a bundled \`ios-hid\` binary that injects HID events directly into iOS Simulator through SimulatorKit.
 
 Stack traces: \`errors${MODULE_SEPARATOR}get_errors\` and \`log_box${MODULE_SEPARATOR}get_logs\` return parsed \`stackFrames\` you can pass straight into \`metro${MODULE_SEPARATOR}symbolicate\` to resolve bundled frames back to source paths via Metro.
+
+Component-local state: \`fiber_tree${MODULE_SEPARATOR}query\` with \`select: ["hooks"]\` reads a component's hook list — useState / useMemo / useRef / useEffect / custom hooks — with variable names recovered from source. Lean by default (\`{ kind, name, via? }\`); pass \`hooksInclude: { withValues: true }\` for resolved values. This covers app state that wasn't explicitly exposed via \`useMcpState\`.
 `;
 
 type TextContent = { text: string; type: 'text' };
