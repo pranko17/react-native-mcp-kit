@@ -37,7 +37,6 @@ Multiple React Native apps can connect simultaneously — each is identified by 
 6. For UI-level waits ("wait for a screen to appear", "wait for a spinner to disappear") use \`fiber_tree${MODULE_SEPARATOR}query\` with \`waitFor: { until: "appear" | "disappear", timeout?, interval?, stable? }\` — it polls the same query with cache bypassed until the target state holds. \`stable: <ms>\` requires continuous presence/absence for that many ms to ignore transient matches during screen transitions.
 7. Use \`assert\` for a single-shot checkpoint after actions — same predicate vocabulary as wait_until, returns { pass, actual, expected?, result? }. Natural pair: do action → wait_until / fiber_tree waitFor → assert.
 8. Use \`host${MODULE_SEPARATOR}tap_fiber\` to collapse "fiber_tree__query → host__tap at bounds" into one call. Pass fiber_tree steps; if exactly one fiber matches, its center is tapped. Ambiguous match returns the candidate list so you can add \`index\` or narrow the chain.
-9. Use \`state_list\` / \`state_get\` to read app state exposed via useMcpState. State is scoped per client; specify \`clientId\` when multiple clients are connected.
 
 Some tools run inline on the MCP server host (e.g. \`host${MODULE_SEPARATOR}screenshot\`, \`host${MODULE_SEPARATOR}list_devices\`, \`host${MODULE_SEPARATOR}launch_app\`, \`host${MODULE_SEPARATOR}terminate_app\`, \`host${MODULE_SEPARATOR}restart_app\`, \`metro${MODULE_SEPARATOR}reload\`, \`metro${MODULE_SEPARATOR}symbolicate\`) and work even when no React Native client is connected. They use xcrun simctl / adb on the dev machine. When \`clientId\` is provided, host tools use that client's platform/label/deviceId as hints to resolve the target device; otherwise they prefer the device of the single connected client, falling back to the single booted sim / online device. \`launch_app\`, \`terminate_app\`, and \`restart_app\` accept an \`appId\` arg (iOS bundle ID / Android package name); omit it to reuse the target client's registered \`bundleId\` from its connection metadata.
 
@@ -51,7 +50,7 @@ Gesture tools: \`host${MODULE_SEPARATOR}tap\` / \`host${MODULE_SEPARATOR}long_pr
 
 Stack traces: \`errors${MODULE_SEPARATOR}get_errors\` and \`log_box${MODULE_SEPARATOR}get_logs\` return parsed \`stackFrames\` you can pass straight into \`metro${MODULE_SEPARATOR}symbolicate\` to resolve bundled frames back to source paths via Metro.
 
-Component-local state: \`fiber_tree${MODULE_SEPARATOR}query\` with \`select: ["hooks"]\` reads a component's hook list — useState / useMemo / useRef / useEffect / custom hooks — with variable names recovered from source. Lean by default (\`{ kind, name, via? }\`); pass \`hooksInclude: { withValues: true }\` for resolved values. This covers app state that wasn't explicitly exposed via \`useMcpState\`.
+Component-local state: \`fiber_tree${MODULE_SEPARATOR}query\` with \`select: ["hooks"]\` reads a component's hook list — useState / useMemo / useRef / useEffect / custom hooks — with variable names recovered from source. Each entry carries \`{ kind, name, hook?, via?, expanded? }\`; pass \`hooksInclude: { withValues: true }\` for resolved values, \`format: "tree"\` for nested children, \`expansionDepth: N\` to cap recursion depth. Sensitive names (password, token, jwt, secret, credential, apiKey, authorization, Pin suffix) are auto-redacted; configure via \`fiberTreeModule({ redactHookNames, additionalRedactHookNames })\`.
 `;
 
 type TextContent = { text: string; type: 'text' };
@@ -719,117 +718,6 @@ Useful after wait_until as a checkpoint — the pair reads "do action → wait �
         };
         return {
           content: [{ text: JSON.stringify(payload, null, 2), type: 'text' as const }],
-        };
-      }
-    );
-
-    this.mcp.registerTool(
-      'state_get',
-      {
-        annotations: {
-          readOnlyHint: true,
-          title: 'Get State',
-        },
-        description:
-          'Read a state value exposed by a React Native client via useMcpState. State is scoped per client; specify clientId when multiple clients are connected.',
-        inputSchema: {
-          clientId: z
-            .string()
-            .optional()
-            .describe('Target client ID. Optional when exactly one client is connected.'),
-          key: z.string().describe('State key to read (e.g. "cart", "auth")'),
-        },
-      },
-      async ({ clientId, key }) => {
-        const resolution = this.bridge.resolveClient(clientId);
-        if (!resolution.ok) {
-          return jsonError(resolution.error);
-        }
-        const value = resolution.client.stateStore.get(key);
-        if (value === undefined) {
-          return jsonError(
-            `State "${key}" not found on client '${resolution.client.id}'. Use state_list to see available keys.`
-          );
-        }
-        return {
-          content: [{ text: JSON.stringify(value, null, 2), type: 'text' as const }],
-        };
-      }
-    );
-
-    this.mcp.registerTool(
-      'state_list',
-      {
-        annotations: {
-          readOnlyHint: true,
-          title: 'List State',
-        },
-        description:
-          "List all available state keys. When a specific clientId is given, returns that client's keys; otherwise auto-picks the sole connected client or groups by client when multiple are connected.",
-        inputSchema: {
-          clientId: z
-            .string()
-            .optional()
-            .describe('Target client ID. Optional when exactly one client is connected.'),
-        },
-      },
-      async ({ clientId }) => {
-        if (clientId) {
-          const resolution = this.bridge.resolveClient(clientId);
-          if (!resolution.ok) {
-            return jsonError(resolution.error);
-          }
-          return {
-            content: [
-              {
-                text: JSON.stringify(
-                  {
-                    clientId: resolution.client.id,
-                    keys: [...resolution.client.stateStore.keys()],
-                  },
-                  null,
-                  2
-                ),
-                type: 'text' as const,
-              },
-            ],
-          };
-        }
-
-        const clients = this.bridge.listClients();
-        if (clients.length === 0) {
-          return jsonError('No React Native clients connected');
-        }
-        if (clients.length === 1) {
-          const client = clients[0]!;
-          return {
-            content: [
-              {
-                text: JSON.stringify(
-                  { clientId: client.id, keys: [...client.stateStore.keys()] },
-                  null,
-                  2
-                ),
-                type: 'text' as const,
-              },
-            ],
-          };
-        }
-        return {
-          content: [
-            {
-              text: JSON.stringify(
-                {
-                  clients: clients.map((c) => {
-                    return { id: c.id, keys: [...c.stateStore.keys()] };
-                  }),
-                },
-                null,
-                2
-              ),
-              type: 'text' as const,
-            },
-          ],
         };
       }
     );

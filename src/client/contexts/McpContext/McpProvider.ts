@@ -91,12 +91,6 @@ export const McpProvider = ({
       registerTool: (name, tool) => {
         client.registerTool(name, tool);
       },
-      removeState: (key) => {
-        client.removeState(key);
-      },
-      setState: (key, value) => {
-        client.setState(key, value);
-      },
       unregisterTool: (name) => {
         client.unregisterTool(name);
       },

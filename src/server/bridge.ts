@@ -29,7 +29,6 @@ export interface ClientEntry {
   readonly id: string;
   modules: ModuleDescriptor[];
   readonly socket: WebSocket;
-  readonly stateStore: Map<string, unknown>;
   readonly appName?: string;
   readonly appVersion?: string;
   readonly bundleId?: string;
@@ -233,7 +232,6 @@ export class Bridge {
           modules: message.modules,
           platform: message.platform,
           socket,
-          stateStore: new Map(),
         };
         this.clients.set(id, entry);
         this.socketToClientId.set(socket, id);
@@ -249,20 +247,6 @@ export class Bridge {
           } else {
             pending.resolve(message.result);
           }
-        }
-        break;
-      }
-      case 'state_update': {
-        const client = this.clientForSocket(socket);
-        if (client) {
-          client.stateStore.set(message.key, message.value);
-        }
-        break;
-      }
-      case 'state_remove': {
-        const client = this.clientForSocket(socket);
-        if (client) {
-          client.stateStore.delete(message.key);
         }
         break;
       }

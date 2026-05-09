@@ -9,7 +9,7 @@ interface PluginOptions {
 
 const DEFAULT_SOURCES = ['react-native-mcp-kit'];
 
-const DEFAULT_FUNCTIONS = ['useMcpState', 'useMcpTool', 'useMcpModule', 'initMcp'];
+const DEFAULT_FUNCTIONS = ['useMcpTool', 'useMcpModule', 'initMcp'];
 
 export default function stripPlugin({ types: t }: { types: typeof BabelTypes }): PluginObj {
   return {
@@ -62,7 +62,7 @@ export default function stripPlugin({ types: t }: { types: typeof BabelTypes }):
           }
         }
 
-        // Strip function calls: useMcpState(...), useMcpTool(...), etc.
+        // Strip function calls: useMcpTool(...), useMcpModule(...), etc.
         if (t.isIdentifier(path.node.callee) && functions.includes(path.node.callee.name)) {
           const parent = path.parentPath;
           if (parent.isExpressionStatement()) {

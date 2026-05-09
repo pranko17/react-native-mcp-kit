@@ -102,19 +102,6 @@ export interface ToolResponse {
   result?: unknown;
 }
 
-// === RN App → Server: state updates (from useMcpState) ===
-
-export interface StateUpdateMessage {
-  key: string;
-  type: 'state_update';
-  value: unknown;
-}
-
-export interface StateRemoveMessage {
-  key: string;
-  type: 'state_remove';
-}
-
 // === RN App → Server: dynamic tool registration (from useMcpTool) ===
 
 export interface ToolRegisterMessage {
@@ -133,8 +120,6 @@ export interface ToolUnregisterMessage {
 
 export type ClientMessage =
   | RegistrationMessage
-  | StateRemoveMessage
-  | StateUpdateMessage
   | ToolRegisterMessage
   | ToolResponse
   | ToolUnregisterMessage;

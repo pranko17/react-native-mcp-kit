@@ -8,8 +8,6 @@ import { type NamedStorage } from '@/modules/storage/types';
 
 export interface McpContextValue {
   registerTool: (name: string, tool: ToolHandler) => void;
-  removeState: (key: string) => void;
-  setState: (key: string, value: unknown) => void;
   unregisterTool: (name: string) => void;
 }
 

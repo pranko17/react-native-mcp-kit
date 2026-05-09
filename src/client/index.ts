@@ -1,7 +1,6 @@
 export { McpContext, McpProvider } from './contexts/McpContext';
 export { McpClient } from './core/McpClient';
 export { useMcpModule } from './hooks/useMcpModule';
-export { useMcpState } from './hooks/useMcpState';
 export { useMcpTool } from './hooks/useMcpTool';
 
 export { type McpContextValue, type McpProviderProps } from './contexts/McpContext';

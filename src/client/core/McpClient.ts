@@ -312,23 +312,6 @@ export class McpClient {
     });
   }
 
-  removeState(key: string): void {
-    this.log(`Removing state: ${BOLD}${key}${RESET}`);
-    this.connection.send({
-      key,
-      type: 'state_remove',
-    });
-  }
-
-  setState(key: string, value: unknown): void {
-    this.log(`Setting state: ${BOLD}${key}${RESET}`, value);
-    this.connection.send({
-      key,
-      type: 'state_update',
-      value,
-    });
-  }
-
   unregisterTool(name: string): void {
     this.log(`Unregistering dynamic tool: ${name}`);
     this.moduleRunner.unregisterDynamicTool(name);
