@@ -428,6 +428,7 @@ const extractHooks = (
     kindsSet: Set<string> | null;
     maxDepth: number;
     nameMatchers: Array<(n: string) => boolean> | null;
+    redactPatterns: RegExp[];
     withValues: boolean;
   }
 ): FlatHookEntry[] | HookTreeNode[] | null => {
@@ -512,18 +513,33 @@ const extractHooks = (
       hook ?? (typeof entry.fn === 'function' ? (entry.fn.name as string | undefined) : undefined);
     if (resolvedHook) record.hook = resolvedHook;
     if (filter.withValues && rawValueSlot !== undefined) {
-      let value: unknown;
-      try {
-        value = serializeHookValue(rawValueSlot, kind, filter.maxDepth);
-        // Final cycle / non-serialisable check — the MCP bridge will
-        // stringify this for transport, so bail now rather than killing
-        // the whole response if one stray value carries a cycle past our
-        // WeakSet (e.g. Proxy, lazy getter, native-bridged object).
-        JSON.stringify(value);
-      } catch {
-        value = '[Unserialisable value]';
+      // Redaction guard: mask the value (but keep kind/name/hook visible)
+      // when the entry's name OR any ancestor in `via` matches a redact
+      // pattern. Catches both direct sensitive hooks (`password` State)
+      // and leaves nested under sensitive customs (a `value` field of
+      // `useCredentials()` won't slip through).
+      const isRedacted =
+        matchesAnyRedactPattern(name, filter.redactPatterns) ||
+        (via?.some((v) => {
+          return matchesAnyRedactPattern(v, filter.redactPatterns);
+        }) ??
+          false);
+      if (isRedacted) {
+        record.value = REDACTED_VALUE;
+      } else {
+        let value: unknown;
+        try {
+          value = serializeHookValue(rawValueSlot, kind, filter.maxDepth);
+          // Final cycle / non-serialisable check — the MCP bridge will
+          // stringify this for transport, so bail now rather than killing
+          // the whole response if one stray value carries a cycle past our
+          // WeakSet (e.g. Proxy, lazy getter, native-bridged object).
+          JSON.stringify(value);
+        } catch {
+          value = '[Unserialisable value]';
+        }
+        record.value = value;
       }
-      record.value = value;
     }
     if (via && via.length > 0) record.via = via;
     if (entry.expanded) record.expanded = true;
@@ -611,9 +627,62 @@ interface FiberTreeNavigationRef {
 }
 
 interface FiberTreeModuleOptions {
+  /**
+   * Extend the default redact list with additional patterns. Strings are
+   * matched as case-insensitive substrings (so `"password"` catches
+   * `password`, `oldPassword`, `passwordHash`); RegExp values are matched
+   * verbatim. Use this when you want defaults plus your own.
+   */
+  additionalRedactHookNames?: Array<string | RegExp>;
   navigationRef?: FiberTreeNavigationRef | null;
+  /**
+   * Replace the default redact list entirely. Names matching any pattern
+   * have their `value` masked as `"[redacted]"` in `withValues: true`
+   * responses. Strings = case-insensitive substring; RegExp = literal.
+   * Default list (when this option is omitted) catches the common
+   * security-sensitive names: `password`, `token`, `jwt`, `secret`,
+   * `credential`, `apiKey`, plus `/Pin$/` and `/passcode/i`. Pass `[]` to
+   * disable redaction entirely.
+   */
+  redactHookNames?: Array<string | RegExp>;
   rootRef?: RefObject<unknown>;
 }
+
+// Default redact patterns — applied to a hook's `name` AND every entry in
+// its `via` chain so values stay masked even when nested under a sensitive
+// custom hook (e.g. a leaf `value` inside a `useAuth()` expansion). Tuned
+// to match real-world variable names without over-matching innocent ones:
+// `Pin$` is anchored so it doesn't catch "Spinner"; broad terms like
+// `auth` are deliberately omitted (would catch `isAuthenticated`).
+const DEFAULT_REDACT_HOOK_NAMES: Array<string | RegExp> = [
+  /password/i,
+  /token/i,
+  /jwt/i,
+  /secret/i,
+  /Pin$/,
+  /credential/i,
+  /apiKey/i,
+  /authorization/i,
+];
+
+const REDACTED_VALUE = '[redacted]';
+
+const escapeRegExp = (s: string): string => {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+};
+
+const compileRedactPatterns = (raw: Array<string | RegExp>): RegExp[] => {
+  return raw.map((p) => {
+    return typeof p === 'string' ? new RegExp(escapeRegExp(p), 'i') : p;
+  });
+};
+
+const matchesAnyRedactPattern = (name: string, patterns: RegExp[]): boolean => {
+  for (const p of patterns) {
+    if (p.test(name)) return true;
+  }
+  return false;
+};
 
 type QueryScope =
   | 'ancestors'
@@ -765,6 +834,17 @@ export const fiberTreeModule = (options?: FiberTreeModuleOptions): McpModule => 
     setRootRef(options.rootRef);
   }
   const navigationRef = options?.navigationRef;
+
+  // Compile the redact pattern list once at module init. Precedence:
+  //   - `redactHookNames` provided → use it verbatim (replace mode).
+  //   - `additionalRedactHookNames` provided → defaults + user's.
+  //   - Neither → defaults.
+  // Pass `redactHookNames: []` to disable redaction entirely.
+  const redactPatterns: RegExp[] = compileRedactPatterns(
+    options?.redactHookNames !== undefined
+      ? options.redactHookNames
+      : [...DEFAULT_REDACT_HOOK_NAMES, ...(options?.additionalRedactHookNames ?? [])]
+  );
 
   // Root-version keyed cache for `runQueryChain`. When React commits, the
   // HostRoot fiber swaps — so a mismatched pointer is proof the tree changed
@@ -1251,6 +1331,7 @@ TIPS
                     kindsSet: hookKindsSet,
                     maxDepth: hookMaxDepth,
                     nameMatchers: hookNameMatchers,
+                    redactPatterns,
                     withValues: hookWithValues,
                   });
                 }
