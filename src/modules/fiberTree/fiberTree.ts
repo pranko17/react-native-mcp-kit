@@ -335,20 +335,42 @@ const extractHooks = (
     withValues: boolean;
   }
 ): Array<{ kind: string; name: string; value?: unknown; via?: string[] }> | null => {
-  // For `memo(fn)` without a compare function, React converts the fiber to
-  // SimpleMemoComponent (tag 15) and rewrites `fiber.type` from the memo
-  // wrapper object to the inner function — see `updateMemoComponent` in
-  // ReactFabric. Our babel plugin attaches metadata to the outer memo
-  // wrapper (`SearchBar.__mcp_hooks = [...]`), so by the time we read
-  // `fiber.type.__mcp_hooks` here it points at the inner function and
-  // misses our annotation. `fiber.elementType` retains the original JSX
-  // element type (the memo wrapper), which is where the metadata actually
-  // lives. We try both, preferring `fiber.type` (cheaper, the common case
-  // for non-memo components) and falling back to `fiber.elementType`.
-  const fromType = (fiber.type as { __mcp_hooks?: HookMeta[] } | null | undefined)?.__mcp_hooks;
-  const rawMeta = Array.isArray(fromType)
-    ? fromType
-    : (fiber.elementType as { __mcp_hooks?: HookMeta[] } | null | undefined)?.__mcp_hooks;
+  // React's wrapper machinery makes "where does metadata live" depend on
+  // the exact HOC chain. We try the most likely homes in order:
+  //
+  //   1. `fiber.type.__mcp_hooks` — bare components, FunctionDeclarations,
+  //      and the outer memo fiber when the chain is just memo(fn).
+  //   2. `fiber.elementType.__mcp_hooks` — memo(fn) without compare.
+  //      React converts the fiber to SimpleMemoComponent and rewrites
+  //      `fiber.type` to the inner function (see `updateMemoComponent` in
+  //      ReactFabric); our metadata sits on the outer memo wrapper, which
+  //      survives only on `elementType`.
+  //   3. `fiber.type.render.__mcp_hooks` — forwardRef wrapper. React lays
+  //      out memo(forwardRef(fn)) as three fibers (memo → forwardRef →
+  //      function). When the user queries by displayName they tend to
+  //      match the middle ForwardRef fiber (whose displayName resolves
+  //      via `render.displayName`); fiber.type there is the forwardRef
+  //      wrapper, which holds the inner fn at `.render`. The babel plugin
+  //      put plain metadata on that fn via the FunctionDecl visitor.
+  //   4. `fiber.type.type.__mcp_hooks` — memo wrapper around forwardRef
+  //      (or any non-function inner). Not the SimpleMemoComponent path,
+  //      so `fiber.type` stays as the memo wrapper and `.type` is the
+  //      inner forwardRef / class / etc. This catches getter installations
+  //      on the wrapper layer too.
+  const candidates: Array<unknown> = [
+    fiber.type,
+    fiber.elementType,
+    (fiber.type as { render?: unknown } | null | undefined)?.render,
+    (fiber.type as { type?: unknown } | null | undefined)?.type,
+  ];
+  let rawMeta: HookMeta[] | undefined;
+  for (const c of candidates) {
+    const m = (c as { __mcp_hooks?: HookMeta[] } | null | undefined)?.__mcp_hooks;
+    if (Array.isArray(m)) {
+      rawMeta = m;
+      break;
+    }
+  }
   if (!Array.isArray(rawMeta)) return null;
 
   const meta = flattenHookMeta(rawMeta);
