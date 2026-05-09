@@ -87,7 +87,7 @@ Two plugins ship under `react-native-mcp-kit/babel`. You want both.
 
 Run in **development**.
 
-**`strip-plugin`** — strips every trace of mcp-kit from a bundle: imports from `react-native-mcp-kit`, calls to `McpClient.*` / `useMcpState` / `useMcpTool` / `useMcpModule`, the `<McpProvider>` JSX wrapper (its children are preserved), `data-mcp-id` attributes, and `__mcp_hooks = [...]` metadata assignments. Run this in **production** and none of the library code reaches your users.
+**`strip-plugin`** — strips every trace of mcp-kit from a bundle: imports from `react-native-mcp-kit`, calls to `McpClient.*` / `useMcpTool` / `useMcpModule`, the `<McpProvider>` JSX wrapper (its children are preserved), `data-mcp-id` attributes, and `__mcp_hooks = [...]` metadata assignments. Run this in **production** and none of the library code reaches your users.
 
 ```js
 // babel.config.js
@@ -174,7 +174,6 @@ Wrap your whole app in it — every optional prop opts a module in when supplied
 The Node server exposes a small set of entry-point tools agents use directly — you don't register or configure them:
 
 - **Discovery & dispatch** — `connection_status`, `list_tools`, `describe_tool`, `call`.
-- **Reactive state** — `state_get`, `state_list` (read values exposed via `useMcpState`).
 - **Test automation** — `wait_until` (poll any tool until a predicate holds, replacing screenshot-in-a-loop + sleep) and `assert` (single-shot checkpoint with a standardized diff on failure).
 - **UI-level waits** — `fiber_tree__query` has a built-in `waitFor: { until: "appear" | "disappear", stable? }` option; see the [fiber_tree section](#fiber_tree).
 
@@ -208,7 +207,6 @@ Separate module talking HTTP / WebSocket to the Metro instance the app was bundl
 For when the thing you want to expose lives deeper than `McpProvider`:
 
 ```ts
-useMcpState(key, factory, deps); // expose reactive state to the agent
 useMcpTool(name, factory, deps); // register an ad-hoc tool tied to the component lifecycle
 useMcpModule(factory, deps); // register a whole module from inside a component
 ```
@@ -218,8 +216,6 @@ Each follows `useMemo` / `useEffect` semantics — the factory re-runs on dep ch
 ```tsx
 const UserProvider = ({ children }) => {
   const [user, setUser] = useState(null);
-
-  useMcpState('user', () => ({ id: user?.id, loggedIn: user !== null }), [user]);
 
   useMcpTool(
     'logout',
@@ -236,6 +232,8 @@ const UserProvider = ({ children }) => {
   return <UserContext.Provider value={user}>{children}</UserContext.Provider>;
 };
 ```
+
+Reading state is unified through `fiber_tree__query` with `select: ["hooks"]` — no manual exposure step needed. See the [fiber_tree section](#fiber_tree) below.
 
 ## Modules
 
@@ -290,7 +288,7 @@ Wrapper cascades (`PressableView → Pressable → View → RCTView`) collapse t
 
 Pass `waitFor: { until: 'appear' | 'disappear', timeout?, interval?, stable? }` to poll the same query until the target state is reached — e.g. `waitFor: { until: 'appear', stable: 300 }` waits for a screen to mount and hold stable for 300ms. Response carries `{ waited, attempts, elapsedMs, timedOut, stableFor? }` alongside the usual matches.
 
-Pass `select: ["hooks"]` to read a component's hooks — `useState` / `useMemo` / `useCallback` / `useRef` / `useEffect` / custom hooks — with variable names recovered from source by the test-id-plugin. Each entry carries `{ kind, name, via? }` (lean by default); add `hooksInclude: { withValues: true }` for resolved values. `kinds` and `names` (exact or `/regex/flags`) filter the list. `via` reports the custom-hook chain a slot came from, so when a component does `useMySelector()` which internally calls `useSyncExternalStoreWithSelector`, the resulting `State` entry arrives with `via: ["mySelector"]` and you can still trace it back. Works against library hooks (react-query, react-redux) because the test-id-plugin runs on `node_modules` too.
+Pass `select: ["hooks"]` to read a component's hooks with variable names recovered from source — `useState` / `useMemo` / `useCallback` / `useRef` / `useEffect` / custom hooks all visible. Filter with `hooksInclude: { kinds, names }`, opt into current values with `withValues: true`, cap recursion with `expansionDepth`, switch shape with `format: "flat" | "tree"`. Sensitive names (password, token, jwt, secret, credential, apiKey, authorization, *Pin) are auto-redacted — override via `fiberTreeModule({ redactHookNames, additionalRedactHookNames })`. Works against any HOC chain (`memo`, `forwardRef`, custom HOCs, `as` casts) and library hooks from react-query, react-redux, reanimated, react-navigation.
 
 ### i18n
 
