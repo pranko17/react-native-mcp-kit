@@ -956,13 +956,15 @@ STEP CRITERIA
   index — pick N-th match from this step; otherwise all matches fan out into the next step.
 
 SELECT (output fields)
-  Default ["mcpId", "name", "testID"] — props and bounds are opt-in.
+  Default ["mcpId", "name", "testID"] — props, bounds, hooks are opt-in.
   bounds: { x, y, width, height, centerX, centerY } in PHYSICAL pixels,
   top-left origin. null when the fiber has no mounted host view. centerX/
   centerY feed straight into host__tap.
   props: full serialized props (heavy). Pair with propsInclude:
   ["key1","key2"] to keep only the props you actually need and avoid
   pulling large style maps, data arrays, or nested element trees.
+  hooks: the component's hooks. Each entry { kind, name, hook?, via?,
+  expanded?, value? }; configure via hooksInclude.
 
 RESPONSE
   { matches: [...], total, truncated? } — total is the unrestricted match
