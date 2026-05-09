@@ -85,6 +85,12 @@ const isCapitalized = (name: string | undefined): boolean => {
 };
 
 interface CollectedHook {
+  /** Source-level hook function name (`useState`, `useAnimatedStyle`, etc.).
+   * Surfaced to the agent alongside `name` (the consuming binding) so it
+   * can tell e.g. `count (useState)` from `count (useReducer)` without
+   * inferring from `kind`. For React.useXxx member-call form we still
+   * record just the property name (`useState`). */
+  hook: string;
   kind: string;
   name: string;
   /**
@@ -167,7 +173,7 @@ const collectHooksInBody = (
         hookName = `${counterKey}:${index}`;
       }
 
-      const entry: CollectedHook = { kind, name: hookName };
+      const entry: CollectedHook = { hook: hookIdent, kind, name: hookName };
       if (kind === 'Custom' && !isMemberCall) {
         // Only attach a function reference for direct-identifier calls where
         // we can verify the binding is module-scoped (import / top-level
@@ -204,6 +210,7 @@ const buildHooksArrayExpr = (
       const props: BabelTypes.ObjectProperty[] = [
         t.objectProperty(t.identifier('name'), t.stringLiteral(h.name)),
         t.objectProperty(t.identifier('kind'), t.stringLiteral(h.kind)),
+        t.objectProperty(t.identifier('hook'), t.stringLiteral(h.hook)),
       ];
       if (h.fnIdent) {
         // fn: useAuth   (runtime reads .__mcp_hooks off this identifier)

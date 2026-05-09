@@ -51,6 +51,25 @@ interface HookMeta {
    */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   fn?: any;
+  /**
+   * Source-level hook function name (`useState`, `useAnimatedStyle`, etc.).
+   * Surfaced to the agent alongside `name` so it can disambiguate variables
+   * holding the same kind from different hooks (e.g. `count (useState)` vs
+   * `count (useReducer)`). Optional for forward-compatibility — entries
+   * from older library bundles compiled before this field was added still
+   * parse cleanly.
+   */
+  hook?: string;
+}
+
+// Flattened entry adds the resolved `via` chain plus an `expanded` flag.
+// `expanded: true` marks a parent custom-hook entry that we synthesised so
+// the agent can see the call (`wrapperAnimStyle = useAnimatedStyle(...)`)
+// alongside its sub-hooks; the slot-walker treats those as 0-slot, emitting
+// without advancing the fiber chain.
+interface FlattenedHook extends HookMeta {
+  via: string[];
+  expanded?: boolean;
 }
 
 // Parse a name pattern: `/regex/flags` → RegExp matcher; anything else →
@@ -305,19 +324,32 @@ const countHookSlots = (fn: unknown, depth = 0, seen?: WeakSet<object>): number 
 // isn't annotated (library hooks that bypassed the babel plugin — usually
 // pre-compiled node_modules). Such unannotated entries stay as single
 // records and rely on shape-check for alignment.
+//
+// Custom entries with annotated `fn` produce TWO records: a parent (marked
+// `expanded: true`, no slot consumption) followed by all flattened
+// children. This keeps the call-site visible in the output — without it
+// the agent would see e.g. `wrapperAnimStyle.areAnimationsActive` deep
+// in `via:` but never the `wrapperAnimStyle = useAnimatedStyle(...)`
+// invocation that owns those slots.
 const flattenHookMeta = (
   meta: HookMeta[],
   via: string[] = [],
-  seen: WeakSet<object> = new WeakSet()
-): Array<HookMeta & { via: string[] }> => {
-  const out: Array<HookMeta & { via: string[] }> = [];
+  seen: WeakSet<object> = new WeakSet(),
+  maxDepth = Infinity
+): FlattenedHook[] => {
+  const out: FlattenedHook[] = [];
   for (const entry of meta) {
     const fn = entry.fn;
     const sub: HookMeta[] | undefined =
       fn && typeof fn === 'function' && Array.isArray(fn.__mcp_hooks) ? fn.__mcp_hooks : undefined;
-    if (sub && !seen.has(fn as object)) {
+    // Stop expanding once `via.length` would reach the cap — at that point
+    // the current entry is treated as a leaf (Custom record without
+    // children). The slot-walker still pairs it with one slot, so output
+    // stays internally consistent.
+    if (sub && !seen.has(fn as object) && via.length < maxDepth) {
       seen.add(fn as object);
-      out.push(...flattenHookMeta(sub, [...via, entry.name], seen));
+      out.push({ ...entry, expanded: true, via });
+      out.push(...flattenHookMeta(sub, [...via, entry.name], seen, maxDepth));
       seen.delete(fn as object);
     } else {
       out.push({ ...entry, via });
@@ -326,15 +358,79 @@ const flattenHookMeta = (
   return out;
 };
 
+// Convert the flat output of the slot walker into a nested tree using the
+// `via` prefix as the parent chain. Each `expanded: true` entry becomes a
+// node that owns subsequent entries whose `via` extends the parent's path.
+// Stack-based single pass — no recursion. Strips `expanded` from the
+// returned shape since structure makes the parent obvious.
+interface HookTreeNode {
+  kind: string;
+  name: string;
+  children?: HookTreeNode[];
+  hook?: string;
+  value?: unknown;
+}
+
+const flatHooksToTree = (
+  flat: Array<{
+    kind: string;
+    name: string;
+    expanded?: boolean;
+    hook?: string;
+    value?: unknown;
+    via?: string[];
+  }>
+): HookTreeNode[] => {
+  const root: HookTreeNode[] = [];
+  // Stack of currently-open parents, indexed by their depth (= via.length
+  // of THEIR own entry, since their children sit at via.length + 1).
+  const parents: HookTreeNode[] = [];
+  for (const entry of flat) {
+    const depth = entry.via?.length ?? 0;
+    while (parents.length > depth) parents.pop();
+    const node: HookTreeNode = { kind: entry.kind, name: entry.name };
+    if (entry.hook !== undefined) node.hook = entry.hook;
+    if (entry.value !== undefined) node.value = entry.value;
+    if (parents.length === 0) {
+      root.push(node);
+    } else {
+      const parent = parents[parents.length - 1];
+      if (parent) {
+        parent.children = parent.children ?? [];
+        parent.children.push(node);
+      } else {
+        root.push(node);
+      }
+    }
+    if (entry.expanded) {
+      // Push as the new active parent at this depth. Subsequent entries
+      // with via.length > depth become this node's descendants.
+      parents.push(node);
+    }
+  }
+  return root;
+};
+
+type FlatHookEntry = {
+  kind: string;
+  name: string;
+  expanded?: boolean;
+  hook?: string;
+  value?: unknown;
+  via?: string[];
+};
+
 const extractHooks = (
   fiber: Fiber,
   filter: {
+    expansionDepth: number;
+    format: 'flat' | 'tree';
     kindsSet: Set<string> | null;
     maxDepth: number;
     nameMatchers: Array<(n: string) => boolean> | null;
     withValues: boolean;
   }
-): Array<{ kind: string; name: string; value?: unknown; via?: string[] }> | null => {
+): FlatHookEntry[] | HookTreeNode[] | null => {
   // React's wrapper machinery makes "where does metadata live" depend on
   // the exact HOC chain. We try the most likely homes in order:
   //
@@ -373,9 +469,9 @@ const extractHooks = (
   }
   if (!Array.isArray(rawMeta)) return null;
 
-  const meta = flattenHookMeta(rawMeta);
+  const meta = flattenHookMeta(rawMeta, [], new WeakSet(), filter.expansionDepth);
 
-  const out: Array<{ kind: string; name: string; value?: unknown; via?: string[] }> = [];
+  const out: FlatHookEntry[] = [];
   let state = fiber.memoizedState;
   let metaIdx = 0;
 
@@ -393,8 +489,8 @@ const extractHooks = (
   // step. Without this, a hook that consumes 3 internal slots only
   // advances by 1 in the walker, drifting all trailing entries off the end
   // of the chain.
-  const emitEntry = (entry: HookMeta & { via: string[] }, rawValueSlot: unknown): void => {
-    const { kind, name, via } = entry;
+  const emitEntry = (entry: FlattenedHook, rawValueSlot: unknown): void => {
+    const { hook, kind, name, via } = entry;
     const passesKind = !filter.kindsSet || filter.kindsSet.has(kind);
     const passesName =
       !filter.nameMatchers ||
@@ -402,10 +498,19 @@ const extractHooks = (
         return m(name);
       });
     if (!(passesKind && passesName)) return;
-    const record: { kind: string; name: string; value?: unknown; via?: string[] } = {
-      kind,
-      name,
-    };
+    const record: {
+      kind: string;
+      name: string;
+      expanded?: boolean;
+      hook?: string;
+      value?: unknown;
+      via?: string[];
+    } = { kind, name };
+    // Prefer the babel-emitted hook name; fall back to fn.name for entries
+    // produced by older bundles that predate the `hook` field.
+    const resolvedHook =
+      hook ?? (typeof entry.fn === 'function' ? (entry.fn.name as string | undefined) : undefined);
+    if (resolvedHook) record.hook = resolvedHook;
     if (filter.withValues && rawValueSlot !== undefined) {
       let value: unknown;
       try {
@@ -421,6 +526,7 @@ const extractHooks = (
       record.value = value;
     }
     if (via && via.length > 0) record.via = via;
+    if (entry.expanded) record.expanded = true;
     out.push(record);
   };
 
@@ -431,6 +537,15 @@ const extractHooks = (
   while (state && metaIdx < meta.length) {
     const entry = meta[metaIdx];
     if (!entry) {
+      metaIdx++;
+      continue;
+    }
+
+    // Expanded parent (synthetic, marks the call-site of a recursively
+    // expanded custom hook). Emit without consuming any fiber slot — the
+    // children that follow are the real slot-bearing entries.
+    if (entry.expanded) {
+      emitEntry(entry, undefined);
       metaIdx++;
       continue;
     }
@@ -469,7 +584,7 @@ const extractHooks = (
     if (entry) emitEntry(entry, undefined);
     metaIdx++;
   }
-  return out;
+  return filter.format === 'tree' ? flatHooksToTree(out) : out;
 };
 
 const FIND_SCHEMA = {
@@ -1034,6 +1149,8 @@ TIPS
 
           const hooksIncludeRaw = args.hooksInclude as
             | {
+                expansionDepth?: number;
+                format?: 'flat' | 'tree';
                 kinds?: string[];
                 maxDepthInValues?: number;
                 names?: string[];
@@ -1054,6 +1171,12 @@ TIPS
             hooksIncludeRaw.maxDepthInValues >= 0
               ? Math.min(Math.floor(hooksIncludeRaw.maxDepthInValues), 8)
               : HOOK_DEFAULT_MAX_DEPTH;
+          const hookExpansionDepth =
+            typeof hooksIncludeRaw?.expansionDepth === 'number' &&
+            hooksIncludeRaw.expansionDepth >= 0
+              ? Math.floor(hooksIncludeRaw.expansionDepth)
+              : Infinity;
+          const hookFormat: 'flat' | 'tree' = hooksIncludeRaw?.format === 'tree' ? 'tree' : 'flat';
 
           const runtime: QueryRuntime = { navigationRef, root };
 
@@ -1123,6 +1246,8 @@ TIPS
                 }
                 if (fields.has('hooks')) {
                   result.hooks = extractHooks(fiber, {
+                    expansionDepth: hookExpansionDepth,
+                    format: hookFormat,
                     kindsSet: hookKindsSet,
                     maxDepth: hookMaxDepth,
                     nameMatchers: hookNameMatchers,
@@ -1235,11 +1360,14 @@ TIPS
           },
           hooksInclude: {
             description:
-              'When select includes "hooks": `kinds` (State | Reducer | Memo | Callback | Ref | Effect | LayoutEffect | InsertionEffect | Context | Transition | DeferredValue | Id | SyncExternalStore | ImperativeHandle | Custom) and `names` (exact or `/regex/flags`) filter the list. Lean by default — entries carry only { kind, name, via? }; pass `withValues: true` for resolved values. `maxDepthInValues` caps value recursion (default 3, max 8).',
+              'When select includes "hooks": `kinds` (State | Reducer | Memo | Callback | Ref | Effect | LayoutEffect | InsertionEffect | Context | Transition | DeferredValue | Id | SyncExternalStore | ImperativeHandle | Custom) and `names` (exact or `/regex/flags`) filter the list. Each entry carries { kind, name, hook?, via?, expanded? } — `hook` is the source-level hook function (`useState`, `useAnimatedStyle`); `expanded: true` marks a parent custom-hook call whose sub-hooks follow. Pass `withValues: true` for resolved values. `maxDepthInValues` caps value recursion (default 3, max 8). `expansionDepth` caps how deep custom hooks recurse — 0 = no expansion (top-level only), 1 = one level, default Infinity. `format: "tree"` returns nested `children:` instead of flat `via:`.',
             examples: [
               { kinds: ['State', 'Memo'] },
               { names: ['count', 'scrollRef'], withValues: true },
               { kinds: ['State'], names: ['/^is/'], withValues: true },
+              { expansionDepth: 0 },
+              { format: 'tree', withValues: true },
+              { expansionDepth: 1, format: 'tree' },
             ],
             type: 'object',
           },
