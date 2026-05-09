@@ -1,5 +1,6 @@
 node_modules
 dist
+ROADMAP.md
 .pnp.*
 .yarn/*
 !.yarn/patches

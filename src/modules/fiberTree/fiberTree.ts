@@ -217,6 +217,89 @@ const serializeHookValue = (raw: unknown, kind: string, maxDepth: number): unkno
   }
 };
 
+// Estimate how many slots in fiber.memoizedState a hook function consumes.
+// Used by the slot-walker to advance past unannotated black-box library
+// hooks (e.g. `useSelector` from react-redux) which our babel plugin couldn't
+// expand statically — without this they'd consume only one fiber slot during
+// alignment, drifting the rest of the metadata out of sync.
+//
+// Three cascading strategies, falling through on miss:
+//   1. `fn.__mcp_hooks` recursive — accurate for any hook our plugin saw.
+//      Custom sub-entries recurse; built-in entries count as 1.
+//   2. `fn.toString()` regex — counts `useXxx(` calls in the source. Works
+//      even after Metro bundling because hook references survive as
+//      property accesses (`(0, _react.useState)(...)`) — property names
+//      aren't mangled. Underestimates when nested customs themselves expand
+//      to multiple slots, but better than 1.
+//   3. Default 1 — native functions, bound functions, or sources we can't
+//      parse. Same as the original behavior.
+//
+// Cached per-function via WeakMap so cost is paid once per hook fn per
+// session.
+const HOOK_SLOTS_CACHE = new WeakMap<object, number>();
+const HOOK_NAME_RE = /\buse[A-Z]\w*\s*\(/g;
+const STRING_LITERAL_RE = /(['"`])(?:\\.|(?!\1).)*\1/g;
+const BLOCK_COMMENT_RE = /\/\*[\s\S]*?\*\//g;
+const LINE_COMMENT_RE = /\/\/[^\n]*/g;
+
+const countHookSlots = (fn: unknown, depth = 0, seen?: WeakSet<object>): number => {
+  if (depth > 8) return 1;
+  if (typeof fn !== 'function') return 1;
+  const fnObj = fn as object;
+  const cached = HOOK_SLOTS_CACHE.get(fnObj);
+  if (cached !== undefined) return cached;
+
+  const localSeen = seen ?? new WeakSet<object>();
+  if (localSeen.has(fnObj)) return 1;
+  localSeen.add(fnObj);
+
+  // (1) Annotated metadata: recurse into sub-entries, summing their slot
+  // counts. Each built-in entry contributes 1; each Custom contributes
+  // however many its own fn does (recurse).
+  const annotated = (fn as { __mcp_hooks?: HookMeta[] }).__mcp_hooks;
+  if (Array.isArray(annotated)) {
+    let total = 0;
+    for (const entry of annotated) {
+      if (entry && entry.kind === 'Custom' && typeof entry.fn === 'function') {
+        total += countHookSlots(entry.fn, depth + 1, localSeen);
+      } else {
+        total += 1;
+      }
+    }
+    const result = Math.max(total, 1);
+    HOOK_SLOTS_CACHE.set(fnObj, result);
+    return result;
+  }
+
+  // (2) toString-based parsing. Strip strings/comments first to avoid
+  // matching `'useState'` inside literals. Each `useXxx(` occurrence in
+  // remaining source counts as one hook call (≥ 1 slot). Custom hook calls
+  // we encounter here can't be resolved further (no scope binding from the
+  // outer function), so we bottom out at 1 slot per occurrence — still
+  // beats the original constant-1 fallback when the source has multiple
+  // hook calls (e.g. `useSyncExternalStoreWithSelector` internals).
+  let src: string;
+  try {
+    src = Function.prototype.toString.call(fn);
+  } catch {
+    HOOK_SLOTS_CACHE.set(fnObj, 1);
+    return 1;
+  }
+  if (!src || src.includes('[native code]')) {
+    HOOK_SLOTS_CACHE.set(fnObj, 1);
+    return 1;
+  }
+  const stripped = src
+    .replace(STRING_LITERAL_RE, '""')
+    .replace(BLOCK_COMMENT_RE, '')
+    .replace(LINE_COMMENT_RE, '');
+  HOOK_NAME_RE.lastIndex = 0;
+  const matches = stripped.match(HOOK_NAME_RE);
+  const result = matches ? matches.length : 1;
+  HOOK_SLOTS_CACHE.set(fnObj, result);
+  return result;
+};
+
 // Flatten a metadata array by recursively inlining custom-hook sub-metadata.
 // Stops on cycles (hook references itself) and on Custom entries whose `fn`
 // isn't annotated (library hooks that bypassed the babel plugin — usually
@@ -252,7 +335,20 @@ const extractHooks = (
     withValues: boolean;
   }
 ): Array<{ kind: string; name: string; value?: unknown; via?: string[] }> | null => {
-  const rawMeta = (fiber.type as { __mcp_hooks?: HookMeta[] } | null | undefined)?.__mcp_hooks;
+  // For `memo(fn)` without a compare function, React converts the fiber to
+  // SimpleMemoComponent (tag 15) and rewrites `fiber.type` from the memo
+  // wrapper object to the inner function — see `updateMemoComponent` in
+  // ReactFabric. Our babel plugin attaches metadata to the outer memo
+  // wrapper (`SearchBar.__mcp_hooks = [...]`), so by the time we read
+  // `fiber.type.__mcp_hooks` here it points at the inner function and
+  // misses our annotation. `fiber.elementType` retains the original JSX
+  // element type (the memo wrapper), which is where the metadata actually
+  // lives. We try both, preferring `fiber.type` (cheaper, the common case
+  // for non-memo components) and falling back to `fiber.elementType`.
+  const fromType = (fiber.type as { __mcp_hooks?: HookMeta[] } | null | undefined)?.__mcp_hooks;
+  const rawMeta = Array.isArray(fromType)
+    ? fromType
+    : (fiber.elementType as { __mcp_hooks?: HookMeta[] } | null | undefined)?.__mcp_hooks;
   if (!Array.isArray(rawMeta)) return null;
 
   const meta = flattenHookMeta(rawMeta);
@@ -266,21 +362,16 @@ const extractHooks = (
   // kinds (Ref / Memo / Callback / Effect) match only the corresponding
   // React hook shape. Permissive kinds (State / Reducer / Context / Custom)
   // reject obvious mismatches (effect-record, ref-shape) so they don't
-  // swallow slots belonging to preceding custom hooks. Slots that don't
-  // match the current metadata entry are skipped (presumed internals of a
-  // preceding custom hook), preserving downstream alignment at the cost of
-  // occasionally losing a slot.
-  while (state && metaIdx < meta.length) {
-    const entry = meta[metaIdx];
-    if (!entry) {
-      metaIdx++;
-      continue;
-    }
-    if (!shapeMatchesKind(state.memoizedState, entry.kind)) {
-      state = state.next;
-      continue;
-    }
-
+  // swallow slots belonging to preceding custom hooks.
+  //
+  // For Custom-leaf entries — typically black-box library hooks
+  // (`useSelector`, `useQuery`, etc.) where flattenHookMeta couldn't expand
+  // because `fn.__mcp_hooks` was missing — we estimate slot count via
+  // `countHookSlots` and advance the fiber chain by that many slots in one
+  // step. Without this, a hook that consumes 3 internal slots only
+  // advances by 1 in the walker, drifting all trailing entries off the end
+  // of the chain.
+  const emitEntry = (entry: HookMeta & { via: string[] }, rawValueSlot: unknown): void => {
     const { kind, name, via } = entry;
     const passesKind = !filter.kindsSet || filter.kindsSet.has(kind);
     const passesName =
@@ -288,31 +379,73 @@ const extractHooks = (
       filter.nameMatchers.some((m) => {
         return m(name);
       });
-    if (passesKind && passesName) {
-      const record: { kind: string; name: string; value?: unknown; via?: string[] } = {
-        kind,
-        name,
-      };
-      if (filter.withValues) {
-        let value: unknown;
-        try {
-          value = serializeHookValue(state.memoizedState, kind, filter.maxDepth);
-          // Final cycle / non-serialisable check — the MCP bridge will
-          // stringify this for transport, so bail now rather than killing
-          // the whole response if one stray value carries a cycle past our
-          // WeakSet (e.g. Proxy, lazy getter, native-bridged object).
-          JSON.stringify(value);
-        } catch {
-          value = '[Unserialisable value]';
-        }
-        record.value = value;
+    if (!(passesKind && passesName)) return;
+    const record: { kind: string; name: string; value?: unknown; via?: string[] } = {
+      kind,
+      name,
+    };
+    if (filter.withValues && rawValueSlot !== undefined) {
+      let value: unknown;
+      try {
+        value = serializeHookValue(rawValueSlot, kind, filter.maxDepth);
+        // Final cycle / non-serialisable check — the MCP bridge will
+        // stringify this for transport, so bail now rather than killing
+        // the whole response if one stray value carries a cycle past our
+        // WeakSet (e.g. Proxy, lazy getter, native-bridged object).
+        JSON.stringify(value);
+      } catch {
+        value = '[Unserialisable value]';
       }
-      if (via && via.length > 0) record.via = via;
-      out.push(record);
+      record.value = value;
+    }
+    if (via && via.length > 0) record.via = via;
+    out.push(record);
+  };
+
+  const advanceState = (steps: number): void => {
+    for (let i = 0; i < steps && state; i++) state = state.next;
+  };
+
+  while (state && metaIdx < meta.length) {
+    const entry = meta[metaIdx];
+    if (!entry) {
+      metaIdx++;
+      continue;
     }
 
+    // Custom-leaf with a known fn → recurse into source to estimate slot
+    // count, then consume that many slots at once. The first slot's value
+    // is exposed (best approximation of "this hook's value"); the rest are
+    // skipped silently as internals of the library hook.
+    if (entry.kind === 'Custom' && typeof entry.fn === 'function') {
+      const slots = countHookSlots(entry.fn);
+      if (slots > 1) {
+        emitEntry(entry, state.memoizedState);
+        advanceState(slots);
+        metaIdx++;
+        continue;
+      }
+    }
+
+    if (!shapeMatchesKind(state.memoizedState, entry.kind)) {
+      state = state.next;
+      continue;
+    }
+
+    emitEntry(entry, state.memoizedState);
     metaIdx++;
     state = state.next;
+  }
+
+  // Any metadata entries left after the fiber chain ran dry didn't get a
+  // slot match. Emit them anyway (without value) so the agent at least
+  // sees the hook exists — this is strictly better than silently dropping,
+  // and helps debug alignment issues. Common cause: a preceding Custom
+  // hook consumed more slots than countHookSlots estimated.
+  while (metaIdx < meta.length) {
+    const entry = meta[metaIdx];
+    if (entry) emitEntry(entry, undefined);
+    metaIdx++;
   }
   return out;
 };

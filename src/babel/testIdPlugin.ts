@@ -1,4 +1,31 @@
-import { type NodePath, type PluginObj, type types as BabelTypes } from '@babel/core';
+import {
+  type NodePath,
+  type PluginObj,
+  type PluginPass,
+  type types as BabelTypes,
+} from '@babel/core';
+
+/**
+ * Per-file plugin state with deferred-injection queue. Babel instantiates
+ * `PluginPass` per file, so this naturally scopes the queue to a single
+ * transformation. We collect all the metadata assignments during the main
+ * traversal, then flush them at `Program:exit` — that runs AFTER other
+ * plugins' replaceWith calls (e.g. react-refresh wrapping HOC chains in
+ * `_s(...)` signature calls), so our injected statements aren't dropped by
+ * babel's re-traversal of the rebuilt subtrees.
+ */
+type DeferredInsert =
+  | {
+      hooks: CollectedHook[];
+      kind: 'assignment';
+      outer: string;
+      statementPath: NodePath<BabelTypes.Node>;
+    }
+  | { inner: string; kind: 'getter'; outer: string; statementPath: NodePath<BabelTypes.Node> };
+
+interface PluginPassWithQueue extends PluginPass {
+  pendingInjects?: DeferredInsert[];
+}
 
 interface PluginOptions {
   /** Attribute name to use. Default: "data-mcp-id" */
@@ -45,8 +72,9 @@ const HOOK_KIND: Record<string, string> = {
 // Cheap, conservative component detector: the binding name starts with a
 // capital letter and the function body mentions JSX somewhere. Covers
 // `function LoginForm() { return <View />; }` and
-// `const LoginForm = (props) => <View />;`. Misses HOC-wrapped components
-// (memo / forwardRef) — those land in a follow-up.
+// `const LoginForm = (props) => <View />;`. HOC-wrapped components
+// (memo / forwardRef / observer) are handled in `VariableDeclarator` by
+// unwrapping the call expression first via `findInnerFunctionBodyPath`.
 const isCapitalized = (name: string | undefined): boolean => {
   return (
     !!name &&
@@ -186,24 +214,92 @@ const buildHooksArrayExpr = (
   );
 };
 
-// Insert `ComponentName.__mcp_hooks = [...]` after the statement that
-// declared the component. Idempotent-by-construction: we only run once per
-// component declaration, and the plugin is expected to run once per build.
-const attachHooksMetadata = (
-  statementPath: NodePath<BabelTypes.Node>,
+// Build:
+//   try {
+//     Object.defineProperty(Outer, '__mcp_hooks', {
+//       configurable: true,
+//       get: () => Inner.__mcp_hooks,
+//     });
+//   } catch {}
+// Used for the identifier-ref HOC case (`const Outer = memo(Inner)`) where
+// we can't statically collect hooks from the wrapped function. The getter
+// forwards to the inner binding's metadata at read time, sidestepping
+// declaration order, hoisting, scope, and custom-HOC return shape.
+//
+// The try/catch is mandatory: the HOC's return value is statically unknown
+// — it could be a primitive (number / string), `null`/`undefined`, or a
+// frozen / sealed object. Any of those make `Object.defineProperty` throw
+// `TypeError` in strict mode (which ES modules always are). A throw at
+// module-init kills the bundle. Swallowing here is harmless: the worst
+// outcome is metadata not being attached to that one binding, exactly as
+// if the plugin had skipped it.
+const buildHooksGetterStmt = (
+  outer: string,
+  inner: string,
+  t: typeof BabelTypes
+): BabelTypes.TryStatement => {
+  const defineCall = t.expressionStatement(
+    t.callExpression(t.memberExpression(t.identifier('Object'), t.identifier('defineProperty')), [
+      t.identifier(outer),
+      t.stringLiteral('__mcp_hooks'),
+      t.objectExpression([
+        t.objectProperty(t.identifier('configurable'), t.booleanLiteral(true)),
+        t.objectProperty(
+          t.identifier('get'),
+          t.arrowFunctionExpression(
+            [],
+            t.memberExpression(t.identifier(inner), t.identifier('__mcp_hooks'))
+          )
+        ),
+      ]),
+    ])
+  );
+  // Optional-catch-binding (ES2019): `catch {}` — supported by Hermes.
+  return t.tryStatement(t.blockStatement([defineCall]), t.catchClause(null, t.blockStatement([])));
+};
+
+// Build the `ComponentName.__mcp_hooks = [...]` statement. Used at
+// `Program:exit` time when we drain the deferred queue.
+const buildAssignmentStmt = (
   componentName: string,
   hooks: CollectedHook[],
   t: typeof BabelTypes
-): void => {
-  if (hooks.length === 0) return;
-  const assignment = t.expressionStatement(
+): BabelTypes.ExpressionStatement => {
+  return t.expressionStatement(
     t.assignmentExpression(
       '=',
       t.memberExpression(t.identifier(componentName), t.identifier('__mcp_hooks')),
       buildHooksArrayExpr(hooks, t)
     )
   );
-  statementPath.insertAfter(assignment);
+};
+
+// Queue a `ComponentName.__mcp_hooks = [...]` insertion for `Program:exit`.
+// Inserting during the main traversal is unsafe: react-refresh's babel
+// plugin replaces HOC-wrapped function expressions via `replaceWith`, which
+// re-traverses the rebuilt subtree and (in our experience) drops sibling
+// statements we'd inserted via `insertAfter` on the original declarator.
+// Deferring to `Program:exit` keeps our writes visible to the final output
+// without interfering with replaceWith semantics.
+const queueHooksAssignment = (
+  state: PluginPassWithQueue,
+  statementPath: NodePath<BabelTypes.Node>,
+  componentName: string,
+  hooks: CollectedHook[]
+): void => {
+  if (hooks.length === 0) return;
+  const queue = (state.pendingInjects ??= []);
+  queue.push({ hooks, kind: 'assignment', outer: componentName, statementPath });
+};
+
+const queueHooksGetter = (
+  state: PluginPassWithQueue,
+  statementPath: NodePath<BabelTypes.Node>,
+  outer: string,
+  inner: string
+): void => {
+  const queue = (state.pendingInjects ??= []);
+  queue.push({ inner, kind: 'getter', outer, statementPath });
 };
 
 // Heuristic: the function body must reference JSX. Otherwise it's just a
@@ -227,6 +323,108 @@ const bodyUsesJSX = (bodyPath: NodePath<BabelTypes.Node>): boolean => {
 // babel transform (Metro runs plugins on node_modules by default).
 const isCustomHookName = (name: string | undefined): boolean => {
   return !!name && /^use[A-Z]/.test(name);
+};
+
+// Recognize callee shapes that look like an HOC application without locking
+// to a hardcoded name list. Two shapes pass:
+//   1. `memo(fn)` / `forwardRef(fn)` / `withAuth(fn)` — bare Identifier callee.
+//   2. `React.memo(fn)` / `Mobx.observer(fn)` — MemberExpression where the
+//      object identifier resolves to a module (import) binding. This rules
+//      out `arr.map(fn)` and similar local-method calls, which would
+//      otherwise produce harmless-but-noisy metadata on a non-component
+//      binding. Property access on a deep chain (`a.b.c(fn)`) is rejected.
+const isLikelyHocCallee = (
+  callPath: NodePath<BabelTypes.CallExpression>,
+  t: typeof BabelTypes
+): boolean => {
+  const callee = callPath.node.callee;
+  if (t.isIdentifier(callee)) return true;
+  if (
+    t.isMemberExpression(callee) &&
+    !callee.computed &&
+    t.isIdentifier(callee.property) &&
+    t.isIdentifier(callee.object)
+  ) {
+    const binding = callPath.scope.getBinding(callee.object.name);
+    return !!binding && binding.kind === 'module';
+  }
+  return false;
+};
+
+// Walk down a CallExpression chain (`memo(forwardRef(...))`,
+// `withAuth(observer(...))`, etc.) to whatever the chain bottoms out at.
+// Returns null if no unwrap happened (the start was not a recognized HOC
+// chain). Each link must look like a plausible HOC application via
+// `isLikelyHocCallee`, so non-HOC calls that happen to take a function
+// argument (e.g. `arr.map(fn)`) don't trigger metadata attachment on the
+// outer binding.
+//
+// Transparently steps through `AssignmentExpression` and `SequenceExpression`
+// wrappers — react-refresh injects `_c = <fn>` and similar synthetic
+// expression wraps around the inner component during its `VariableDeclaration`
+// enter visitor (which runs before our `VariableDeclarator` visitor). Without
+// the step-through, our unwrap would dead-end at the AssignmentExpression
+// and miss the inner arrow / function expression entirely.
+const unwrapTransparentExpr = (path: NodePath<BabelTypes.Node>): NodePath<BabelTypes.Node> => {
+  let cur = path;
+  // Bound the loop to defend against pathological ASTs.
+  for (let i = 0; i < 8; i++) {
+    if (cur.isAssignmentExpression() && cur.node.operator === '=') {
+      cur = cur.get('right') as NodePath<BabelTypes.Node>;
+      continue;
+    }
+    if (cur.isSequenceExpression()) {
+      const exprs = cur.get('expressions') as NodePath<BabelTypes.Expression>[];
+      if (exprs.length === 0) break;
+      cur = exprs[exprs.length - 1] as NodePath<BabelTypes.Node>;
+      continue;
+    }
+    break;
+  }
+  return cur;
+};
+
+const unwrapHocChainToBottom = (
+  startPath: NodePath<BabelTypes.Node>,
+  t: typeof BabelTypes
+): NodePath<BabelTypes.Node> | null => {
+  let cur: NodePath<BabelTypes.Node> = unwrapTransparentExpr(startPath);
+  let unwrapped = false;
+  while (cur.isCallExpression() && cur.node.arguments.length > 0 && isLikelyHocCallee(cur, t)) {
+    const arg0 = cur.get('arguments.0') as NodePath<BabelTypes.Node>;
+    if (!arg0.node) return null;
+    cur = unwrapTransparentExpr(arg0);
+    unwrapped = true;
+  }
+  return unwrapped ? cur : null;
+};
+
+// Two consumers of the unwrap walk:
+//   1. Inline-function case (`memo(() => <JSX />)`) — find the body so we can
+//      collect hooks and attach metadata directly to the outer binding.
+//   2. Identifier-ref case (`memo(InnerFn)`) — record `{ outer, inner }` so a
+//      deferred copy `Outer.__mcp_hooks = Inner.__mcp_hooks` can be emitted
+//      at Program:exit. The inline case can't use the deferred copy approach
+//      because there's no name to copy from.
+const findInnerFunctionBodyPath = (
+  startPath: NodePath<BabelTypes.Node>,
+  t: typeof BabelTypes
+): NodePath<BabelTypes.Node> | null => {
+  const bottom = unwrapHocChainToBottom(startPath, t);
+  if (!bottom) return null;
+  if (bottom.isArrowFunctionExpression() || bottom.isFunctionExpression()) {
+    return bottom.get('body') as NodePath<BabelTypes.Node>;
+  }
+  return null;
+};
+
+const findInnerIdentifier = (
+  startPath: NodePath<BabelTypes.Node>,
+  t: typeof BabelTypes
+): NodePath<BabelTypes.Identifier> | null => {
+  const bottom = unwrapHocChainToBottom(startPath, t);
+  if (!bottom) return null;
+  return bottom.isIdentifier() ? (bottom as NodePath<BabelTypes.Identifier>) : null;
 };
 
 const bodyCallsHook = (bodyPath: NodePath<BabelTypes.Node>, t: typeof BabelTypes): boolean => {
@@ -263,25 +461,32 @@ export default function testIdPlugin({ types: t }: { types: typeof BabelTypes })
       // Two candidate shapes per function declaration:
       //   1. Component — capitalized name + JSX in body (React component).
       //   2. Custom hook — name matches /^use[A-Z]/ + body contains hook calls.
-      // memo()/forwardRef() wrappers are deferred to a follow-up.
-      // Also handled via the VariableDeclarator visitor below for the
-      // `const Foo = (...) => {...}` / `const useX = (...) => {...}` forms.
-      FunctionDeclaration(path) {
+      // The VariableDeclarator visitor below covers the
+      // `const Foo = (...) => {...}` / `const useX = (...) => {...}` forms,
+      // plus HOC-wrapped components: `const Foo = anyHoc((props) => <JSX />)`
+      // and nested chains thereof.
+      FunctionDeclaration(path, state) {
         const id = path.node.id;
         if (!id) return;
         const bodyPath = path.get('body');
+        const pluginState = state as PluginPassWithQueue;
 
-        // Component: capitalized name + JSX in body.
-        if (isCapitalized(id.name) && bodyUsesJSX(bodyPath)) {
+        // Component: capitalized name + (JSX in body OR hook calls in body).
+        // The hook-call branch covers components that legitimately return
+        // null / non-JSX values — portal-like, context-only, or
+        // imperative-handle wrappers. Under the Rules of Hooks, only
+        // components and custom hooks may call hooks, so a capitalized
+        // function that calls them is unambiguously a component.
+        if (isCapitalized(id.name) && (bodyUsesJSX(bodyPath) || bodyCallsHook(bodyPath, t))) {
           const hooks = collectHooksInBody(bodyPath, t);
-          attachHooksMetadata(path, id.name, hooks, t);
+          queueHooksAssignment(pluginState, path, id.name, hooks);
           return;
         }
 
         // Custom hook: name matches use[A-Z] + body calls at least one hook.
         if (isCustomHookName(id.name) && bodyCallsHook(bodyPath, t)) {
           const hooks = collectHooksInBody(bodyPath, t);
-          attachHooksMetadata(path, id.name, hooks, t);
+          queueHooksAssignment(pluginState, path, id.name, hooks);
         }
       },
 
@@ -337,22 +542,107 @@ export default function testIdPlugin({ types: t }: { types: typeof BabelTypes })
         );
       },
 
-      VariableDeclarator(path) {
+      // === Part 3: drain deferred-injection queue at module end. ===
+      // Runs after all other plugins' visitors (in particular react-refresh's
+      // replaceWith on HOC-wrapped components) have finished mutating the
+      // tree. Each queued entry's `statementPath` is the original declaration
+      // statement — still valid at this point because none of the upstream
+      // plugins replace top-level statements, only their inner expressions.
+      // We dedupe by `outer` name to defend against multiple visitor passes
+      // queuing the same component twice.
+      Program: {
+        exit(_programPath, state) {
+          const pluginState = state as PluginPassWithQueue;
+          const queue = pluginState.pendingInjects;
+          if (!queue || queue.length === 0) return;
+          const seen = new Set<string>();
+          for (const entry of queue) {
+            if (seen.has(entry.outer)) continue;
+            seen.add(entry.outer);
+            if (!entry.statementPath.node) continue; // statement was removed by another pass
+            if (entry.kind === 'assignment') {
+              entry.statementPath.insertAfter(buildAssignmentStmt(entry.outer, entry.hooks, t));
+            } else {
+              entry.statementPath.insertAfter(buildHooksGetterStmt(entry.outer, entry.inner, t));
+            }
+          }
+          pluginState.pendingInjects = [];
+        },
+      },
+
+      VariableDeclarator(path, state) {
         const id = path.node.id;
         if (!t.isIdentifier(id)) return;
-        const init = path.node.init;
-        if (!init) return;
-        if (!t.isArrowFunctionExpression(init) && !t.isFunctionExpression(init)) return;
+        let initNode = path.node.init;
+        if (!initNode) return;
+        const pluginState = state as PluginPassWithQueue;
 
-        const bodyPath = path.get('init.body') as NodePath<BabelTypes.Node>;
-        if (!bodyPath.node) return;
+        // Unwrap TypeScript casts: `as Foo`, `as const`, `<Foo>x` (legacy
+        // angle-bracket assertion), and `x satisfies Foo`. Without this,
+        // `const Wrapped = memo(arrow) as { ... }` fails our HOC unwrap
+        // because we'd see TSAsExpression instead of the inner CallExpression.
+        // Pattern in the wild: 21vek's PageFlashListWithBanner /
+        // ListProductRow / RangeFilter use `as` to attach generic call
+        // signatures + displayName onto memo'd components.
+        let initPathForUnwrap: NodePath<BabelTypes.Node> = path.get(
+          'init'
+        ) as NodePath<BabelTypes.Node>;
+        for (let i = 0; i < 4; i++) {
+          if (
+            t.isTSAsExpression(initNode) ||
+            t.isTSTypeAssertion(initNode) ||
+            t.isTSSatisfiesExpression(initNode) ||
+            t.isTSNonNullExpression(initNode)
+          ) {
+            initPathForUnwrap = initPathForUnwrap.get('expression') as NodePath<BabelTypes.Node>;
+            initNode = initPathForUnwrap.node as BabelTypes.Expression;
+            continue;
+          }
+          break;
+        }
+        const init = initNode;
 
-        // Component: capitalized + JSX.
-        if (isCapitalized(id.name) && bodyUsesJSX(bodyPath)) {
+        // Resolve the function body to inspect. Three shapes:
+        //   const Foo = (props) => <JSX />              — direct arrow / fn
+        //   const Foo = memo((props) => <JSX />)        — single-HOC wrap
+        //   const Foo = memo(forwardRef((p, r) => ...)) — nested HOC chain
+        // For HOC wrappers, attaching `Foo.__mcp_hooks = [...]` on the outer
+        // binding works because `memo()` / `forwardRef()` return plain JS
+        // objects that React stores in `fiber.type` — the runtime read path
+        // is identical to the bare-component case. The unwrap is name-
+        // agnostic (any Identifier or import-namespaced MemberExpression
+        // callee qualifies), so custom HOCs like `withAuth(...)` work too.
+        let bodyPath: NodePath<BabelTypes.Node> | null = null;
+        if (t.isArrowFunctionExpression(init) || t.isFunctionExpression(init)) {
+          bodyPath = initPathForUnwrap.get('body') as NodePath<BabelTypes.Node>;
+        } else if (t.isCallExpression(init)) {
+          bodyPath = findInnerFunctionBodyPath(initPathForUnwrap, t);
+
+          // Identifier-ref HOC case: `const Foo = memo(InnerFn)`. The inner
+          // arg is a name, not an inline function — so we can't statically
+          // collect hooks here. Instead, install a getter on `Foo` that
+          // forwards to `Inner.__mcp_hooks` at read time.
+          if (!bodyPath && isCapitalized(id.name)) {
+            const inner = findInnerIdentifier(initPathForUnwrap, t);
+            if (inner && inner.scope.getBinding(inner.node.name)) {
+              const stmt = path.getStatementParent();
+              if (stmt) {
+                queueHooksGetter(pluginState, stmt, id.name, inner.node.name);
+              }
+            }
+          }
+        }
+        if (!bodyPath || !bodyPath.node) return;
+
+        // Component: capitalized + (JSX in body OR hook calls). Same
+        // rationale as FunctionDeclaration above — Rules of Hooks pin a
+        // capitalized hook-calling function to "component", so JSX is
+        // sufficient but not necessary (covers `return null` portals).
+        if (isCapitalized(id.name) && (bodyUsesJSX(bodyPath) || bodyCallsHook(bodyPath, t))) {
           const hooks = collectHooksInBody(bodyPath, t);
           const statement = path.getStatementParent();
           if (!statement) return;
-          attachHooksMetadata(statement, id.name, hooks, t);
+          queueHooksAssignment(pluginState, statement, id.name, hooks);
           return;
         }
 
@@ -361,7 +651,7 @@ export default function testIdPlugin({ types: t }: { types: typeof BabelTypes })
           const hooks = collectHooksInBody(bodyPath, t);
           const statement = path.getStatementParent();
           if (!statement) return;
-          attachHooksMetadata(statement, id.name, hooks, t);
+          queueHooksAssignment(pluginState, statement, id.name, hooks);
         }
       },
     },
