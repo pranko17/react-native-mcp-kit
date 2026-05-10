@@ -303,11 +303,11 @@ Inspect and manipulate an `i18next` instance: list keys, dump a whole translatio
 
 ### log_box
 
-Control the React Native LogBox overlay: inspect current rows, dismiss or clear them, add ignore patterns (substring or `/regex/flags`), globally mute. Useful for clearing warning toasts that block automated UI flows. Dev-only — no-op in production.
+Control the React Native LogBox overlay: inspect current rows, dismiss or clear them, add ignore patterns (substring or `/regex/flags`), globally mute. `get_logs` accepts standard `path` / `depth` / `maxBytes` projection args; drill via `path: '[0].stack[0]'` for a specific frame. Useful for clearing warning toasts that block automated UI flows. Dev-only — no-op in production.
 
 ### navigation
 
-Drive React Navigation from outside — navigate, push, pop, replace, reset — and read the current route, nested state, and the last 100 transitions. Current-route responses include a `screen` field identifying the rendering component (`componentName`, `mcpId`, `filePath`, `line`). Needs a `createNavigationContainerRef()` passed to both `<NavigationContainer ref={…}>` and `<McpProvider navigationRef={…}>`.
+Drive React Navigation from outside — navigate, push, pop, replace, reset — and read the current route, nested state, and the last 100 transitions. Current-route responses include a `screen` field identifying the rendering component (`componentName`, `mcpId`, `filePath`, `line`). Listing tools (`get_state`, `get_history`, `get_current_route`, `get_current_route_state`) accept standard `path` / `depth` / `maxBytes` projection args — heavy nested state collapses to markers; drill via `path: 'routes[0].state'`. Needs a `createNavigationContainerRef()` passed to both `<NavigationContainer ref={…}>` and `<McpProvider navigationRef={…}>`.
 
 ### network
 

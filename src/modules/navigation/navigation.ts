@@ -1,10 +1,33 @@
 import { type McpModule } from '@/client/models/types';
 import { findScreenFiberByRouteKey, getComponentName, getFiberRoot } from '@/modules/fiberTree';
-import { applySlice, parseSliceArg, sliceSchemaDescription } from '@/shared/slice';
+import {
+  applyProjection,
+  makeProjectionSchema,
+  projectAsValue,
+  type ProjectionArgs,
+} from '@/shared/projectValue';
 
 import { type NavigationHistoryEntry, type NavigationRef, type NavigationState } from './types';
 
 const MAX_HISTORY = 100;
+
+// `get_state` returns the full nested navigator tree — can be deeply nested.
+// Default depth 2 — top-level expanded, route children collapse to markers.
+const STATE_DEFAULT_DEPTH = 2;
+
+// `get_history` returns { entries: [...], total }. Default depth 4 — outer
+// expanded, entries array expanded, each entry expanded (route/state/timestamp
+// visible), nested state collapses to a marker. Drill via path.
+const HISTORY_DEFAULT_DEPTH = 4;
+
+// `get_current_route` / `get_current_route_state` return a route dict with
+// optional nested state. Default depth 3 — name/params/screen visible,
+// nested state markers; drill if you need deeper.
+const ROUTE_DEFAULT_DEPTH = 3;
+
+const STATE_SCHEMA = makeProjectionSchema(STATE_DEFAULT_DEPTH);
+const HISTORY_SCHEMA = makeProjectionSchema(HISTORY_DEFAULT_DEPTH);
+const ROUTE_SCHEMA = makeProjectionSchema(ROUTE_DEFAULT_DEPTH);
 
 const findFocusedRoute = (state: NavigationState): unknown => {
   const route = state.routes[state.index];
@@ -153,67 +176,74 @@ SCREEN ENRICHMENT
     screen: { componentName, mcpId?, filePath?, line? }
   componentName is the developer's component (RN Navigation wrappers are
   skipped). mcpId / filePath / line come from the first data-mcp-id inside
-  the screen — the rendering site, ready for fiber_tree follow-ups.`,
+  the screen — the rendering site, ready for fiber_tree follow-ups.
+
+PROJECTION
+  get_state / get_history / get_current_route / get_current_route_state
+  accept the standard \`path\` / \`depth\` / \`maxBytes\` projection args.
+  get_state defaults to depth ${STATE_DEFAULT_DEPTH} (top expanded, route children collapsed),
+  get_history to depth ${HISTORY_DEFAULT_DEPTH} (entries' route/state/timestamp visible, nested
+  state collapsed), routes to depth ${ROUTE_DEFAULT_DEPTH}. Drill via path:
+    navigation__get_state({ path: 'routes[0].state' })
+    navigation__get_history({ path: 'entries[-1:][0].state' })`,
     name: 'navigation',
     tools: {
       get_current_route: {
         description:
           'Focused route name, params, and a `screen` field for the rendering component.',
-        handler: () => {
-          return withScreenInfo(navigation.getCurrentRoute() as { key?: unknown } | null);
+        handler: (args) => {
+          const route = withScreenInfo(navigation.getCurrentRoute() as { key?: unknown } | null);
+          return applyProjection(
+            route,
+            args as ProjectionArgs,
+            projectAsValue,
+            ROUTE_DEFAULT_DEPTH
+          );
         },
+        inputSchema: ROUTE_SCHEMA,
       },
       get_current_route_state: {
         description:
           'Full state of the focused route — params, key, nested navigator state, and a `screen` field with rendering component info.',
-        handler: () => {
+        handler: (args) => {
           const rootState = navigation.getRootState() as NavigationState | undefined;
           if (!rootState) return { error: 'No navigation state available' };
-          return withScreenInfo(findFocusedRoute(rootState) as { key?: unknown } | null);
+          const focused = withScreenInfo(findFocusedRoute(rootState) as { key?: unknown } | null);
+          return applyProjection(
+            focused,
+            args as ProjectionArgs,
+            projectAsValue,
+            ROUTE_DEFAULT_DEPTH
+          );
         },
+        inputSchema: ROUTE_SCHEMA,
       },
       get_history: {
         description:
-          'Screen transition log (up to 100 entries, oldest first) with timestamps. Pass full:true for per-entry navigation state.',
+          'Screen transition log (up to 100 entries, oldest first) with timestamps. Each entry carries `route`, full root `state`, `timestamp`. State collapses to a marker by default — drill via path or bump depth.',
         handler: (args) => {
-          const full = (args.full as boolean) ?? false;
-          const slice = parseSliceArg(args.slice) ?? [-50];
-          const entries = applySlice(history, slice);
-
-          if (full) {
-            return { entries, slice, total: history.length };
-          }
-
-          return {
-            entries: entries.map((entry) => {
-              return {
-                key: entry.route.key,
-                name: entry.route.name,
-                params: entry.route.params,
-                timestamp: entry.timestamp,
-              };
-            }),
-            slice,
-            total: history.length,
-          };
+          const result = { entries: history, total: history.length };
+          return applyProjection(
+            result,
+            args as ProjectionArgs,
+            projectAsValue,
+            HISTORY_DEFAULT_DEPTH
+          );
         },
-        inputSchema: {
-          full: {
-            description: 'Include full navigation state per entry (default: false).',
-            type: 'boolean',
-          },
-          slice: {
-            description: sliceSchemaDescription('Default [-50] = the newest fifty transitions.'),
-            examples: [[-10], [-20, -10], [0, 50]],
-            type: 'array',
-          },
-        },
+        inputSchema: HISTORY_SCHEMA,
       },
       get_state: {
         description: 'Full navigation state tree.',
-        handler: () => {
-          return navigation.getRootState();
+        handler: (args) => {
+          const state = navigation.getRootState();
+          return applyProjection(
+            state,
+            args as ProjectionArgs,
+            projectAsValue,
+            STATE_DEFAULT_DEPTH
+          );
         },
+        inputSchema: STATE_SCHEMA,
       },
       go_back: {
         description: 'Go back to the previous screen.',

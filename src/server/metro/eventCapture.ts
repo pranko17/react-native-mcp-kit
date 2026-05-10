@@ -1,7 +1,5 @@
 import WebSocket from 'ws';
 
-import { applySlice, type SliceInput } from '@/shared/slice';
-
 const DEFAULT_BUFFER_LIMIT = 200;
 const RECONNECT_MS = 3_000;
 
@@ -88,7 +86,7 @@ class MetroEventCapture {
     }, RECONNECT_MS);
   }
 
-  getEvents(filter: { since?: number; slice?: SliceInput; type?: string | string[] }): {
+  getEvents(filter: { since?: number; type?: string | string[] }): {
     connected: boolean;
     events: CapturedMetroEvent[];
     lastError: string | null;
@@ -114,7 +112,7 @@ class MetroEventCapture {
     });
     return {
       connected: this.ws?.readyState === WebSocket.OPEN,
-      events: applySlice(filtered, filter.slice),
+      events: filtered,
       lastError: this.lastError,
       total: filtered.length,
     };

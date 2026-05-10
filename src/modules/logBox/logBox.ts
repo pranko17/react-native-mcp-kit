@@ -1,5 +1,16 @@
 import { type McpModule } from '@/client/models/types';
-import { applySlice, parseSliceArg, sliceSchemaDescription } from '@/shared/slice';
+import {
+  applyProjection,
+  makeProjectionSchema,
+  projectAsValue,
+  type ProjectionArgs,
+} from '@/shared/projectValue';
+
+// Default depth 4 — array of rows (1) → row (2) → stack array (3) → frame
+// (4, primitives inline). Long messages auto-wrap in `${str}` markers.
+const LOGBOX_DEFAULT_DEPTH = 4;
+
+const PROJECTION_SCHEMA = makeProjectionSchema(LOGBOX_DEFAULT_DEPTH);
 
 // Minimal shape of a LogBoxLog row, keeping only fields useful to an agent.
 interface SerializedLog {
@@ -79,6 +90,13 @@ Clear warning toasts that block the UI during tests, suppress noisy
 warnings with ignore patterns, or mute LogBox entirely for a test run.
 LogBox is a dev-only surface — in production these tools are no-ops.
 
+\`get_logs\` accepts the standard \`path\` / \`depth\` / \`maxBytes\` projection
+args (default depth ${LOGBOX_DEFAULT_DEPTH} — rows + stack frames expanded; long messages
+auto-wrap in \`\${str}\` markers). Drill via path:
+  log_box__get_logs({ path: '[-3:]' })             // last 3 rows
+  log_box__get_logs({ path: '[0].stack[0]' })      // top frame of first row
+  log_box__get_logs({ path: '[0].message' })       // raw message string
+
 IGNORE PATTERNS
   Strings match as substrings. Wrap in /.../flags to use a RegExp,
   e.g. "/^Warning: /" or "/useNativeDriver/i".
@@ -140,7 +158,7 @@ LEVELS
       },
       get_logs: {
         description:
-          'Current LogBox rows — { index, level, category, message, count, stack? }. Index feeds dismiss. Filter by level + slice; pass includeStack: false to drop the stack array (keep index + message only) when doing a lean overview.',
+          'Current LogBox rows — { index, level, category, message, count, stack? }. Index feeds dismiss. Filter by level; drill via standard `path` / `depth` / `maxBytes`.',
         handler: (args) => {
           let rows = getLogsArray().map((log, i) => {
             return serializeLog(log, i);
@@ -151,31 +169,19 @@ LEVELS
               return r.level === level;
             });
           }
-          rows = applySlice(rows, parseSliceArg(args.slice));
-          if (args.includeStack === false) {
-            rows = rows.map((r) => {
-              const { stack, ...rest } = r;
-              return rest;
-            });
-          }
-          return rows;
+          return applyProjection(
+            rows,
+            args as ProjectionArgs,
+            projectAsValue,
+            LOGBOX_DEFAULT_DEPTH
+          );
         },
         inputSchema: {
-          includeStack: {
-            description: 'Include the structured stack array. Default true.',
-            type: 'boolean',
-          },
+          ...PROJECTION_SCHEMA,
           level: {
             description: 'Filter by level.',
             examples: ['warn', 'error', 'fatal', 'syntax'],
             type: 'string',
-          },
-          slice: {
-            description: sliceSchemaDescription(
-              'Default omitted → every matching row is returned.'
-            ),
-            examples: [[-10], [0, 20]],
-            type: 'array',
           },
         },
       },

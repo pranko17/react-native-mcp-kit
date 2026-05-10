@@ -1,7 +1,19 @@
 import { type HostToolHandler } from '@/server/host/types';
 import { getEventCapture } from '@/server/metro/eventCapture';
 import { resolveMetroUrl } from '@/server/metro/resolveMetroUrl';
-import { parseSliceArg, sliceSchemaDescription } from '@/shared/slice';
+import {
+  applyProjection,
+  makeProjectionSchema,
+  projectAsValue,
+  type ProjectionArgs,
+} from '@/shared/projectValue';
+
+// Default depth 4 — top-level outer ({metroUrl,connected,events,lastError,total})
+// (1) → events array (2) → event (3) → data (4). Heavy event payloads collapse
+// past depth 4 to markers; drill via path.
+const EVENTS_DEFAULT_DEPTH = 4;
+
+const PROJECTION_SCHEMA = makeProjectionSchema(EVENTS_DEFAULT_DEPTH);
 
 export const getEventsTool = (): HostToolHandler => {
   return {
@@ -11,19 +23,24 @@ Metro emits events for the whole bundler lifecycle — \`bundle_build_started\` 
 
 The capture is lazy (connects on first call) and auto-reconnects. Buffer holds the last 200 events. Pass \`since: <msEpoch>\` to get only what arrived after a known checkpoint ("events since right before I edited Foo.tsx"). \`type\` filters to one or several event types.
 
-Each event has \`{ id, receivedAt, type, data }\`; \`data\` is the raw Metro payload minus the \`type\` field.`,
+Each event has \`{ id, receivedAt, type, data }\`; \`data\` is the raw Metro payload minus the \`type\` field. Response goes through the standard \`path\` / \`depth\` / \`maxBytes\` projection (default depth ${EVENTS_DEFAULT_DEPTH}); drill via \`path: 'events[-3:]'\` for the last 3 events, \`path: 'events[-1:][0].data'\` for one specific payload.`,
     handler: async (args, ctx) => {
       const metroUrl = resolveMetroUrl(args, ctx);
       const capture = getEventCapture(metroUrl);
 
       const type = args.type as string | string[] | undefined;
       const since = typeof args.since === 'number' ? args.since : undefined;
-      const slice = parseSliceArg(args.slice) ?? [-50];
 
-      const result = capture.getEvents({ since, slice, type });
-      return { metroUrl, ...result };
+      const result = capture.getEvents({ since, type });
+      return applyProjection(
+        { metroUrl, ...result },
+        args as ProjectionArgs,
+        projectAsValue,
+        EVENTS_DEFAULT_DEPTH
+      );
     },
     inputSchema: {
+      ...PROJECTION_SCHEMA,
       clientId: {
         description:
           'Target client ID — used to pick up the Metro URL the app was loaded from (falls back to `metroUrl` or the hardcoded default).',
@@ -36,11 +53,6 @@ Each event has \`{ id, receivedAt, type, data }\`; \`data\` is the raw Metro pay
       since: {
         description: 'Only return events with `receivedAt >= since` (ms since epoch).',
         type: 'number',
-      },
-      slice: {
-        description: sliceSchemaDescription('Default [-50] = the newest 50.'),
-        examples: [[-10], [-20, -10], [0]],
-        type: 'array',
       },
       type: {
         description:
