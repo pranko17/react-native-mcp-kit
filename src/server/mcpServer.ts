@@ -55,7 +55,7 @@ Gesture tools: \`host${MODULE_SEPARATOR}tap\` / \`host${MODULE_SEPARATOR}long_pr
 
 Stack traces: \`errors${MODULE_SEPARATOR}get_errors\` and \`log_box${MODULE_SEPARATOR}get_logs\` return parsed \`stackFrames\` you can pass straight into \`metro${MODULE_SEPARATOR}symbolicate\` to resolve bundled frames back to source paths via Metro.
 
-Component-local state: \`fiber_tree${MODULE_SEPARATOR}query\` with \`select: ["hooks"]\` reads a component's hook list — useState / useMemo / useRef / useEffect / custom hooks — with variable names recovered from source. Each entry carries \`{ kind, name, hook?, via?, expanded? }\`; pass \`hooksInclude: { withValues: true }\` for resolved values, \`format: "tree"\` for nested children, \`expansionDepth: N\` to cap recursion depth. Sensitive names (password, token, jwt, secret, credential, apiKey, authorization, Pin suffix) are auto-redacted; configure via \`fiberTreeModule({ redactHookNames, additionalRedactHookNames })\`.
+Component-local state: \`fiber_tree${MODULE_SEPARATOR}query\` with \`select: ["hooks"]\` reads a component's hook list — useState / useMemo / useRef / useEffect / custom hooks — with variable names recovered from source. Each entry carries \`{ kind, name, hook?, via?, expanded? }\`; configure extraction via the nested form \`select: [{ hooks: { withValues: true, format: "tree", expansionDepth: 1, kinds: [...], names: [...] } }]\`. Sensitive names (password, token, jwt, secret, credential, apiKey, authorization, Pin suffix) are auto-redacted; configure via \`fiberTreeModule({ redactHookNames, additionalRedactHookNames })\`.
 `;
 
 type TextContent = { text: string; type: 'text' };

@@ -603,6 +603,90 @@ const extractHooks = (
   return filter.format === 'tree' ? flatHooksToTree(out) : out;
 };
 
+interface HooksOptions {
+  expansionDepth: number;
+  format: 'flat' | 'tree';
+  kindsSet: Set<string> | null;
+  maxDepth: number;
+  nameMatchers: ReturnType<typeof parseNamePattern>[] | null;
+  withValues: boolean;
+}
+
+interface Projection {
+  fields: Set<string>;
+  hooks: HooksOptions;
+  propsPick: Set<string> | null;
+}
+
+interface HooksRawOptions {
+  expansionDepth?: number;
+  format?: 'flat' | 'tree';
+  kinds?: string[];
+  maxDepthInValues?: number;
+  names?: string[];
+  withValues?: boolean;
+}
+
+const buildHooksOptions = (raw: HooksRawOptions | undefined): HooksOptions => {
+  return {
+    expansionDepth:
+      typeof raw?.expansionDepth === 'number' && raw.expansionDepth >= 0
+        ? Math.floor(raw.expansionDepth)
+        : Infinity,
+    format: raw?.format === 'tree' ? 'tree' : 'flat',
+    kindsSet: Array.isArray(raw?.kinds) ? new Set(raw.kinds) : null,
+    maxDepth:
+      typeof raw?.maxDepthInValues === 'number' && raw.maxDepthInValues >= 0
+        ? Math.min(Math.floor(raw.maxDepthInValues), 8)
+        : HOOK_DEFAULT_MAX_DEPTH,
+    nameMatchers: Array.isArray(raw?.names) ? raw.names.map(parseNamePattern) : null,
+    withValues: raw?.withValues === true,
+  };
+};
+
+/**
+ * Parse the `select` arg into a flat Projection. Each element of `select` may
+ * be either a string (include the named field with default options) or an
+ * object whose keys are field names and whose values are `true` / `false` /
+ * per-field options. Per-field options currently understood:
+ * `props: { pick: string[] }`, `hooks: HooksRawOptions`. Other fields ignore
+ * their value beyond truthiness.
+ */
+const parseProjection = (selectArg: unknown): Projection => {
+  const fields = new Set<string>();
+  let propsPick: Set<string> | null = null;
+  let hooksRaw: HooksRawOptions | undefined;
+
+  if (Array.isArray(selectArg)) {
+    for (const entry of selectArg) {
+      if (typeof entry === 'string') {
+        fields.add(entry);
+        continue;
+      }
+      if (entry && typeof entry === 'object') {
+        for (const [key, value] of Object.entries(entry as Record<string, unknown>)) {
+          if (value === false) continue;
+          fields.add(key);
+          if (key === 'props' && value && typeof value === 'object') {
+            const pick = (value as { pick?: unknown }).pick;
+            if (Array.isArray(pick)) {
+              propsPick = new Set(pick.filter((k): k is string => typeof k === 'string'));
+            }
+          } else if (key === 'hooks' && value && typeof value === 'object') {
+            hooksRaw = value as HooksRawOptions;
+          }
+        }
+      }
+    }
+  }
+
+  if (fields.size === 0) {
+    for (const f of QUERY_DEFAULT_FIELDS) fields.add(f);
+  }
+
+  return { fields, hooks: buildHooksOptions(hooksRaw), propsPick };
+};
+
 const FIND_SCHEMA = {
   index: {
     description: '0-based index when several components match (default: 0).',
@@ -960,11 +1044,13 @@ SELECT (output fields)
   bounds: { x, y, width, height, centerX, centerY } in PHYSICAL pixels,
   top-left origin. null when the fiber has no mounted host view. centerX/
   centerY feed straight into host__tap.
-  props: full serialized props (heavy). Pair with propsInclude:
-  ["key1","key2"] to keep only the props you actually need and avoid
-  pulling large style maps, data arrays, or nested element trees.
+  props: full serialized props (heavy). Use the nested form
+  \`{ props: { pick: ["key1","key2"] } }\` to keep only the props you
+  actually need and avoid pulling large style maps, data arrays, or
+  nested element trees.
   hooks: the component's hooks. Each entry { kind, name, hook?, via?,
-  expanded?, value? }; configure via hooksInclude.
+  expanded?, value? }; configure via the nested form
+  \`{ hooks: { kinds, names, withValues, maxDepthInValues, expansionDepth, format } }\`.
 
 RESPONSE
   { matches: [...], total, truncated? } — total is the unrestricted match
@@ -1222,43 +1308,8 @@ TIPS
           const dedup = args.dedup !== false;
           const useCacheDefault = args.cache !== false;
           const onlyVisible = args.onlyVisible === true;
-          const fields = new Set(
-            Array.isArray(args.select) ? (args.select as string[]) : QUERY_DEFAULT_FIELDS
-          );
-          const propsInclude = Array.isArray(args.propsInclude)
-            ? new Set(args.propsInclude as string[])
-            : null;
-
-          const hooksIncludeRaw = args.hooksInclude as
-            | {
-                expansionDepth?: number;
-                format?: 'flat' | 'tree';
-                kinds?: string[];
-                maxDepthInValues?: number;
-                names?: string[];
-                withValues?: boolean;
-              }
-            | undefined;
-          const hookKindsSet =
-            hooksIncludeRaw && Array.isArray(hooksIncludeRaw.kinds)
-              ? new Set(hooksIncludeRaw.kinds)
-              : null;
-          const hookNameMatchers =
-            hooksIncludeRaw && Array.isArray(hooksIncludeRaw.names)
-              ? hooksIncludeRaw.names.map(parseNamePattern)
-              : null;
-          const hookWithValues = hooksIncludeRaw?.withValues === true;
-          const hookMaxDepth =
-            typeof hooksIncludeRaw?.maxDepthInValues === 'number' &&
-            hooksIncludeRaw.maxDepthInValues >= 0
-              ? Math.min(Math.floor(hooksIncludeRaw.maxDepthInValues), 8)
-              : HOOK_DEFAULT_MAX_DEPTH;
-          const hookExpansionDepth =
-            typeof hooksIncludeRaw?.expansionDepth === 'number' &&
-            hooksIncludeRaw.expansionDepth >= 0
-              ? Math.floor(hooksIncludeRaw.expansionDepth)
-              : Infinity;
-          const hookFormat: 'flat' | 'tree' = hooksIncludeRaw?.format === 'tree' ? 'tree' : 'flat';
+          const projection = parseProjection(args.select);
+          const { fields, hooks: hookOpts, propsPick } = projection;
 
           const runtime: QueryRuntime = { navigationRef, root };
 
@@ -1313,9 +1364,9 @@ TIPS
                 }
                 if (fields.has('props')) {
                   const full = serializeProps(fiber.memoizedProps);
-                  if (propsInclude) {
+                  if (propsPick) {
                     const filtered: Record<string, unknown> = {};
-                    for (const key of propsInclude) {
+                    for (const key of propsPick) {
                       if (key in full) filtered[key] = full[key];
                     }
                     result.props = filtered;
@@ -1328,13 +1379,8 @@ TIPS
                 }
                 if (fields.has('hooks')) {
                   result.hooks = extractHooks(fiber, {
-                    expansionDepth: hookExpansionDepth,
-                    format: hookFormat,
-                    kindsSet: hookKindsSet,
-                    maxDepth: hookMaxDepth,
-                    nameMatchers: hookNameMatchers,
+                    ...hookOpts,
                     redactPatterns,
-                    withValues: hookWithValues,
                   });
                 }
                 return result;
@@ -1441,19 +1487,6 @@ TIPS
               'Drop wrapper cascades — a fiber is removed when any of its ancestors is also in the match set (PressableView → Pressable → View → RCTView collapses to the topmost). Independent siblings with overlapping bounds are kept. Default true; pass false to keep every match.',
             type: 'boolean',
           },
-          hooksInclude: {
-            description:
-              'When select includes "hooks": `kinds` (State | Reducer | Memo | Callback | Ref | Effect | LayoutEffect | InsertionEffect | Context | Transition | DeferredValue | Id | SyncExternalStore | ImperativeHandle | Custom) and `names` (exact or `/regex/flags`) filter the list. Each entry carries { kind, name, hook?, via?, expanded? } — `hook` is the source-level hook function (`useState`, `useAnimatedStyle`); `expanded: true` marks a parent custom-hook call whose sub-hooks follow. Pass `withValues: true` for resolved values. `maxDepthInValues` caps value recursion (default 3, max 8). `expansionDepth` caps how deep custom hooks recurse — 0 = no expansion (top-level only), 1 = one level, default Infinity. `format: "tree"` returns nested `children:` instead of flat `via:`.',
-            examples: [
-              { kinds: ['State', 'Memo'] },
-              { names: ['count', 'scrollRef'], withValues: true },
-              { kinds: ['State'], names: ['/^is/'], withValues: true },
-              { expansionDepth: 0 },
-              { format: 'tree', withValues: true },
-              { expansionDepth: 1, format: 'tree' },
-            ],
-            type: 'object',
-          },
           limit: {
             description: `Max matches to return (default ${QUERY_LIMIT_DEFAULT}, max ${QUERY_LIMIT_MAX}). truncated: true is added when total exceeds limit.`,
             type: 'number',
@@ -1463,21 +1496,14 @@ TIPS
               'Drop matches whose measured bounds do not intersect the current window rectangle (physical pixels). Also drops fibers with no measurable host view — usually virtualized or unmounted. Halves results on long lists.',
             type: 'boolean',
           },
-          propsInclude: {
-            description:
-              'When select includes "props", keep only these prop names. Unknown keys are silently dropped. Omit for full serialization.',
-            examples: [
-              ['placeholder', 'value'],
-              ['title', 'disabled'],
-            ],
-            type: 'array',
-          },
           select: {
-            description: `Output fields: mcpId, name, testID, props, bounds, hooks. Default ${JSON.stringify(QUERY_DEFAULT_FIELDS)}.`,
+            description: `Output fields: mcpId, name, testID, props, bounds, hooks. Default ${JSON.stringify(QUERY_DEFAULT_FIELDS)}. Each entry is either a string (\`"mcpId"\` — include the field with defaults) or an object whose keys are field names. Object values are \`true\` (include with defaults), \`false\` (exclude), or per-field options. Per-field options: \`props: { pick: string[] }\` keeps only the listed prop names (unknown keys silently dropped); \`hooks: { kinds?, names?, withValues?, maxDepthInValues?, expansionDepth?, format? }\` configures hook extraction. \`hooks.kinds\` filters by kind (State | Reducer | Memo | Callback | Ref | Effect | LayoutEffect | InsertionEffect | Context | Transition | DeferredValue | Id | SyncExternalStore | ImperativeHandle | Custom). \`hooks.names\` filters by name (exact or \`/regex/flags\`). Each hook entry carries \`{ kind, name, hook?, via?, expanded? }\` — \`hook\` is the source-level hook function (\`useState\`, \`useAnimatedStyle\`); \`expanded: true\` marks a parent custom-hook call whose sub-hooks follow. \`hooks.withValues: true\` adds resolved values. \`hooks.maxDepthInValues\` caps value recursion (default 3, max 8). \`hooks.expansionDepth\` caps custom-hook recursion — \`0\` = no expansion (top-level only), \`1\` = one level, default \`Infinity\`. \`hooks.format: "tree"\` returns nested \`children:\` instead of flat \`via:\`.`,
             examples: [
               ['mcpId', 'name', 'bounds'],
-              ['mcpId', 'name', 'props'],
-              ['mcpId', 'hooks'],
+              ['mcpId', { props: { pick: ['placeholder', 'value'] } }],
+              [{ hooks: { kinds: ['State'], withValues: true }, mcpId: true }],
+              [{ hooks: { expansionDepth: 1, format: 'tree', withValues: true }, mcpId: true }],
+              [{ hooks: { names: ['/^is/'], withValues: true }, mcpId: true }],
             ],
             type: 'array',
           },
