@@ -120,7 +120,7 @@ const typeTextAndroid = async (
   if (NON_ASCII_RE.test(text)) {
     return {
       error:
-        'Android type_text only supports ASCII — `adb shell input text` has no code path for non-ASCII characters. Workarounds: tap the target field then drive the content some other way (e.g. fiber_tree__invoke on onChangeText), or paste from the device clipboard via a helper app.',
+        'Android type_text only supports ASCII — `adb shell input text` has no code path for non-ASCII characters. Workarounds: tap the target field then drive the content some other way (e.g. fiber_tree__call on onChangeText), or paste from the device clipboard via a helper app.',
     };
   }
 
@@ -284,7 +284,7 @@ export const swipeTool = (runner: ProcessRunner): HostToolHandler => {
 export const typeTextTool = (runner: ProcessRunner): HostToolHandler => {
   return {
     description:
-      "Primary way to type into the currently focused text input — replaces existing content (select-all then paste). submit:true presses ENTER after typing. iOS: unicode via clipboard paste, keyboard-layout immune. Android: ASCII only (adb input text limitation); for non-Latin scripts fall back to fiber_tree__invoke on the input's onChangeText.",
+      "Primary way to type into the currently focused text input — replaces existing content (select-all then paste). submit:true presses ENTER after typing. iOS: unicode via clipboard paste, keyboard-layout immune. Android: ASCII only (adb input text limitation); for non-Latin scripts fall back to fiber_tree__call on the input's onChangeText.",
     handler: async (args, ctx) => {
       const resolved = await resolveDevice(ctx, parseResolveOptions(args), runner);
       if (!resolved.ok) {

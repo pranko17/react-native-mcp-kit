@@ -1316,8 +1316,8 @@ SCOPES (query steps)
       screen fiber. Available when the library was initialized with a
       navigationRef. Lets a first step skip "find current screen first".
     · nearest_host — walks down to the first mounted HOST_COMPONENT
-      fiber. Useful before call_ref (focus/blur/measure) which require
-      a host instance.
+      fiber. Useful before \`call({ method })\` (focus/blur/measure)
+      which requires a host instance.
 
 STEP CRITERIA
   name / mcpId / testID — strict equality.
@@ -1344,7 +1344,7 @@ SELECT (output fields)
   refMethods: list of native-ref method names (focus, blur, measure,
   scrollTo, ...) available on the fiber's host instance. null when
   there is no native instance (composite wrapper, unmounted,
-  virtualized). Feeds directly into fiber_tree__call_ref.
+  virtualized). Feeds directly into fiber_tree__call({ method }).
   props: per-field projection — \`{ props: { path?, depth?, maxBytes? } }\`.
   hooks: filtered + projected — \`{ hooks: { kinds?, names?, withValues?,
   expansionDepth?, format?, path?, depth?, maxBytes? } }\`. Each entry
@@ -1371,9 +1371,9 @@ RESPONSE
 
 TIPS
   mcpId format "ComponentName:file:line" — stable across renders.
-  Use query to locate, then invoke (bypasses gesture pipeline) or host__tap
-  with bounds (real OS touch) to act. For one-shot real taps, tap_fiber
-  collapses both steps into a single call.
+  Use query to locate, then call({ prop } or { method }) (bypasses gesture
+  pipeline) or host__tap with bounds (real OS touch) to act. For one-shot
+  real taps, tap_fiber collapses both steps into a single call.
   When stepping up via scope: "ancestors", prefer filtering by name (or
   testID/mcpId) over guessing an index — ancestors count is brittle and
   varies across RN versions.
@@ -1382,9 +1382,9 @@ TIPS
   { contains: "Search" } }\`.`,
     name: 'fiber_tree',
     tools: {
-      call_ref: {
+      call: {
         description:
-          "Call a method on a component's native ref (focus, blur, measure, …). Use `query` with `select: ['refMethods']` first to see what's available on the target fiber.",
+          "Imperative action on a fiber — invoke a prop callback OR a native-ref method. Pass `prop: 'onPress'` to call a callback prop, or `method: 'focus'` to call a method on the host instance's native ref. For simulating user taps, prefer `host__tap_fiber` — it goes through the real OS gesture pipeline so Pressable feedback / gesture responders / hit-test all behave as under a real finger. `call` is for non-gesture callbacks, off-screen / virtualised components, or imperative ref methods (focus / blur / measure / scrollTo / ...). Use `query` with `select: ['refMethods']` first to see what methods are available on a fiber.",
         handler: (args) => {
           const rootError = requireRoot();
           if (rootError) return rootError;
@@ -1392,32 +1392,54 @@ TIPS
           const fiber = findComponent(args);
           if (!fiber) return { error: 'Component not found' };
 
+          const propName = typeof args.prop === 'string' ? args.prop : undefined;
+          const methodName = typeof args.method === 'string' ? args.method : undefined;
+
+          if ((propName && methodName) || (!propName && !methodName)) {
+            return {
+              error:
+                'call requires exactly one of `prop` (callback name) or `method` (ref method name).',
+            };
+          }
+
+          const callArgs = (args.args as unknown[] | undefined) ?? [];
+
+          // Prop-callback path: read prop from memoizedProps, call directly.
+          if (propName) {
+            const callback = fiber.memoizedProps?.[propName];
+            if (typeof callback !== 'function') {
+              const availableProps = Object.keys(fiber.memoizedProps ?? {}).filter((key) => {
+                return typeof fiber.memoizedProps[key] === 'function';
+              });
+              return {
+                availableProps,
+                error: `Component "${getComponentName(fiber)}" has no "${propName}" callback prop`,
+              };
+            }
+            const result = callback(...callArgs);
+            return applyProjection(
+              { component: getComponentName(fiber), prop: propName, result, success: true },
+              args as ProjectionArgs
+            );
+          }
+
+          // Ref-method path: resolve native instance, call method on it.
           const instance = getNativeInstance(fiber);
           if (!instance) {
             return { error: `Component "${getComponentName(fiber)}" has no native instance` };
           }
-
-          const methodName = args.method as string;
-          const methodArgs = args.args as unknown[] | undefined;
-          const method = (instance as Record<string, unknown>)[methodName];
-
+          const method = (instance as Record<string, unknown>)[methodName!];
           if (typeof method !== 'function') {
             return {
               availableMethods: getAvailableMethods(instance),
-              error: `No method "${methodName}" on native instance`,
+              error: `No method "${methodName}" on native instance of "${getComponentName(fiber)}"`,
             };
           }
-
           try {
             const bound = (method as (...a: unknown[]) => unknown).bind(instance);
-            const result = bound(...(methodArgs ?? []));
+            const result = bound(...callArgs);
             return applyProjection(
-              {
-                component: getComponentName(fiber),
-                method: methodName,
-                result,
-                success: true,
-              },
+              { component: getComponentName(fiber), method: methodName, result, success: true },
               args as ProjectionArgs
             );
           } catch (e) {
@@ -1429,55 +1451,19 @@ TIPS
         inputSchema: {
           ...FIND_SCHEMA,
           ...PROJECTION_SCHEMA,
-          args: { description: 'Arguments passed to the method.', type: 'array' },
-          method: {
-            description: 'Method name to call.',
-            examples: ['focus', 'blur', 'measure'],
-            type: 'string',
-          },
-        },
-      },
-      invoke: {
-        description:
-          "Call a prop's callback function directly from JS. For simulating a user tap, prefer host__tap_fiber — it runs the real OS gesture pipeline so Pressable feedback, gesture responders, and hit-test behave as under a real finger. invoke still works for any callback when you specifically want the JS-only path (component off-screen, skipping the gesture recognizer, or driving a non-gesture prop), but it is not the default for user-behavior simulation.",
-        handler: (args) => {
-          const rootError = requireRoot();
-          if (rootError) return rootError;
-
-          const fiber = findComponent(args);
-          if (!fiber) return { error: 'Component not found' };
-
-          const callbackName = args.callback as string;
-          const callbackArgs = args.args as unknown[] | undefined;
-          const callback = fiber.memoizedProps?.[callbackName];
-
-          if (typeof callback !== 'function') {
-            const availableCallbacks = Object.keys(fiber.memoizedProps ?? {}).filter((key) => {
-              return typeof fiber.memoizedProps[key] === 'function';
-            });
-            return {
-              availableCallbacks,
-              error: `Component "${getComponentName(fiber)}" has no "${callbackName}" callback`,
-            };
-          }
-
-          const result = callback(...(callbackArgs ?? []));
-          return applyProjection(
-            { component: getComponentName(fiber), result, success: true },
-            args as ProjectionArgs
-          );
-        },
-        inputSchema: {
-          ...FIND_SCHEMA,
-          ...PROJECTION_SCHEMA,
           args: {
-            description: 'Arguments passed to the callback.',
+            description: 'Arguments passed to the callback / method.',
             examples: [[true], ['text']],
             type: 'array',
           },
-          callback: {
-            description: 'Callback prop name.',
-            examples: ['onSkip', 'onUpdate', 'onCompleted'],
+          method: {
+            description: 'Native-ref method name. Mutually exclusive with `prop`.',
+            examples: ['focus', 'blur', 'measure', 'scrollTo'],
+            type: 'string',
+          },
+          prop: {
+            description: 'Callback prop name. Mutually exclusive with `method`.',
+            examples: ['onPress', 'onSkip', 'onChangeText'],
             type: 'string',
           },
         },
@@ -1585,7 +1571,7 @@ TIPS
                     // host instance (focus, blur, measure, scrollTo, ...).
                     // null when the fiber has no native instance (composite
                     // wrappers, unmounted, virtualized). Feeds directly into
-                    // `fiber_tree__call_ref`.
+                    // `fiber_tree__call({ method })`.
                     const instance = getNativeInstance(fiber);
                     result.refMethods = instance ? getAvailableMethods(instance) : null;
                   }
@@ -1730,7 +1716,7 @@ TIPS
             type: 'boolean',
           },
           select: {
-            description: `Output fields: mcpId, name, testID, props, bounds, hooks, refMethods, children. Default ${JSON.stringify(QUERY_DEFAULT_FIELDS)}. Each entry is either a string ("mcpId" — include with defaults) or an object whose keys are field names. Object values are \`true\` / \`false\` / per-field options.\n\nLight fields (mcpId, name, testID, bounds, refMethods) — no options, just toggle. refMethods is the list of native-ref methods (focus, blur, measure, scrollTo, ...) available on the fiber's host instance; null when the fiber has no native instance. Feeds directly into \`fiber_tree__call_ref\`.\n\nHeavy fields (props, hooks) — per-field projection via shared \`projectValue\` so nested heavy values become \`\${...}\`-keyed markers. Each takes its own \`path\` / \`depth\` / \`maxBytes\`.\n\nprops options: \`{ path?, depth?, maxBytes? }\`.\n\nhooks options: \`{ kinds?, names?, withValues?, expansionDepth?, format?, path?, depth?, maxBytes? }\`. \`kinds\`: State | Reducer | Memo | Callback | Ref | Effect | LayoutEffect | InsertionEffect | Context | Transition | DeferredValue | Id | SyncExternalStore | ImperativeHandle | Custom. \`names\`: exact or \`/regex/flags\`. \`withValues:true\` adds resolved values. \`expansionDepth\` caps custom-hook recursion (default Infinity). \`format:"tree"\` returns nested children instead of flat \`via\`.\n\nchildren — recursive light-only walker for tree-of-tree dumps.\n  Short form: \`{ children: 5 }\` → treeDepth=5, default fields ['mcpId','name'].\n  Object form: \`{ children: { treeDepth?, select?, itemsCap? } }\`.\n  treeDepth max 16; itemsCap default 50; overflow inserts \`\${truncated}\` as the first item.\n  select inside children may include only mcpId / name / testID / bounds / nested children. props/hooks throw at parse time — run a second query against a child's mcpId to inspect them.\n\nEach hook entry carries \`{ kind, name, hook?, via?, expanded? }\`.`,
+            description: `Output fields: mcpId, name, testID, props, bounds, hooks, refMethods, children. Default ${JSON.stringify(QUERY_DEFAULT_FIELDS)}. Each entry is either a string ("mcpId" — include with defaults) or an object whose keys are field names. Object values are \`true\` / \`false\` / per-field options.\n\nLight fields (mcpId, name, testID, bounds, refMethods) — no options, just toggle. refMethods is the list of native-ref methods (focus, blur, measure, scrollTo, ...) available on the fiber's host instance; null when the fiber has no native instance. Feeds directly into \`fiber_tree__call({ method })\`.\n\nHeavy fields (props, hooks) — per-field projection via shared \`projectValue\` so nested heavy values become \`\${...}\`-keyed markers. Each takes its own \`path\` / \`depth\` / \`maxBytes\`.\n\nprops options: \`{ path?, depth?, maxBytes? }\`.\n\nhooks options: \`{ kinds?, names?, withValues?, expansionDepth?, format?, path?, depth?, maxBytes? }\`. \`kinds\`: State | Reducer | Memo | Callback | Ref | Effect | LayoutEffect | InsertionEffect | Context | Transition | DeferredValue | Id | SyncExternalStore | ImperativeHandle | Custom. \`names\`: exact or \`/regex/flags\`. \`withValues:true\` adds resolved values. \`expansionDepth\` caps custom-hook recursion (default Infinity). \`format:"tree"\` returns nested children instead of flat \`via\`.\n\nchildren — recursive light-only walker for tree-of-tree dumps.\n  Short form: \`{ children: 5 }\` → treeDepth=5, default fields ['mcpId','name'].\n  Object form: \`{ children: { treeDepth?, select?, itemsCap? } }\`.\n  treeDepth max 16; itemsCap default 50; overflow inserts \`\${truncated}\` as the first item.\n  select inside children may include only mcpId / name / testID / bounds / nested children. props/hooks throw at parse time — run a second query against a child's mcpId to inspect them.\n\nEach hook entry carries \`{ kind, name, hook?, via?, expanded? }\`.`,
             examples: [
               ['mcpId', 'name', 'bounds'],
               ['mcpId', 'refMethods'],
