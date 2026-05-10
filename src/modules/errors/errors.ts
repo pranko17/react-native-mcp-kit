@@ -216,16 +216,6 @@ errorsModule options.`,
           },
         },
       },
-      get_fatal: {
-        description: 'Fatal errors only.',
-        handler: (args) => {
-          const result = buffer.filter((e) => {
-            return e.isFatal;
-          });
-          return project(result, args as ProjectionArgs);
-        },
-        inputSchema: PROJECTION_SCHEMA,
-      },
       get_stats: {
         description: 'Error counts — total, by source, fatal.',
         handler: () => {

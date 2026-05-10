@@ -125,54 +125,21 @@ consoleModule options.`,
           return { success: true };
         },
       },
-      get_debug: {
-        description: 'Return console.debug entries.',
-        handler: (args) => {
-          return project(filterByLevel('debug'), args as ProjectionArgs);
-        },
-        inputSchema: PROJECTION_SCHEMA,
-      },
-      get_errors: {
-        description: 'Return console.error entries.',
-        handler: (args) => {
-          return project(filterByLevel('error'), args as ProjectionArgs);
-        },
-        inputSchema: PROJECTION_SCHEMA,
-      },
-      get_info: {
-        description: 'Return console.info entries.',
-        handler: (args) => {
-          return project(filterByLevel('info'), args as ProjectionArgs);
-        },
-        inputSchema: PROJECTION_SCHEMA,
-      },
       get_logs: {
-        description: 'Return all log entries, optionally filtered by level.',
+        description: 'Return log entries, optionally filtered by level.',
         handler: (args) => {
-          let result: LogEntry[] = buffer;
-          if (args.level) {
-            const lvl = args.level as LogLevel;
-            result = result.filter((entry) => {
-              return entry.level === lvl;
-            });
-          }
+          const level = typeof args.level === 'string' ? (args.level as LogLevel) : undefined;
+          const result = level ? filterByLevel(level) : buffer;
           return project(result, args as ProjectionArgs);
         },
         inputSchema: {
           ...PROJECTION_SCHEMA,
           level: {
-            description: 'Filter by level.',
+            description: 'Filter by level. Omit for all levels.',
             examples: ['log', 'warn', 'error', 'info', 'debug'],
             type: 'string',
           },
         },
-      },
-      get_warnings: {
-        description: 'Return console.warn entries.',
-        handler: (args) => {
-          return project(filterByLevel('warn'), args as ProjectionArgs);
-        },
-        inputSchema: PROJECTION_SCHEMA,
       },
     },
   };

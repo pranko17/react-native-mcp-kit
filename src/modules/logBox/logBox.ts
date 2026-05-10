@@ -97,36 +97,36 @@ IGNORE PATTERNS
   e.g. "/^Warning: /" or "/useNativeDriver/i".
 
 LEVELS
-  warn / error / fatal / syntax — use clear_warnings / clear_errors /
-  clear_syntax_errors for surgical cleanup, or clear for all.`,
+  warn / error / fatal / syntax — clear({ level }) for surgical cleanup,
+  or clear() for all.`,
     name: 'log_box',
     tools: {
       clear: {
-        description: 'Clear every LogBox row.',
-        handler: () => {
-          getLogBox()?.clearAllLogs?.();
-          return { cleared: true };
+        description:
+          'Clear LogBox rows. Pass `level: "warn"` / `"error"` / `"syntax"` for surgical cleanup; omit `level` (or pass `"all"`) to clear every row.',
+        handler: (args) => {
+          const level = typeof args.level === 'string' ? args.level : undefined;
+          const data = getLogBoxData();
+          if (!level || level === 'all') {
+            getLogBox()?.clearAllLogs?.();
+          } else if (level === 'warn') {
+            data?.clearWarnings?.();
+          } else if (level === 'error') {
+            data?.clearErrors?.();
+          } else if (level === 'syntax') {
+            data?.clearSyntaxErrors?.();
+          } else {
+            return { error: `Unknown level "${level}". Use "warn" / "error" / "syntax" / "all".` };
+          }
+          return { cleared: true, level: level ?? 'all' };
         },
-      },
-      clear_errors: {
-        description: 'Clear rows with level=error.',
-        handler: () => {
-          getLogBoxData()?.clearErrors?.();
-          return { cleared: true };
-        },
-      },
-      clear_syntax_errors: {
-        description: 'Clear rows with level=syntax.',
-        handler: () => {
-          getLogBoxData()?.clearSyntaxErrors?.();
-          return { cleared: true };
-        },
-      },
-      clear_warnings: {
-        description: 'Clear rows with level=warn.',
-        handler: () => {
-          getLogBoxData()?.clearWarnings?.();
-          return { cleared: true };
+        inputSchema: {
+          level: {
+            description:
+              'Optional level filter. Omit (or pass "all") to clear every row. Accepts "warn" / "error" / "syntax".',
+            examples: ['all', 'warn', 'error', 'syntax'],
+            type: 'string',
+          },
         },
       },
       dismiss: {
@@ -218,11 +218,24 @@ LEVELS
           },
         },
       },
-      install: {
-        description: 'Install (enable) LogBox. No-op if already installed.',
-        handler: () => {
-          getLogBox()?.install?.();
-          return { installed: true };
+      set_installed: {
+        description:
+          'Install (`enabled: true`) or uninstall (`enabled: false`) LogBox globally. When uninstalled, warnings still log to console but the overlay is disabled. No-op when the requested state already holds.',
+        handler: (args) => {
+          const enabled = args.enabled === true;
+          const LogBox = getLogBox();
+          if (enabled) {
+            LogBox?.install?.();
+          } else {
+            LogBox?.uninstall?.();
+          }
+          return { installed: enabled };
+        },
+        inputSchema: {
+          enabled: {
+            description: 'true → install (enable); false → uninstall (disable).',
+            type: 'boolean',
+          },
         },
       },
       status: {
@@ -238,13 +251,6 @@ LEVELS
             installed: LogBox?.isInstalled?.() ?? null,
             logCount: getLogsArray().length,
           };
-        },
-      },
-      uninstall: {
-        description: 'Uninstall (disable) LogBox globally. Warnings still log to console.',
-        handler: () => {
-          getLogBox()?.uninstall?.();
-          return { installed: false };
         },
       },
     },

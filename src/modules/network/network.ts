@@ -396,40 +396,6 @@ redaction lists are configurable via networkModule options.`,
           return { success: true };
         },
       },
-      get_errors: {
-        description: 'Failed requests only (non-2xx or network errors).',
-        handler: (args) => {
-          const result = buffer.filter((e) => {
-            return e.status === 'error';
-          });
-          return project(result, args as ProjectionArgs);
-        },
-        inputSchema: PROJECTION_SCHEMA,
-      },
-      get_pending: {
-        description: 'In-flight requests.',
-        handler: (args) => {
-          const result = buffer.filter((e) => {
-            return e.status === 'pending';
-          });
-          return project(result, args as ProjectionArgs);
-        },
-        inputSchema: PROJECTION_SCHEMA,
-      },
-      get_request: {
-        description: 'Requests whose URL contains the given substring.',
-        handler: (args) => {
-          const urlFilter = args.url as string;
-          const result = buffer.filter((e) => {
-            return e.url.includes(urlFilter);
-          });
-          return project(result, args as ProjectionArgs);
-        },
-        inputSchema: {
-          ...PROJECTION_SCHEMA,
-          url: { description: 'URL substring.', type: 'string' },
-        },
-      },
       get_requests: {
         description: 'All captured requests; filterable by method / status / URL substring.',
         handler: (args) => {

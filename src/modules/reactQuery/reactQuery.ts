@@ -151,62 +151,40 @@ Both accept path / depth / maxBytes.`,
           return { byFetchStatus, byStatus, total: queries.length };
         },
       },
-      invalidate: {
-        description: 'Mark queries stale (will refetch on next use). Omit key for all.',
+      mutate: {
+        description:
+          'Mutate the cache: `invalidate` marks queries stale (refetches on next use); `refetch` refetches immediately; `remove` drops queries entirely; `reset` clears data + error back to initial state. Omit `key` to target every cached query.',
         handler: async (args) => {
+          const action = typeof args.action === 'string' ? args.action : undefined;
           const filters = args.key ? { queryKey: parseKey(args.key as string) } : undefined;
-          await queryClient.invalidateQueries(filters);
-          return { success: true };
+          switch (action) {
+            case 'invalidate':
+              await queryClient.invalidateQueries(filters);
+              return { action, success: true };
+            case 'refetch':
+              await queryClient.refetchQueries(filters);
+              return { action, success: true };
+            case 'remove':
+              queryClient.removeQueries(filters);
+              return { action, success: true };
+            case 'reset':
+              await queryClient.resetQueries(filters);
+              return { action, success: true };
+            default:
+              return {
+                error: `mutate.action must be one of "invalidate" / "refetch" / "remove" / "reset", got ${action ?? '(missing)'}.`,
+              };
+          }
         },
         inputSchema: {
-          key: {
-            description: 'Query key (JSON string). Omit to invalidate all.',
-            examples: ['["users"]'],
+          action: {
+            description: 'Mutation kind to perform on the cache.',
+            enum: ['invalidate', 'refetch', 'remove', 'reset'],
             type: 'string',
           },
-        },
-      },
-      refetch: {
-        description: 'Refetch queries immediately. Omit key for all.',
-        handler: async (args) => {
-          const filters = args.key ? { queryKey: parseKey(args.key as string) } : undefined;
-          await queryClient.refetchQueries(filters);
-          return { success: true };
-        },
-        inputSchema: {
           key: {
-            description: 'Query key (JSON string). Omit to refetch all.',
-            examples: ['["users"]'],
-            type: 'string',
-          },
-        },
-      },
-      remove: {
-        description: 'Remove queries from cache entirely. Omit key for all.',
-        handler: (args) => {
-          const filters = args.key ? { queryKey: parseKey(args.key as string) } : undefined;
-          queryClient.removeQueries(filters);
-          return { success: true };
-        },
-        inputSchema: {
-          key: {
-            description: 'Query key (JSON string). Omit to remove all.',
-            examples: ['["users"]'],
-            type: 'string',
-          },
-        },
-      },
-      reset: {
-        description: 'Reset queries to initial state (clears data + error). Omit key for all.',
-        handler: async (args) => {
-          const filters = args.key ? { queryKey: parseKey(args.key as string) } : undefined;
-          await queryClient.resetQueries(filters);
-          return { success: true };
-        },
-        inputSchema: {
-          key: {
-            description: 'Query key (JSON string). Omit to reset all.',
-            examples: ['["users"]'],
+            description: 'Query key (JSON string). Omit to target every cached query.',
+            examples: ['["users"]', '["users","list"]'],
             type: 'string',
           },
         },
