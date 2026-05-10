@@ -964,6 +964,18 @@ type QueryScope =
   | 'self'
   | 'siblings';
 
+const VALID_SCOPES: ReadonlySet<QueryScope> = new Set([
+  'ancestors',
+  'children',
+  'descendants',
+  'nearest_host',
+  'parent',
+  'root',
+  'screen',
+  'self',
+  'siblings',
+]);
+
 interface QueryStep extends ComponentQuery {
   /**
    * If provided, only the N-th match survives into the next step. Omit to
@@ -1032,6 +1044,18 @@ const collectByScope = (fiber: Fiber, scope: QueryScope, runtime: QueryRuntime):
         return f !== fiber;
       });
   }
+};
+
+const validateSteps = (steps: QueryStep[]): string | null => {
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+    if (!step) continue;
+    if (step.scope !== undefined && !VALID_SCOPES.has(step.scope as QueryScope)) {
+      const valid = Array.from(VALID_SCOPES).sort().join(' / ');
+      return `steps[${i}].scope: unknown scope "${step.scope}". Valid: ${valid}.`;
+    }
+  }
+  return null;
 };
 
 const runQueryChain = (runtime: QueryRuntime, steps: QueryStep[]): Fiber[] => {
@@ -1488,6 +1512,8 @@ TIPS
             if (!Array.isArray(steps) || steps.length === 0) {
               return { error: 'query requires a non-empty `steps` array' };
             }
+            const stepError = validateSteps(steps);
+            if (stepError) return { error: stepError };
 
             const limit =
               typeof args.limit === 'number' && args.limit > 0

@@ -48,7 +48,13 @@ export const getFiberRoot = (): Fiber | null => {
 };
 
 export const getComponentName = (fiber: Fiber): string => {
-  if (!fiber.type) return 'Unknown';
+  // Host root has no `type` and no `return` parent. Surface it as
+  // "FiberRoot" instead of "Unknown" so dumps via scope:'root' read
+  // sensibly (and the name doesn't collide with a real component).
+  if (!fiber.type) {
+    if (!fiber.return) return 'FiberRoot';
+    return 'Unknown';
+  }
 
   if (typeof fiber.type === 'string') {
     return fiber.type;
