@@ -55,6 +55,19 @@ Gesture tools: \`host${MODULE_SEPARATOR}tap\` / \`host${MODULE_SEPARATOR}long_pr
 
 Stack traces: \`errors${MODULE_SEPARATOR}get_errors\` and \`log_box${MODULE_SEPARATOR}get_logs\` return parsed \`stackFrames\` you can pass straight into \`metro${MODULE_SEPARATOR}symbolicate\` to resolve bundled frames back to source paths via Metro.
 
+## Consolidated tools — verb + arg, not verb-per-action
+
+Every module exposes one verb per concept rather than one tool per variant. Reach for the listing tool with a filter arg, not a tool named after the filter:
+
+- **console** — \`get_logs({ level? })\` for all levels (no per-level shortcuts).
+- **errors** — \`get_errors({ fatal? })\` covers fatal-only too.
+- **network** — \`get_requests({ status?, method?, url? })\` covers errors / pending / URL filter.
+- **log_box** — \`clear({ level? })\` (warn / error / syntax / all); \`set_installed({ enabled })\` toggles install/uninstall.
+- **navigation** — \`navigate({ mode: 'reuse' | 'push' | 'replace' })\` covers navigate/push/replace; \`pop({ to: <number> | <screenName> | 'top' })\` covers pop / pop_to / pop_to_top; \`get_current_route({ withState? })\` covers the route-state read too.
+- **query** (reactQuery) — \`mutate({ action: 'invalidate' | 'refetch' | 'remove' | 'reset', key? })\` covers all four cache mutations.
+- **device** — \`info({ select?: [...] })\` aggregates platform / dimensions / pixelRatio / appearance / appState / accessibility / keyboard / initialUrl / dev / identity / app / battery / memoryStorage. \`open_url({ dryRun? })\` covers the canOpenURL check too.
+- **fiber_tree** — \`query\` (all inspection: mcpId / name / testID / props / hooks / bounds / refMethods / children) and \`call({ prop? | method? })\` (callback prop OR native-ref method) — two tools cover everything fibers offer.
+
 ## Path-based drill into heavy responses
 
 All listing tools that return heavy JSON (console / network / errors / storage / reactQuery / log_box / navigation / metro events / fiber_tree) accept the standard \`path\` / \`depth\` / \`maxBytes\` projection args. Heavy nested values collapse to compact \`\${...}\`-keyed markers; primitives stay raw. Drill into a specific subtree via the same tool with \`path\` — no separate by-id fetcher.

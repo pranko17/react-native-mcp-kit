@@ -20,9 +20,9 @@ const STATE_DEFAULT_DEPTH = 2;
 // visible), nested state collapses to a marker. Drill via path.
 const HISTORY_DEFAULT_DEPTH = 4;
 
-// `get_current_route` / `get_current_route_state` return a route dict with
-// optional nested state. Default depth 3 — name/params/screen visible,
-// nested state markers; drill if you need deeper.
+// `get_current_route` returns a route dict — optionally with nested
+// navigator state via `withState: true`. Default depth 3 covers
+// name/params/screen visible, nested state markers; drill if needed.
 const ROUTE_DEFAULT_DEPTH = 3;
 
 const STATE_SCHEMA = makeProjectionSchema(STATE_DEFAULT_DEPTH);
