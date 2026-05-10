@@ -271,7 +271,7 @@ consoleModule({
 
 ### device
 
-Aggregate read of platform facts via `info({ select? })` — `{ platform, dimensions, pixelRatio, appearance, appState, accessibility, keyboard, initialUrl, dev }`; pass `select: ['appState','keyboard']` to limit fields. `dimensions` carries both DP and physical pixels. Imperative actions: `open_url({ url, dryRun? })` (dryRun only checks Linking.canOpenURL), `open_settings`, `dismiss_keyboard`, `vibrate`, `reload`.
+Aggregate read of platform facts via `info({ select? })` — `{ platform, dimensions, pixelRatio, appearance, appState, accessibility, keyboard, initialUrl, dev, extras }`; pass `select: ['appState','keyboard']` to limit fields. `dimensions` carries both DP and physical pixels. `extras` reads from `react-native-device-info` (optional dependency, picked up automatically when installed) — surfaces battery / memory / disk / extended identity (model, manufacturer, deviceType, isTablet, hasNotch, hasDynamicIsland, systemName/Version) and app metadata (buildNumber, readableVersion, install/update times). Missing package → `extras: { unavailable: true, reason }`. Imperative actions: `open_url({ url, dryRun? })` (dryRun only checks Linking.canOpenURL), `open_settings`, `dismiss_keyboard`, `vibrate`, `reload`.
 
 ### errors
 

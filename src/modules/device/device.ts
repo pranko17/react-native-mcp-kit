@@ -4,6 +4,12 @@ import { type McpModule } from '@/client/models/types';
 // modules (Platform, Dimensions, Appearance, AppState, AccessibilityInfo,
 // Keyboard, Linking) and returns the union as a flat record. Pass `select`
 // to filter; omit for the full payload.
+//
+// `extras` reads from react-native-device-info via optional require — same
+// pattern as the handshake (`McpClient.autoDetectIdentity`). When the package
+// isn't installed it returns `{ unavailable: true, reason }`. Fields already
+// surfaced in the handshake (appName / appVersion / bundleId / deviceId /
+// label) are not duplicated here.
 const INFO_FIELDS = [
   'platform', // { os, version, constants } from Platform
   'dimensions', // { screen, window, screenPixels, windowPixels, pixelRatio }
@@ -14,9 +20,119 @@ const INFO_FIELDS = [
   'keyboard', // { isVisible, metrics }
   'initialUrl', // { url }
   'dev', // { dev: boolean }
+  'extras', // react-native-device-info: identity / app / battery / memory + storage
 ] as const;
 
 type InfoField = (typeof INFO_FIELDS)[number];
+
+// Read `react-native-device-info` (optional). Mirrors the lazy try/require
+// from McpClient — the package is treated as opt-in, never a hard dep.
+const loadDeviceInfo = (): unknown => {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
+    const di = require('react-native-device-info');
+    return di.default ?? di;
+  } catch {
+    return null;
+  }
+};
+
+const callIfFn = <T>(fn: unknown, fallback: T | null = null): T | null => {
+  if (typeof fn !== 'function') return fallback;
+  try {
+    return fn() as T;
+  } catch {
+    return fallback;
+  }
+};
+
+const callAsyncIfFn = async <T>(fn: unknown, fallback: T | null = null): Promise<T | null> => {
+  if (typeof fn !== 'function') return fallback;
+  try {
+    return (await fn()) as T;
+  } catch {
+    return fallback;
+  }
+};
+
+const buildExtras = async (): Promise<Record<string, unknown>> => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const DI = loadDeviceInfo() as any;
+  if (!DI) {
+    return {
+      reason:
+        'react-native-device-info is not installed. Add it as a dependency to expose battery / memory / disk / extended identity fields.',
+      unavailable: true,
+    };
+  }
+  // Identity (skipping fields the handshake already exposes: deviceId,
+  // label, appName/appVersion/bundleId).
+  const identityP = Promise.resolve({
+    deviceType: callIfFn<string>(DI.getDeviceType),
+    hasDynamicIsland: callIfFn<boolean>(DI.hasDynamicIsland),
+    hasNotch: callIfFn<boolean>(DI.hasNotch),
+    isTablet: callIfFn<boolean>(DI.isTablet),
+    manufacturer: callIfFn<string>(DI.getManufacturerSync ?? DI.getBrand),
+    model: callIfFn<string>(DI.getModel),
+    systemName: callIfFn<string>(DI.getSystemName),
+    systemVersion: callIfFn<string>(DI.getSystemVersion),
+  });
+  // App (skipping bundleId / version / appName already in handshake).
+  const appP = Promise.all([
+    callAsyncIfFn<number>(DI.getFirstInstallTime),
+    callAsyncIfFn<number>(DI.getLastUpdateTime),
+    callAsyncIfFn<string>(DI.getInstallerPackageName),
+  ]).then(([firstInstallTime, lastUpdateTime, installerPackageName]) => {
+    return {
+      buildNumber: callIfFn<string>(DI.getBuildNumber),
+      firstInstallTime,
+      installerPackageName,
+      lastUpdateTime,
+      readableVersion: callIfFn<string>(DI.getReadableVersion),
+    };
+  });
+  // Battery (all async).
+  const batteryP = Promise.all([
+    callAsyncIfFn<number>(DI.getBatteryLevel),
+    callAsyncIfFn<boolean>(DI.isBatteryCharging),
+    callAsyncIfFn<unknown>(DI.getPowerState),
+  ]).then(([batteryLevel, isCharging, powerState]) => {
+    return {
+      batteryLevel,
+      isCharging,
+      isLowBatteryLevel: typeof batteryLevel === 'number' ? batteryLevel < 0.2 : null,
+      powerState,
+    };
+  });
+  // Memory + Storage (all async).
+  const memStorageP = Promise.all([
+    callAsyncIfFn<number>(DI.getTotalMemory),
+    callAsyncIfFn<number>(DI.getUsedMemory),
+    callAsyncIfFn<number>(DI.getMaxMemory),
+    callAsyncIfFn<number>(DI.getTotalDiskCapacity),
+    callAsyncIfFn<number>(DI.getFreeDiskStorage),
+  ]).then(([totalMemory, usedMemory, maxMemory, totalDiskCapacity, freeDiskStorage]) => {
+    return {
+      freeDiskStorage,
+      maxMemory,
+      totalDiskCapacity,
+      totalMemory,
+      usedMemory,
+    };
+  });
+  const [identity, app, battery, memStorage] = await Promise.all([
+    identityP,
+    appP,
+    batteryP,
+    memStorageP,
+  ]);
+  return {
+    app,
+    battery,
+    identity,
+    memoryStorage: memStorage,
+  };
+};
 
 export const deviceModule = (): McpModule => {
   // Lazy require to avoid importing react-native on server side
@@ -80,6 +196,8 @@ export const deviceModule = (): McpModule => {
       case 'dev':
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         return { dev: Boolean((globalThis as any).__DEV__) };
+      case 'extras':
+        return buildExtras();
       default:
         return null;
     }
@@ -94,9 +212,19 @@ match what host__tap / adb input tap consume.
 
 READS
   info({ select? }) — aggregate. Returns { platform, dimensions, pixelRatio,
-  appearance, appState, accessibility, keyboard, initialUrl, dev }. Pass
-  \`select: ['appState','keyboard']\` to limit to specific fields; omit for
-  the full payload.
+  appearance, appState, accessibility, keyboard, initialUrl, dev, extras }.
+  Pass \`select: ['appState','keyboard']\` to limit to specific fields;
+  omit for the full payload.
+
+  \`extras\` reads from react-native-device-info via optional require —
+  surfaces { identity (model/manufacturer/deviceType/isTablet/hasNotch/
+  hasDynamicIsland/systemName/systemVersion), app (buildNumber/
+  readableVersion/firstInstallTime/lastUpdateTime/installerPackageName),
+  battery (level/isCharging/isLowBatteryLevel/powerState), memoryStorage
+  (totalMemory/usedMemory/maxMemory/totalDiskCapacity/freeDiskStorage) }.
+  Fields already in the handshake (appName / appVersion / bundleId /
+  deviceId / label) are not duplicated. When the package isn't installed,
+  extras returns \`{ unavailable: true, reason }\`.
 
 ACTIONS
   open_url({ url, dryRun? }) — opens the URL via Linking. \`dryRun: true\`
