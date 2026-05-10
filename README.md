@@ -271,7 +271,7 @@ consoleModule({
 
 ### device
 
-Read-only view of platform facts (OS, version, dimensions in DP and physical pixels, pixel ratio, appearance, app state, accessibility settings, keyboard state) plus a few imperative actions — open URLs / settings, dismiss the keyboard, vibrate, reload the JS bundle in dev.
+Aggregate read of platform facts via `info({ select? })` — `{ platform, dimensions, pixelRatio, appearance, appState, accessibility, keyboard, initialUrl, dev }`; pass `select: ['appState','keyboard']` to limit fields. `dimensions` carries both DP and physical pixels. Imperative actions: `open_url({ url, dryRun? })` (dryRun only checks Linking.canOpenURL), `open_settings`, `dismiss_keyboard`, `vibrate`, `reload`.
 
 ### errors
 
