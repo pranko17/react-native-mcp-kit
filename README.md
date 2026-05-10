@@ -282,7 +282,7 @@ Captures unhandled JS errors (via `ErrorUtils.setGlobalHandler`) and unhandled p
 The heart of UI inspection. Search the component tree via a chained `query`: each step narrows the result by **criteria** within a given **scope**, with multiple matches fanning out into the next step.
 
 - **Criteria**: `name`, `testID`, `mcpId`, `text`, `hasProps`, `props` (equality + `contains`), `not`, `any`.
-- **Scopes**: `descendants`, `children`, `parent`, `ancestors`, `siblings`, `self`, `screen` (focused screen fiber from React Navigation), `nearest_host` (closest host component).
+- **Scopes**: `descendants`, `children`, `parent`, `ancestors`, `siblings`, `self`, `root` (the React fiber root — useful as a first step to dump the whole tree), `screen` (focused screen fiber from React Navigation), `nearest_host` (closest host component).
 
 Wrapper cascades (`PressableView → Pressable → View → RCTView`) collapse to the topmost by default, so overlapping matches don't drown the result. `bounds` come back in physical pixels and pair directly with `host__tap` — or use `host__tap_fiber` for the locate-and-tap shortcut.
 
@@ -292,6 +292,8 @@ Pass `waitFor: { until: 'appear' | 'disappear', timeout?, interval?, stable? }` 
 
 - `select: [{ props: { path: "data[0:5]", depth: 2 } }]` — drill into props.data[0..5) with 2 levels of expansion.
 - `select: [{ hooks: { kinds: ["State"], names: ["isLoading"], withValues: true, depth: 2, path: "[0].value" } }]` — filter hooks by kind/name + project hook values.
+- `select: [{ children: 5 }]` — recursive light-only walker, dumps a tree of mcpId/name 5 levels deep from each match. At the bottom, sub-children appear as `{ "${arr}": N }` so you see there's more to drill. Heavy fields (`props`/`hooks`) are not allowed inside `select.children` — query a child's mcpId separately when you need them.
+- `query({ steps: [{ scope: 'root' }], select: [{ children: 5 }] })` — the canonical "dump the whole tree" entry point.
 
 Heavy nested values render as compact `${kind}`-keyed markers — `{"${arr}":47}`, `{"${fun}":"onPress"}`, `{"${str}":{ "len":1247, "preview":"..." }}` for long strings, `{"${Date}":"iso"}`, `{"${Err}":{ name, msg }}`, `{"${cyc}":true}`, `{"${ref}":{ mcpId, name }}` for component refs. Wide objects/arrays (>30 keys / >50 items) get a `${truncated}` sentinel as the first entry.
 

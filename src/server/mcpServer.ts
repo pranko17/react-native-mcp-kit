@@ -78,6 +78,7 @@ For \`fiber_tree__query\`, heavy fields (\`props\`, \`hooks\`) take projection k
   \`select: [{ props: { path: "style", depth: 2 } }]\`   — drill into props.style 2 levels deep
   \`select: [{ props: { path: "data[0:5]" } }]\`         — slice path: take first 5 items of props.data
   \`select: [{ hooks: { kinds: ["State"], names: ["isLoading"], withValues: true, depth: 2 } }]\` — filter + project hook values
+  \`select: [{ children: 5 }]\`                          — light-only recursive tree walker (5 levels deep); use \`scope: "root"\` as the first step to dump the whole tree. props/hooks not supported inside; sub-children past treeDepth surface as \`\${arr}: N\`.
 
 Hook filters: \`kinds\` (State/Effect/Memo/Ref/Custom/...), \`names\` (exact or \`/regex/flags\`), \`withValues\` (adds resolved values), \`expansionDepth\` (caps custom-hook recursion), \`format: "tree"\` (nested children vs flat \`via\` chains). Each hook entry carries \`{ kind, name, hook?, via?, expanded? }\`. Sensitive names (password, token, jwt, secret, credential, apiKey, authorization, Pin suffix) are auto-redacted; configure via \`fiberTreeModule({ redactHookNames, additionalRedactHookNames })\`.
 

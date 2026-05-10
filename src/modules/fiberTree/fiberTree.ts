@@ -10,10 +10,6 @@ import {
 import { type Bounds, type ComponentQuery } from './types';
 import {
   findAllByQuery,
-  findByMcpId,
-  findByName,
-  findByTestID,
-  findByText,
   findHostFiber,
   findScreenFiberByRouteKey,
   getAncestors,
@@ -26,11 +22,8 @@ import {
   matchesQuery,
   measureFiber,
   projectFiberValue,
-  serializeFiber,
   setRootRef,
 } from './utils';
-
-const DEFAULT_DEPTH = 10;
 
 const QUERY_LIMIT_DEFAULT = 50;
 const QUERY_LIMIT_MAX = 500;
@@ -641,7 +634,28 @@ interface HooksOptions {
   valuePath?: string;
 }
 
+// `select.children` walker options — recursive shallow tree of fiber nodes.
+// Strict light-only fields: heavy projection (props/hooks) is rejected at
+// parse time so the walker can never blow up the response on wide trees.
+const CHILDREN_DEFAULT_TREE_DEPTH = 4;
+const CHILDREN_MAX_TREE_DEPTH = 16;
+const CHILDREN_DEFAULT_ITEMS_CAP = 50;
+const LIGHT_FIELDS = new Set(['mcpId', 'name', 'testID', 'bounds']);
+
+interface ChildrenOptions {
+  itemsCap: number;
+  // Recursive: sub-children walker for next level. null = stop expanding.
+  select: ChildrenSelect;
+  treeDepth: number;
+}
+
+interface ChildrenSelect {
+  children: ChildrenOptions | null;
+  fields: Set<string>;
+}
+
 interface Projection {
+  children: ChildrenOptions | null;
   fields: Set<string>;
   hooks: HooksOptions;
   props: PropsOptions;
@@ -676,6 +690,111 @@ const buildHooksOptions = (raw: HooksRawOptions | undefined): HooksOptions => {
 };
 
 /**
+ * Parse `select.children.select` — recursive but strictly light-only.
+ *
+ * Walker is meant for "map of the tree" navigation, not data extraction. So
+ * `props`/`hooks` are explicitly rejected with an error: if you need a
+ * fiber's props/hooks, run a second `query` against its mcpId. This caps the
+ * worst-case response at treeDepth × itemsCap × ~30 bytes (≈24KB) without
+ * needing per-field projection inside the walker.
+ */
+const parseChildrenSelect = (selectArg: unknown): ChildrenSelect => {
+  const fields = new Set<string>();
+  let nestedChildren: ChildrenOptions | null = null;
+
+  if (Array.isArray(selectArg)) {
+    for (const entry of selectArg) {
+      if (typeof entry === 'string') {
+        if (entry === 'props' || entry === 'hooks') {
+          throw new Error(
+            `select.children.select cannot include "${entry}" — heavy fields are not supported inside the walker. Run a second query({ steps: [{ mcpId: '<child-mcpId>' }], select: ['${entry}'] }) on the specific node instead.`
+          );
+        }
+        if (!LIGHT_FIELDS.has(entry) && entry !== 'children') {
+          throw new Error(
+            `select.children.select: unknown field "${entry}". Allowed: mcpId / name / testID / bounds / { children }`
+          );
+        }
+        if (entry !== 'children') fields.add(entry);
+        continue;
+      }
+      if (entry && typeof entry === 'object') {
+        for (const [key, value] of Object.entries(entry as Record<string, unknown>)) {
+          if (value === false) continue;
+          if (key === 'props' || key === 'hooks') {
+            throw new Error(
+              `select.children.select cannot include "${key}" — heavy fields are not supported inside the walker. Run a second query({ steps: [{ mcpId: '<child-mcpId>' }], select: ['${key}'] }) on the specific node instead.`
+            );
+          }
+          if (key === 'children') {
+            nestedChildren = parseChildrenOptions(value);
+            continue;
+          }
+          if (!LIGHT_FIELDS.has(key)) {
+            throw new Error(
+              `select.children.select: unknown field "${key}". Allowed: mcpId / name / testID / bounds / { children }`
+            );
+          }
+          fields.add(key);
+        }
+      }
+    }
+  }
+
+  if (fields.size === 0) {
+    fields.add('mcpId');
+    fields.add('name');
+  }
+
+  return { children: nestedChildren, fields };
+};
+
+/**
+ * Parse `{ children: N }` short form or `{ children: { treeDepth, select?,
+ * itemsCap? } }` object form into a normalized ChildrenOptions.
+ */
+const parseChildrenOptions = (raw: unknown): ChildrenOptions => {
+  // Short form: { children: 5 } → treeDepth 5, defaults
+  if (typeof raw === 'number') {
+    return {
+      itemsCap: CHILDREN_DEFAULT_ITEMS_CAP,
+      select: { children: null, fields: new Set(['mcpId', 'name']) },
+      treeDepth: clampTreeDepth(raw),
+    };
+  }
+  if (raw === true) {
+    return {
+      itemsCap: CHILDREN_DEFAULT_ITEMS_CAP,
+      select: { children: null, fields: new Set(['mcpId', 'name']) },
+      treeDepth: CHILDREN_DEFAULT_TREE_DEPTH,
+    };
+  }
+  if (raw && typeof raw === 'object') {
+    const obj = raw as { itemsCap?: unknown; select?: unknown; treeDepth?: unknown };
+    const treeDepth =
+      typeof obj.treeDepth === 'number' && obj.treeDepth >= 0
+        ? clampTreeDepth(obj.treeDepth)
+        : CHILDREN_DEFAULT_TREE_DEPTH;
+    const itemsCap =
+      typeof obj.itemsCap === 'number' && obj.itemsCap >= 0
+        ? Math.floor(obj.itemsCap)
+        : CHILDREN_DEFAULT_ITEMS_CAP;
+    const select = parseChildrenSelect(obj.select);
+    return { itemsCap, select, treeDepth };
+  }
+  return {
+    itemsCap: CHILDREN_DEFAULT_ITEMS_CAP,
+    select: { children: null, fields: new Set(['mcpId', 'name']) },
+    treeDepth: CHILDREN_DEFAULT_TREE_DEPTH,
+  };
+};
+
+const clampTreeDepth = (n: number): number => {
+  if (!Number.isFinite(n) || n < 0) return CHILDREN_DEFAULT_TREE_DEPTH;
+  return Math.min(Math.floor(n), CHILDREN_MAX_TREE_DEPTH);
+};
+
+/**
  * Parse the `select` arg into a flat Projection. Each element of `select` may
  * be either a string (include the named field with default options) or an
  * object whose keys are field names and whose values are `true` / `false` /
@@ -686,6 +805,9 @@ const buildHooksOptions = (raw: HooksRawOptions | undefined): HooksOptions => {
  *   hooks: HooksRawOptions                — kinds/names filters + withValues
  *                                           + path/depth/maxBytes for hook
  *                                           values
+ *   children: number | { treeDepth?, select?, itemsCap? }
+ *                                         — recursive light-only walker; see
+ *                                           parseChildrenSelect for limits.
  *
  * Heavy fields (props, hooks) are projected handler-side with these per-field
  * options so the rest of the response (mcpId, name, total, ...) stays raw and
@@ -695,6 +817,7 @@ const parseProjection = (selectArg: unknown): Projection => {
   const fields = new Set<string>();
   let propsRaw: PropsOptions = {};
   let hooksRaw: HooksRawOptions | undefined;
+  let childrenOpts: ChildrenOptions | null = null;
 
   if (Array.isArray(selectArg)) {
     for (const entry of selectArg) {
@@ -705,6 +828,10 @@ const parseProjection = (selectArg: unknown): Projection => {
       if (entry && typeof entry === 'object') {
         for (const [key, value] of Object.entries(entry as Record<string, unknown>)) {
           if (value === false) continue;
+          if (key === 'children') {
+            childrenOpts = parseChildrenOptions(value);
+            continue;
+          }
           fields.add(key);
           if (key === 'props' && value && typeof value === 'object') {
             propsRaw = value as PropsOptions;
@@ -720,7 +847,12 @@ const parseProjection = (selectArg: unknown): Projection => {
     for (const f of QUERY_DEFAULT_FIELDS) fields.add(f);
   }
 
-  return { fields, hooks: buildHooksOptions(hooksRaw), props: propsRaw };
+  return {
+    children: childrenOpts,
+    fields,
+    hooks: buildHooksOptions(hooksRaw),
+    props: propsRaw,
+  };
 };
 
 const FIND_SCHEMA = {
@@ -827,6 +959,7 @@ type QueryScope =
   | 'descendants'
   | 'nearest_host'
   | 'parent'
+  | 'root'
   | 'screen'
   | 'self'
   | 'siblings';
@@ -879,6 +1012,13 @@ const collectByScope = (fiber: Fiber, scope: QueryScope, runtime: QueryRuntime):
       const host = findHostFiber(fiber);
       return host ? [host] : [];
     }
+    case 'root':
+      // Top of the fiber tree, regardless of the previous step's match. Use
+      // as the first step (e.g. `query({ steps: [{ scope: 'root' }], select:
+      // [{ children: 5 }] })` to dump the whole tree). Criteria on this step
+      // are matched against the root fiber itself; if you want descendants
+      // of root, follow with another step using scope:'descendants'.
+      return [runtime.root];
     case 'screen': {
       const screen = resolveScreenFiber(runtime);
       if (!screen) return [];
@@ -937,6 +1077,82 @@ const dedupAncestors = (matches: Fiber[]): Fiber[] => {
     }
     return true;
   });
+};
+
+/**
+ * Light projector for nodes inside the `select.children` walker. Returns one
+ * of the four allowed fields per node (mcpId / name / testID / bounds);
+ * `bounds` is async because it reads native layout via UIManager. Heavy
+ * fields (props/hooks) are not handled here on purpose — see
+ * `parseChildrenSelect` for the rationale.
+ */
+const projectChildLightFields = async (
+  fiber: Fiber,
+  fields: Set<string>,
+  measure: (fiber: Fiber) => Promise<Bounds | null>
+): Promise<Record<string, unknown>> => {
+  const out: Record<string, unknown> = {};
+  if (fields.has('mcpId')) {
+    out.mcpId = fiber.memoizedProps?.['data-mcp-id'];
+  }
+  if (fields.has('name')) {
+    out.name = getComponentName(fiber);
+  }
+  if (fields.has('testID')) {
+    out.testID = fiber.memoizedProps?.testID;
+  }
+  if (fields.has('bounds')) {
+    out.bounds = await measure(fiber);
+  }
+  return out;
+};
+
+/**
+ * Recursive walker for `select.children`. Walks the fiber tree from `fiber`
+ * up to `depthLeft` levels of direct children, applying the per-level light
+ * field projection from `options.select`. Each level is width-capped at
+ * `options.itemsCap`; overflow inserts a `${truncated}` sentinel as the
+ * first item of the array.
+ *
+ * Stops when depthLeft reaches 0. Returned shape: array of nodes, each with
+ * the selected light fields plus optional `children: [...]` if the next
+ * level was requested.
+ */
+const walkChildren = async (
+  fiber: Fiber,
+  options: ChildrenOptions,
+  depthLeft: number,
+  measure: (fiber: Fiber) => Promise<Bounds | null>
+): Promise<unknown[]> => {
+  if (depthLeft <= 0) return [];
+  const kids = getDirectChildren(fiber);
+  const cap = options.itemsCap;
+  const sliced = kids.slice(0, cap);
+  const out: unknown[] = [];
+  if (kids.length > cap) {
+    out.push({ ['${truncated}']: { slice: [0, cap], total: kids.length } });
+  }
+  // If the user supplied an explicit nested `select.children` — use it for
+  // the next level. Otherwise self-recur with the same `options`, so
+  // `{ children: 5 }` means "5 levels deep, light fields all the way".
+  const nextOptions = options.select.children ?? options;
+  for (const kid of sliced) {
+    const node = await projectChildLightFields(kid, options.select.fields, measure);
+    if (depthLeft > 1) {
+      node.children = await walkChildren(kid, nextOptions, depthLeft - 1, measure);
+    } else {
+      // Last level — instead of dropping the `children` field entirely,
+      // surface the descendant count as an `${arr}` marker so the agent
+      // sees "there's N more children below; drill separately if needed".
+      // Empty children → omit the field altogether (true leaf).
+      const subCount = getDirectChildren(kid).length;
+      if (subCount > 0) {
+        node.children = { ['${arr}']: subCount };
+      }
+    }
+    out.push(node);
+  }
+  return out;
 };
 
 // Window dimensions → physical-pixel bounds rectangle for `onlyVisible` filter.
@@ -1068,7 +1284,10 @@ export const fiberTreeModule = (options?: FiberTreeModuleOptions): McpModule => 
 
 SCOPES (query steps)
   descendants (default) / children / parent / ancestors / siblings / self
-  / screen / nearest_host.
+  / root / screen / nearest_host.
+    · root — the React fiber root, regardless of the previous step's
+      match. Use as the first step to start from the top of the tree
+      (e.g. dump the whole tree via select: [{ children: 5 }]).
     · screen — descendants of the currently focused React Navigation
       screen fiber. Available when the library was initialized with a
       navigationRef. Lets a first step skip "find current screen first".
@@ -1093,17 +1312,23 @@ STEP CRITERIA
   index — pick N-th match from this step; otherwise all matches fan out into the next step.
 
 SELECT (output fields)
-  Default ["mcpId", "name", "testID"] — props, bounds, hooks are opt-in.
+  Default ["mcpId", "name", "testID"] — props, bounds, hooks, children
+  are opt-in.
   bounds: { x, y, width, height, centerX, centerY } in PHYSICAL pixels,
   top-left origin. null when the fiber has no mounted host view. centerX/
   centerY feed straight into host__tap.
-  props: full serialized props (heavy). Use the nested form
-  \`{ props: { pick: ["key1","key2"] } }\` to keep only the props you
-  actually need and avoid pulling large style maps, data arrays, or
-  nested element trees.
-  hooks: the component's hooks. Each entry { kind, name, hook?, via?,
-  expanded?, value? }; configure via the nested form
-  \`{ hooks: { kinds, names, withValues, maxDepthInValues, expansionDepth, format } }\`.
+  props: per-field projection — \`{ props: { path?, depth?, maxBytes? } }\`.
+  hooks: filtered + projected — \`{ hooks: { kinds?, names?, withValues?,
+  expansionDepth?, format?, path?, depth?, maxBytes? } }\`. Each entry
+  { kind, name, hook?, via?, expanded?, value? }.
+  children: recursive light-only walker for tree-of-tree navigation —
+  short form { children: 5 } (treeDepth=5) or object form
+  { children: { treeDepth, select?, itemsCap? } }. select inside
+  children may include only mcpId / name / testID / bounds / nested
+  children — props/hooks throw at parse time. Use a second query against
+  a child mcpId to inspect its props/hooks. treeDepth max 16, itemsCap
+  default 50; overflow inserts a \`\${truncated}\` sentinel as the first
+  array item.
 
 RESPONSE
   { matches: [...], total, truncated? } — total is the unrestricted match
@@ -1184,85 +1409,6 @@ TIPS
           },
         },
       },
-      get_children: {
-        description: 'Get the children subtree of a single component.',
-        handler: (args) => {
-          const rootError = requireRoot();
-          if (rootError) return rootError;
-
-          const fiber = findComponent(args);
-          if (!fiber) return { error: 'Component not found' };
-
-          const treeDepth = (args.treeDepth as number) || DEFAULT_DEPTH;
-          const serialized = serializeFiber(fiber, treeDepth);
-          return applyProjection(serialized?.children ?? [], args as ProjectionArgs);
-        },
-        inputSchema: {
-          ...FIND_SCHEMA,
-          ...PROJECTION_SCHEMA,
-          treeDepth: {
-            description:
-              'Max child traversal depth (default: 10). How far down the React fiber tree to walk before stopping. Independent of `depth` (which controls projection of values into `${...}` markers).',
-            type: 'number',
-          },
-        },
-      },
-      get_component: {
-        description:
-          'Find one component and return its details with children subtree (deep inspection). Use `query` for a flat list of matches.',
-        handler: async (args) => {
-          const rootError = requireRoot();
-          if (rootError) return rootError;
-          const root = getFiberRoot()!;
-
-          let fiber = null;
-          if (args.mcpId) {
-            fiber = findByMcpId(root, args.mcpId as string);
-          } else if (args.testID) {
-            fiber = findByTestID(root, args.testID as string);
-          } else if (args.name) {
-            fiber = findByName(root, args.name as string);
-          } else if (args.text) {
-            fiber = findByText(root, args.text as string);
-          }
-
-          if (!fiber) return { error: 'Component not found' };
-
-          const treeDepth = (args.treeDepth as number) || DEFAULT_DEPTH;
-          const serialized = serializeFiber(fiber, treeDepth);
-          if (serialized && Array.isArray(args.select)) {
-            const fields = new Set(args.select as string[]);
-            if (fields.has('bounds')) {
-              const bounds = await measureFiber(fiber);
-              if (bounds) {
-                serialized.bounds = bounds;
-              }
-            }
-            if (!fields.has('props')) {
-              serialized.props = {};
-            }
-          }
-          return applyProjection(serialized, args as ProjectionArgs);
-        },
-        inputSchema: {
-          ...PROJECTION_SCHEMA,
-          mcpId: { description: 'Stable data-mcp-id to match.', type: 'string' },
-          name: { description: 'Component name to match.', type: 'string' },
-          select: {
-            description:
-              'Fields to include on the root node. Available: name, props, bounds. Children are always included.',
-            examples: [['name', 'bounds']],
-            type: 'array',
-          },
-          testID: { description: 'testID to match.', type: 'string' },
-          text: { description: 'Rendered text substring.', type: 'string' },
-          treeDepth: {
-            description:
-              'Max child traversal depth (default: 10). How far down the React fiber tree to walk before stopping. Independent of `depth` (which controls projection of values into `${...}` markers).',
-            type: 'number',
-          },
-        },
-      },
       get_ref_methods: {
         description: "List available methods on a component's native ref.",
         handler: (args) => {
@@ -1283,25 +1429,6 @@ TIPS
           };
         },
         inputSchema: FIND_SCHEMA,
-      },
-      get_tree: {
-        description: 'Dump the full React component tree from the root fiber.',
-        handler: (args) => {
-          const rootError = requireRoot();
-          if (rootError) return rootError;
-          const root = getFiberRoot()!;
-
-          const treeDepth = (args.treeDepth as number) || DEFAULT_DEPTH;
-          return applyProjection(serializeFiber(root, treeDepth), args as ProjectionArgs);
-        },
-        inputSchema: {
-          ...PROJECTION_SCHEMA,
-          treeDepth: {
-            description:
-              'Max child traversal depth (default: 10). How far down the React fiber tree to walk before stopping. Independent of `depth` (which controls projection of values into `${...}` markers).',
-            type: 'number',
-          },
-        },
       },
       invoke: {
         description:
@@ -1369,8 +1496,18 @@ TIPS
             const dedup = args.dedup !== false;
             const useCacheDefault = args.cache !== false;
             const onlyVisible = args.onlyVisible === true;
-            const projection = parseProjection(args.select);
-            const { fields, hooks: hookOpts, props: propsOpts } = projection;
+            let projection: Projection;
+            try {
+              projection = parseProjection(args.select);
+            } catch (e) {
+              return { error: e instanceof Error ? e.message : String(e) };
+            }
+            const {
+              children: childrenOpts,
+              fields,
+              hooks: hookOpts,
+              props: propsOpts,
+            } = projection;
 
             const runtime: QueryRuntime = { navigationRef, root };
 
@@ -1425,8 +1562,9 @@ TIPS
                   }
                   if (fields.has('props')) {
                     // Heavy field — projected here via select.props options
-                    // (path/depth/maxBytes). Top-level response stays raw so
-                    // mcpId/name/etc are always visible without projection.
+                    // (path/depth/maxBytes). Top-level response stays raw
+                    // so mcpId/name/etc are always visible without
+                    // projection.
                     result.props = projectFiberValue(fiber.memoizedProps ?? {}, {
                       depth: propsOpts.depth ?? 1,
                       maxBytes: propsOpts.maxBytes,
@@ -1441,6 +1579,14 @@ TIPS
                       ...hookOpts,
                       redactPatterns,
                     });
+                  }
+                  if (childrenOpts) {
+                    result.children = await walkChildren(
+                      fiber,
+                      childrenOpts,
+                      childrenOpts.treeDepth,
+                      measure
+                    );
                   }
                   return result;
                 })
@@ -1535,10 +1681,14 @@ TIPS
               attempts++;
             }
           };
-          // No top-level applyProjection here — heavy fields (props, hooks)
-          // are projected per-field via select. The rest of the response
-          // (matches array, mcpId/name/total/...) is light enough to return
-          // raw.
+          // No top-level projection on the query response — the response
+          // shell ({ matches, total, ... }) is light by construction;
+          // heavy values inside `props` / `hooks` are already collapsed to
+          // markers by per-field projection in `inner`, and the
+          // `select.children` walker self-bounds via treeDepth/itemsCap.
+          // Top-level path/depth/maxBytes are not exposed on `query` —
+          // drill happens via `select.props.path` / `select.hooks.path`,
+          // and tree-shape navigation via `select.children`.
           return inner();
         },
         inputSchema: {
@@ -1562,14 +1712,18 @@ TIPS
             type: 'boolean',
           },
           select: {
-            description: `Output fields: mcpId, name, testID, props, bounds, hooks. Default ${JSON.stringify(QUERY_DEFAULT_FIELDS)}. Each entry is either a string (\`"mcpId"\` — include with defaults) or an object whose keys are field names. Object values are \`true\` (include with defaults), \`false\` (exclude), or per-field options.\n\nLight fields (mcpId, name, testID, bounds) — no options, just toggle.\n\nHEAVY FIELDS — projected per-field via shared \`projectValue\` so heavy nested values become \`\${...}\`-keyed markers. Each takes its own \`path\` / \`depth\` / \`maxBytes\` — overall response stays raw, only these fields are projected.\n\nprops options: \`{ path?, depth?, maxBytes? }\`. \`path\` = JS-style drill into props (\`'style'\`, \`'style[0]'\`, \`'data["data-mcp-id"]'\`); \`depth\` = container expansion depth (default 1, max 8); \`maxBytes\` = soft cap on the projected props.\n\nhooks options: \`{ kinds?, names?, withValues?, expansionDepth?, format?, path?, depth?, maxBytes? }\`. \`kinds\` filters by kind (State | Reducer | Memo | Callback | Ref | Effect | LayoutEffect | InsertionEffect | Context | Transition | DeferredValue | Id | SyncExternalStore | ImperativeHandle | Custom). \`names\` filters by name (exact or \`/regex/flags\`). \`withValues: true\` adds resolved values. \`expansionDepth\` caps custom-hook recursion (\`0\` = top-level only; default Infinity). \`format: "tree"\` returns nested \`children:\` instead of flat \`via:\`. \`path\` / \`depth\` / \`maxBytes\` apply to each hook value when withValues:true.\n\nEach hook entry carries \`{ kind, name, hook?, via?, expanded? }\` — \`hook\` is the source-level hook function (\`useState\`, \`useAnimatedStyle\`); \`expanded: true\` marks a parent custom-hook call whose sub-hooks follow.`,
+            description: `Output fields: mcpId, name, testID, props, bounds, hooks, children. Default ${JSON.stringify(QUERY_DEFAULT_FIELDS)}. Each entry is either a string ("mcpId" — include with defaults) or an object whose keys are field names. Object values are \`true\` / \`false\` / per-field options.\n\nLight fields (mcpId, name, testID, bounds) — no options, just toggle.\n\nHeavy fields (props, hooks) — per-field projection via shared \`projectValue\` so nested heavy values become \`\${...}\`-keyed markers. Each takes its own \`path\` / \`depth\` / \`maxBytes\`.\n\nprops options: \`{ path?, depth?, maxBytes? }\`.\n\nhooks options: \`{ kinds?, names?, withValues?, expansionDepth?, format?, path?, depth?, maxBytes? }\`. \`kinds\`: State | Reducer | Memo | Callback | Ref | Effect | LayoutEffect | InsertionEffect | Context | Transition | DeferredValue | Id | SyncExternalStore | ImperativeHandle | Custom. \`names\`: exact or \`/regex/flags\`. \`withValues:true\` adds resolved values. \`expansionDepth\` caps custom-hook recursion (default Infinity). \`format:"tree"\` returns nested children instead of flat \`via\`.\n\nchildren — recursive light-only walker for tree-of-tree dumps.\n  Short form: \`{ children: 5 }\` → treeDepth=5, default fields ['mcpId','name'].\n  Object form: \`{ children: { treeDepth?, select?, itemsCap? } }\`.\n  treeDepth max 16; itemsCap default 50; overflow inserts \`\${truncated}\` as the first item.\n  select inside children may include only mcpId / name / testID / bounds / nested children. props/hooks throw at parse time — run a second query against a child's mcpId to inspect them.\n\nEach hook entry carries \`{ kind, name, hook?, via?, expanded? }\`.`,
             examples: [
               ['mcpId', 'name', 'bounds'],
               ['mcpId', { props: { path: 'style' } }],
               ['mcpId', { props: { depth: 3 } }],
               [{ hooks: { kinds: ['State'], withValues: true }, mcpId: true }],
-              [{ hooks: { expansionDepth: 1, format: 'tree', withValues: true }, mcpId: true }],
-              [{ hooks: { names: ['/^is/'], path: '[0].value', withValues: true }, mcpId: true }],
+              [{ children: 5 }],
+              [
+                'mcpId',
+                'name',
+                { children: { select: ['mcpId', 'name', 'testID'], treeDepth: 3 } },
+              ],
             ],
             type: 'array',
           },
