@@ -5,7 +5,8 @@ import {
   applyProjection as applyProjectionCore,
   makeProjectionSchema,
   type ProjectionArgs,
-} from '@/shared/projectValue';
+} from '@/shared/projection/projectValue';
+import { loadRN } from '@/shared/rn/core';
 
 import { type Bounds, type ComponentQuery } from './types';
 import {
@@ -1181,9 +1182,9 @@ const walkChildren = async (
 
 // Window dimensions → physical-pixel bounds rectangle for `onlyVisible` filter.
 const getVisibleRect = (): { height: number; width: number } | null => {
+  const RN = loadRN();
+  if (!RN) return null;
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
-    const RN = require('react-native');
     const { Dimensions, PixelRatio } = RN;
     const window = Dimensions?.get?.('window');
     const ratio = PixelRatio?.get?.() ?? 1;

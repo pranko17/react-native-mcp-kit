@@ -4,13 +4,13 @@ import {
   makeProjectionSchema,
   projectAsValue,
   type ProjectionArgs,
-} from '@/shared/projectValue';
+} from '@/shared/projection/projectValue';
 import {
   compileRedact,
   redactHeaders as redactHeadersMap,
   redactValue,
   type RedactPatterns,
-} from '@/shared/redact';
+} from '@/shared/projection/redact';
 
 import { type NetworkEntry, type NetworkModuleOptions } from './types';
 

@@ -1,4 +1,9 @@
-import { type CollapseRule, projectValue, type ProjectOptions } from '@/shared/projectValue';
+import {
+  type CollapseRule,
+  projectValue,
+  type ProjectOptions,
+} from '@/shared/projection/projectValue';
+import { getRN } from '@/shared/rn/core';
 
 import {
   type Bounds,
@@ -581,8 +586,7 @@ export const measureFiber = async (fiber: Fiber): Promise<Bounds | null> => {
   const instance = canonical?.publicInstance ?? hostFiber.stateNode;
   if (!instance) return null;
 
-  // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
-  const RN = require('react-native');
+  const RN = getRN();
   const { PixelRatio, UIManager, findNodeHandle } = RN;
   const handle: number | null =
     typeof findNodeHandle === 'function' ? findNodeHandle(instance) : null;

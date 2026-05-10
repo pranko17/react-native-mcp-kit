@@ -4,7 +4,7 @@ import {
   makeProjectionSchema,
   projectAsValue,
   type ProjectionArgs,
-} from '@/shared/projectValue';
+} from '@/shared/projection/projectValue';
 
 import { type ConsoleModuleOptions, type LogEntry, type LogLevel } from './types';
 

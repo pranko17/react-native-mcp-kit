@@ -6,7 +6,7 @@ import {
   makeProjectionSchema,
   projectAsValue,
   type ProjectionArgs,
-} from '@/shared/projectValue';
+} from '@/shared/projection/projectValue';
 
 // Default depth 4 — top-level outer ({metroUrl,connected,events,lastError,total})
 // (1) → events array (2) → event (3) → data (4). Heavy event payloads collapse

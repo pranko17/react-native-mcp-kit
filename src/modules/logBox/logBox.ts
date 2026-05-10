@@ -4,7 +4,8 @@ import {
   makeProjectionSchema,
   projectAsValue,
   type ProjectionArgs,
-} from '@/shared/projectValue';
+} from '@/shared/projection/projectValue';
+import { getRN, loadRNInternal } from '@/shared/rn/core';
 
 // Default depth 4 — array of rows (1) → row (2) → stack array (3) → frame
 // (4, primitives inline). Long messages auto-wrap in `${str}` markers.
@@ -42,19 +43,13 @@ const parsePattern = (raw: string): RegExp | string => {
 
 export const logBoxModule = (): McpModule => {
   const getLogBox = () => {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
-    return require('react-native').LogBox;
+    return getRN().LogBox;
   };
 
   // LogBoxData is private. In dev it exposes getLogs/dismiss/etc; in release
   // it's stubbed, so every call is guarded with optional chaining.
   const getLogBoxData = (): LogBoxDataModule | null => {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
-      return require('react-native/Libraries/LogBox/Data/LogBoxData');
-    } catch {
-      return null;
-    }
+    return loadRNInternal('Libraries/LogBox/Data/LogBoxData') as LogBoxDataModule | null;
   };
 
   const getLogsArray = (): LogBoxLog[] => {

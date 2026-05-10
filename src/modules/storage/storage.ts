@@ -4,7 +4,7 @@ import {
   makeProjectionSchema,
   projectAsValue,
   type ProjectionArgs,
-} from '@/shared/projectValue';
+} from '@/shared/projection/projectValue';
 
 import { type NamedStorage, type StorageAdapter } from './types';
 

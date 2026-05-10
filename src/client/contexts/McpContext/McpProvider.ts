@@ -12,6 +12,7 @@ import { navigationModule } from '@/modules/navigation';
 import { networkModule } from '@/modules/network';
 import { reactQueryModule } from '@/modules/reactQuery';
 import { storageModule } from '@/modules/storage';
+import { getRN } from '@/shared/rn/core';
 
 import { McpContext } from './McpContext';
 import { type McpContextValue, type McpProviderProps } from './types';
@@ -19,14 +20,13 @@ import { type McpContextValue, type McpProviderProps } from './types';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyComponent = ComponentType<any>;
 
-// Lazy-require so importing this file from Node (e.g. the server entry) does
-// not pull react-native into scope. Matches the pattern used elsewhere in the
-// library (see device/alert modules).
+// Lazy-resolve View so importing this file from Node (e.g. the server entry)
+// does not pull react-native into scope. `getRN` from shared/rn handles the
+// require + caching.
 let ViewComponent: AnyComponent | undefined;
 const getView = (): AnyComponent => {
   if (!ViewComponent) {
-    // eslint-disable-next-line global-require, @typescript-eslint/no-require-imports
-    ViewComponent = require('react-native').View as AnyComponent;
+    ViewComponent = getRN().View as AnyComponent;
   }
   return ViewComponent;
 };

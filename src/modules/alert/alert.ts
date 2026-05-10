@@ -1,4 +1,5 @@
 import { type McpModule } from '@/client/models/types';
+import { getRN } from '@/shared/rn/core';
 
 const ALERT_TIMEOUT = 60_000;
 
@@ -10,11 +11,6 @@ interface AlertButton {
 }
 
 export const alertModule = (): McpModule => {
-  const getRN = () => {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
-    return require('react-native');
-  };
-
   return {
     description: 'Show native Alert.alert dialogs and get back which button was pressed.',
     name: 'alert',

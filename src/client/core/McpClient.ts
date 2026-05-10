@@ -9,6 +9,8 @@ import {
   type ServerMessage,
   type ToolRequest,
 } from '@/shared/protocol';
+import { loadRN, loadRNInternal } from '@/shared/rn/core';
+import { callDI, loadDeviceInfo } from '@/shared/rn/deviceInfo';
 
 const TAG = '\x1b[1;35m[rn-mcp-kit]\x1b[0m';
 const ARROW_IN = '\x1b[36m→\x1b[0m';
@@ -73,13 +75,11 @@ const isUsefulString = (value: unknown): value is string => {
 // script URL is a local file and `bundleLoadedFromServer` is false; we skip
 // the field in that case so Metro-facing tools fail fast.
 const detectDevServer = (): DevServerInfo | undefined => {
+  const getDevServer = loadRNInternal('Libraries/Core/Devtools/getDevServer') as
+    | (() => { bundleLoadedFromServer: boolean; url: string })
+    | null;
+  if (typeof getDevServer !== 'function') return undefined;
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
-    const mod = require('react-native/Libraries/Core/Devtools/getDevServer');
-    const getDevServer = (mod.default ?? mod) as () => {
-      bundleLoadedFromServer: boolean;
-      url: string;
-    };
     const info = getDevServer();
     if (!info.bundleLoadedFromServer || typeof info.url !== 'string') {
       return undefined;
@@ -101,15 +101,14 @@ const detectDevServer = (): DevServerInfo | undefined => {
 const autoDetectIdentity = (): ClientIdentity => {
   const out: ClientIdentity = {};
 
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
-    const rn = require('react-native');
-    const os = rn.Platform?.OS ?? rn.default?.Platform?.OS;
+  // RN is optional at this layer — SDK / tests may pull this module without
+  // a React Native runtime. Skip the platform field rather than throwing.
+  const RN = loadRN();
+  if (RN) {
+    const os = RN.Platform?.OS;
     if (typeof os === 'string') {
       out.platform = os;
     }
-  } catch {
-    // not running inside a React Native bundle — that's fine
   }
 
   const devServer = detectDevServer();
@@ -117,37 +116,28 @@ const autoDetectIdentity = (): ClientIdentity => {
     out.devServer = devServer;
   }
 
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
-    const di = require('react-native-device-info');
-    const DI = di.default ?? di;
-    const appName: unknown = DI.getApplicationName?.();
-    const appVersion: unknown = DI.getVersion?.();
-    const bundleId: unknown = DI.getBundleId?.() ?? DI.getBundleIdSync?.();
-    const rawDeviceName: unknown = DI.getDeviceNameSync?.();
-    const model: unknown = DI.getModel?.();
-    const manufacturer: unknown = DI.getManufacturerSync?.() ?? DI.getBrand?.();
-    const deviceId: unknown = DI.getUniqueIdSync?.();
+  // react-native-device-info is optional. When absent the identity stays
+  // partial (just platform + devServer) — both the handshake and the
+  // device module tolerate the missing package the same way.
+  const DI = loadDeviceInfo();
+  if (DI) {
+    const appName = callDI<string>(DI.getApplicationName);
+    const appVersion = callDI<string>(DI.getVersion);
+    const bundleId = callDI<string>(DI.getBundleId) ?? callDI<string>(DI.getBundleIdSync);
+    const rawDeviceName = callDI<string>(DI.getDeviceNameSync);
+    const model = callDI<string>(DI.getModel);
+    const manufacturer = callDI<string>(DI.getManufacturerSync) ?? callDI<string>(DI.getBrand);
+    const deviceId = callDI<string>(DI.getUniqueIdSync);
 
-    if (typeof appName === 'string') {
-      out.appName = appName;
-    }
-    if (typeof appVersion === 'string') {
-      out.appVersion = appVersion;
-    }
-    if (typeof bundleId === 'string') {
-      out.bundleId = bundleId;
-    }
+    if (typeof appName === 'string') out.appName = appName;
+    if (typeof appVersion === 'string') out.appVersion = appVersion;
+    if (typeof bundleId === 'string') out.bundleId = bundleId;
     if (isUsefulString(rawDeviceName)) {
       out.label = rawDeviceName;
     } else if (isUsefulString(model)) {
       out.label = isUsefulString(manufacturer) ? `${manufacturer} ${model}` : model;
     }
-    if (typeof deviceId === 'string') {
-      out.deviceId = deviceId;
-    }
-  } catch {
-    // react-native-device-info not installed — identity stays partial
+    if (typeof deviceId === 'string') out.deviceId = deviceId;
   }
 
   return out;

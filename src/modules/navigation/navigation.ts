@@ -5,7 +5,7 @@ import {
   makeProjectionSchema,
   projectAsValue,
   type ProjectionArgs,
-} from '@/shared/projectValue';
+} from '@/shared/projection/projectValue';
 
 import { type NavigationHistoryEntry, type NavigationRef, type NavigationState } from './types';
 
