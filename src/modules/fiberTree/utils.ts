@@ -1,3 +1,5 @@
+import { type CollapseRule, projectValue, type ProjectOptions } from '@/shared/projectValue';
+
 import {
   type Bounds,
   type ComponentQuery,
@@ -93,95 +95,78 @@ const getComponentType = (fiber: Fiber): ComponentType => {
   return 'other';
 };
 
-const MAX_VALUE_DEPTH = 3;
-
-export const serializeValue = (
-  value: unknown,
-  seen: WeakSet<object> = new WeakSet<object>(),
-  depth = 0,
-  maxDepth: number = MAX_VALUE_DEPTH
-): unknown => {
-  if (value === null || value === undefined) return value;
-  if (depth > maxDepth) return '[...]';
-
-  if (typeof value === 'function') {
-    return `[Function: ${value.name || 'anonymous'}]`;
-  }
-
-  if (typeof value === 'symbol') {
-    return value.toString();
-  }
-
-  if (typeof value !== 'object') return value;
-
-  // React element
-  if (value && typeof value === 'object' && '$$typeof' in value) {
-    return '[ReactElement]';
-  }
-
-  if (seen.has(value)) return '[Circular]';
-  seen.add(value);
-
-  // Skip objects that look like fiber nodes or native instances
-  if (
-    value &&
-    typeof value === 'object' &&
-    ('stateNode' in value || 'memoizedProps' in value || '__nativeTag' in value)
-  ) {
-    return '[InternalObject]';
-  }
-
-  if (Array.isArray(value)) {
-    return value.slice(0, 10).map((item) => {
-      return serializeValue(item, seen, depth + 1, maxDepth);
-    });
-  }
-
-  const result: Record<string, unknown> = {};
-  try {
-    const keys = Object.keys(value);
-    for (const key of keys.slice(0, 20)) {
-      if (key.startsWith('__')) continue;
-      try {
-        result[key] = serializeValue(
-          (value as Record<string, unknown>)[key],
-          seen,
-          depth + 1,
-          maxDepth
-        );
-      } catch {
-        result[key] = '[Error]';
-      }
-    }
-  } catch {
-    return '[Object]';
-  }
-  return result;
-};
-
-// Props to skip — internal React/RN properties that bloat output
-const SKIP_PROPS = new Set([
+// Props/values to drop — internal React/RN bookkeeping that bloats output.
+// Used by `projectFiberValue` below as `skipKeys`. Anything matching the
+// `__`-prefix regex is also dropped (covers `__nativeTag`, `__reactProps$...`,
+// react-refresh internal markers, etc.).
+const SKIP_KEYS_FIBER: Array<string | RegExp> = [
   '__internalInstanceHandle',
   '__nativeTag',
   'children',
   'collapsableChildren',
   'ref',
-]);
+  /^__/,
+];
 
-export const serializeProps = (props: Record<string, unknown> | null): Record<string, unknown> => {
-  if (!props) return {};
+// Collapse rule: detect React elements / fiber nodes / native instances and
+// replace them with compact `${...}`-keyed marker objects. Stops projectValue
+// from descending into ~unbounded React internals graph and emits something
+// the agent can act on (mcpId / componentName).
+const fiberCollapseRule: CollapseRule = (value: unknown) => {
+  if (!value || typeof value !== 'object') return undefined;
+  const obj = value as Record<string, unknown>;
 
-  const result: Record<string, unknown> = {};
-  for (const key of Object.keys(props)) {
-    if (SKIP_PROPS.has(key)) continue;
-    if (key.startsWith('__')) continue;
-    try {
-      result[key] = serializeValue(props[key]);
-    } catch {
-      result[key] = '[Error reading prop]';
-    }
+  // React element — has `$$typeof` symbol
+  if ('$$typeof' in obj) {
+    return { ['${ReactElement}']: true };
   }
-  return result;
+
+  // Fiber-like or native-instance — try to extract a compact ref
+  const looksLikeFiberOrNative =
+    'stateNode' in obj || 'memoizedProps' in obj || '__nativeTag' in obj;
+  if (!looksLikeFiberOrNative) return undefined;
+
+  // pull a fiber out — direct, or via internal handle on a native view
+  const fiber: Fiber =
+    (obj._reactInternals as Fiber | undefined) ??
+    (obj._reactInternalFiber as Fiber | undefined) ??
+    (obj._internalFiberInstanceHandleDEV as Fiber | undefined) ??
+    (obj._internalInstanceHandle as Fiber | undefined) ??
+    ('memoizedProps' in obj ? (obj as Fiber) : undefined);
+
+  const meta: Record<string, unknown> = {};
+  if (fiber) {
+    const props = fiber.memoizedProps as Record<string, unknown> | null | undefined;
+    const mcpId = props?.['data-mcp-id'];
+    const testID = props?.testID;
+    if (mcpId) meta.mcpId = mcpId;
+    if (testID) meta.testID = testID;
+    const typeName =
+      (fiber.type as { displayName?: string; name?: string } | null | undefined)?.displayName ??
+      (fiber.type as { displayName?: string; name?: string } | null | undefined)?.name;
+    if (typeName) meta.name = typeName;
+  }
+  if ('__nativeTag' in obj) {
+    meta.nativeTag = obj.__nativeTag;
+    const viewConfig = obj.viewConfig as { uiViewClassName?: string } | undefined;
+    if (viewConfig?.uiViewClassName) meta.viewClass = viewConfig.uiViewClassName;
+  }
+
+  return { ['${ref}']: Object.keys(meta).length > 0 ? meta : true };
+};
+
+/**
+ * Projection helper used everywhere fiber values are serialised (props, hook
+ * values, fiber refs). Pre-applies the fiber-aware collapse rule + skip list
+ * over the shared `projectValue`. Callers can pass `path` / `depth` / etc.
+ * through `options` like with `projectValue` directly.
+ */
+export const projectFiberValue = (value: unknown, options: ProjectOptions = {}): unknown => {
+  return projectValue(value, {
+    ...options,
+    collapse: [fiberCollapseRule, ...(options.collapse ?? [])],
+    skipKeys: [...SKIP_KEYS_FIBER, ...(options.skipKeys ?? [])],
+  }).value;
 };
 
 const getTextContent = (fiber: Fiber): string | undefined => {
@@ -278,7 +263,10 @@ const serializeFiberUnsafe = (
   }
 
   const name = getComponentName(fiber);
-  const props = serializeProps(fiber.memoizedProps);
+  // Pass raw memoizedProps through — handler-level `applyProjection` runs the
+  // single canonical projectValue walk on the final response, including this
+  // tree. Projecting here would cause double-projection and break path drill.
+  const props = (fiber.memoizedProps ?? {}) as Record<string, unknown>;
   const mcpId = fiber.memoizedProps?.['data-mcp-id'] as string | undefined;
   const testID = fiber.memoizedProps?.testID as string | undefined;
   const text = getTextContent(fiber);

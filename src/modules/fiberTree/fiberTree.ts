@@ -1,6 +1,11 @@
 import { type RefObject } from 'react';
 
 import { type McpModule } from '@/client/models/types';
+import {
+  applyProjection as applyProjectionCore,
+  makeProjectionSchema,
+  type ProjectionArgs,
+} from '@/shared/projectValue';
 
 import { type Bounds, type ComponentQuery } from './types';
 import {
@@ -20,9 +25,8 @@ import {
   getSiblings,
   matchesQuery,
   measureFiber,
+  projectFiberValue,
   serializeFiber,
-  serializeProps,
-  serializeValue,
   setRootRef,
 } from './utils';
 
@@ -92,8 +96,6 @@ const parseNamePattern = (raw: string): ((n: string) => boolean) => {
     return n === raw;
   };
 };
-
-const HOOK_DEFAULT_MAX_DEPTH = 3;
 
 // Try to treat `current` as a React component / native view instance and
 // collapse it to a compact identifier. Native views expose
@@ -199,9 +201,14 @@ const shapeMatchesKind = (raw: unknown, kind: string): boolean => {
   }
 };
 
-const serializeHookValue = (raw: unknown, kind: string, maxDepth: number): unknown => {
+// Pull a "useful" raw value out of a hook's memoizedState by kind. Does NOT
+// project — leaves the result raw so the final `applyProjection` sees the
+// real value tree (so `path` drill into hook values works). The shape here
+// is purely about *which slot field* to expose for each kind (e.g. Ref's
+// `.current`, Memo/Callback's first element of `[value, deps]`).
+const serializeHookValue = (raw: unknown, kind: string): unknown => {
   const walk = (v: unknown): unknown => {
-    return serializeValue(v, new WeakSet<object>(), 0, maxDepth);
+    return v;
   };
   switch (kind) {
     case 'Ref': {
@@ -426,10 +433,12 @@ const extractHooks = (
     expansionDepth: number;
     format: 'flat' | 'tree';
     kindsSet: Set<string> | null;
-    maxDepth: number;
     nameMatchers: Array<(n: string) => boolean> | null;
     redactPatterns: RegExp[];
     withValues: boolean;
+    valueDepth?: number;
+    valueMaxBytes?: number;
+    valuePath?: string;
   }
 ): FlatHookEntry[] | HookTreeNode[] | null => {
   // React's wrapper machinery makes "where does metadata live" depend on
@@ -529,7 +538,16 @@ const extractHooks = (
       } else {
         let value: unknown;
         try {
-          value = serializeHookValue(rawValueSlot, kind, filter.maxDepth);
+          // Kind-aware extraction (Ref's .current, Memo's first slot, ...)
+          // returns RAW. Then project with the user-given hook-value options
+          // (path / depth / maxBytes from select.hooks). Default depth=1 so
+          // each hook value stays compact even when withValues:true.
+          const extracted = serializeHookValue(rawValueSlot, kind);
+          value = projectFiberValue(extracted, {
+            depth: filter.valueDepth ?? 1,
+            maxBytes: filter.valueMaxBytes,
+            path: filter.valuePath,
+          });
           // Final cycle / non-serialisable check — the MCP bridge will
           // stringify this for transport, so bail now rather than killing
           // the whole response if one stray value carries a cycle past our
@@ -603,27 +621,40 @@ const extractHooks = (
   return filter.format === 'tree' ? flatHooksToTree(out) : out;
 };
 
+interface PropsOptions {
+  depth?: number;
+  maxBytes?: number;
+  path?: string;
+}
+
 interface HooksOptions {
   expansionDepth: number;
   format: 'flat' | 'tree';
   kindsSet: Set<string> | null;
-  maxDepth: number;
   nameMatchers: ReturnType<typeof parseNamePattern>[] | null;
   withValues: boolean;
+  // Projection of each hook value when withValues:true. depth/path/maxBytes
+  // apply to the resolved hook value (e.g. useState's stored value, useRef's
+  // .current). Without overrides — depth=1, no path, default maxBytes.
+  valueDepth?: number;
+  valueMaxBytes?: number;
+  valuePath?: string;
 }
 
 interface Projection {
   fields: Set<string>;
   hooks: HooksOptions;
-  propsPick: Set<string> | null;
+  props: PropsOptions;
 }
 
 interface HooksRawOptions {
+  depth?: number;
   expansionDepth?: number;
   format?: 'flat' | 'tree';
   kinds?: string[];
-  maxDepthInValues?: number;
+  maxBytes?: number;
   names?: string[];
+  path?: string;
   withValues?: boolean;
 }
 
@@ -635,11 +666,11 @@ const buildHooksOptions = (raw: HooksRawOptions | undefined): HooksOptions => {
         : Infinity,
     format: raw?.format === 'tree' ? 'tree' : 'flat',
     kindsSet: Array.isArray(raw?.kinds) ? new Set(raw.kinds) : null,
-    maxDepth:
-      typeof raw?.maxDepthInValues === 'number' && raw.maxDepthInValues >= 0
-        ? Math.min(Math.floor(raw.maxDepthInValues), 8)
-        : HOOK_DEFAULT_MAX_DEPTH,
     nameMatchers: Array.isArray(raw?.names) ? raw.names.map(parseNamePattern) : null,
+    valueDepth: typeof raw?.depth === 'number' && raw.depth >= 0 ? raw.depth : undefined,
+    valueMaxBytes:
+      typeof raw?.maxBytes === 'number' && raw.maxBytes >= 0 ? raw.maxBytes : undefined,
+    valuePath: typeof raw?.path === 'string' ? raw.path : undefined,
     withValues: raw?.withValues === true,
   };
 };
@@ -648,13 +679,21 @@ const buildHooksOptions = (raw: HooksRawOptions | undefined): HooksOptions => {
  * Parse the `select` arg into a flat Projection. Each element of `select` may
  * be either a string (include the named field with default options) or an
  * object whose keys are field names and whose values are `true` / `false` /
- * per-field options. Per-field options currently understood:
- * `props: { pick: string[] }`, `hooks: HooksRawOptions`. Other fields ignore
- * their value beyond truthiness.
+ * per-field projection options.
+ *
+ * Per-field options:
+ *   props: { path?, depth?, maxBytes? }   — projection of the props object
+ *   hooks: HooksRawOptions                — kinds/names filters + withValues
+ *                                           + path/depth/maxBytes for hook
+ *                                           values
+ *
+ * Heavy fields (props, hooks) are projected handler-side with these per-field
+ * options so the rest of the response (mcpId, name, total, ...) stays raw and
+ * always visible.
  */
 const parseProjection = (selectArg: unknown): Projection => {
   const fields = new Set<string>();
-  let propsPick: Set<string> | null = null;
+  let propsRaw: PropsOptions = {};
   let hooksRaw: HooksRawOptions | undefined;
 
   if (Array.isArray(selectArg)) {
@@ -668,10 +707,7 @@ const parseProjection = (selectArg: unknown): Projection => {
           if (value === false) continue;
           fields.add(key);
           if (key === 'props' && value && typeof value === 'object') {
-            const pick = (value as { pick?: unknown }).pick;
-            if (Array.isArray(pick)) {
-              propsPick = new Set(pick.filter((k): k is string => typeof k === 'string'));
-            }
+            propsRaw = value as PropsOptions;
           } else if (key === 'hooks' && value && typeof value === 'object') {
             hooksRaw = value as HooksRawOptions;
           }
@@ -684,7 +720,7 @@ const parseProjection = (selectArg: unknown): Projection => {
     for (const f of QUERY_DEFAULT_FIELDS) fields.add(f);
   }
 
-  return { fields, hooks: buildHooksOptions(hooksRaw), propsPick };
+  return { fields, hooks: buildHooksOptions(hooksRaw), props: propsRaw };
 };
 
 const FIND_SCHEMA = {
@@ -701,6 +737,23 @@ const FIND_SCHEMA = {
     examples: ['LoginForm', 'Button:1/Pressable', 'TabBar/TabBarItem:2'],
     type: 'string',
   },
+};
+
+// Default depth for fiberTree handlers. Their typical response shape has
+// 3 nesting layers before the heavy values start (e.g. query: response →
+// matches array → match object → match fields → props content). depth=4
+// shows all match-level fields with heavy nested values (props.style etc.)
+// already collapsed into markers — useful balance of visibility vs lean.
+const FIBER_DEFAULT_DEPTH = 4;
+
+// Per-tool inputSchema — uses fiberTree's depth=2 default so the description
+// matches reality.
+const PROJECTION_SCHEMA = makeProjectionSchema(FIBER_DEFAULT_DEPTH);
+
+// Module-local 2-arg wrapper around the shared `applyProjection` so handlers
+// don't have to repeat `projectFiberValue` + default-depth on every call.
+const applyProjection = (result: unknown, args: ProjectionArgs): unknown => {
+  return applyProjectionCore(result, args, projectFiberValue, FIBER_DEFAULT_DEPTH);
 };
 
 // Kept deliberately loose: the module only calls getCurrentRoute at query
@@ -1105,12 +1158,15 @@ TIPS
           try {
             const bound = (method as (...a: unknown[]) => unknown).bind(instance);
             const result = bound(...(methodArgs ?? []));
-            return {
-              component: getComponentName(fiber),
-              method: methodName,
-              result,
-              success: true,
-            };
+            return applyProjection(
+              {
+                component: getComponentName(fiber),
+                method: methodName,
+                result,
+                success: true,
+              },
+              args as ProjectionArgs
+            );
           } catch (e) {
             return {
               error: `Method "${methodName}" threw: ${e instanceof Error ? e.message : String(e)}`,
@@ -1119,6 +1175,7 @@ TIPS
         },
         inputSchema: {
           ...FIND_SCHEMA,
+          ...PROJECTION_SCHEMA,
           args: { description: 'Arguments passed to the method.', type: 'array' },
           method: {
             description: 'Method name to call.',
@@ -1136,13 +1193,18 @@ TIPS
           const fiber = findComponent(args);
           if (!fiber) return { error: 'Component not found' };
 
-          const depth = (args.depth as number) || DEFAULT_DEPTH;
-          const serialized = serializeFiber(fiber, depth);
-          return serialized?.children ?? [];
+          const treeDepth = (args.treeDepth as number) || DEFAULT_DEPTH;
+          const serialized = serializeFiber(fiber, treeDepth);
+          return applyProjection(serialized?.children ?? [], args as ProjectionArgs);
         },
         inputSchema: {
           ...FIND_SCHEMA,
-          depth: { description: 'Max traversal depth (default: 10).', type: 'number' },
+          ...PROJECTION_SCHEMA,
+          treeDepth: {
+            description:
+              'Max child traversal depth (default: 10). How far down the React fiber tree to walk before stopping. Independent of `depth` (which controls projection of values into `${...}` markers).',
+            type: 'number',
+          },
         },
       },
       get_component: {
@@ -1166,8 +1228,8 @@ TIPS
 
           if (!fiber) return { error: 'Component not found' };
 
-          const depth = (args.depth as number) || DEFAULT_DEPTH;
-          const serialized = serializeFiber(fiber, depth);
+          const treeDepth = (args.treeDepth as number) || DEFAULT_DEPTH;
+          const serialized = serializeFiber(fiber, treeDepth);
           if (serialized && Array.isArray(args.select)) {
             const fields = new Set(args.select as string[]);
             if (fields.has('bounds')) {
@@ -1180,10 +1242,10 @@ TIPS
               serialized.props = {};
             }
           }
-          return serialized;
+          return applyProjection(serialized, args as ProjectionArgs);
         },
         inputSchema: {
-          depth: { description: 'Max child traversal depth (default: 10).', type: 'number' },
+          ...PROJECTION_SCHEMA,
           mcpId: { description: 'Stable data-mcp-id to match.', type: 'string' },
           name: { description: 'Component name to match.', type: 'string' },
           select: {
@@ -1194,23 +1256,12 @@ TIPS
           },
           testID: { description: 'testID to match.', type: 'string' },
           text: { description: 'Rendered text substring.', type: 'string' },
+          treeDepth: {
+            description:
+              'Max child traversal depth (default: 10). How far down the React fiber tree to walk before stopping. Independent of `depth` (which controls projection of values into `${...}` markers).',
+            type: 'number',
+          },
         },
-      },
-      get_props: {
-        description: 'Get all props of one component.',
-        handler: (args) => {
-          const rootError = requireRoot();
-          if (rootError) return rootError;
-
-          const fiber = findComponent(args);
-          if (!fiber) return { error: 'Component not found' };
-
-          return {
-            name: getComponentName(fiber),
-            props: serializeProps(fiber.memoizedProps),
-          };
-        },
-        inputSchema: FIND_SCHEMA,
       },
       get_ref_methods: {
         description: "List available methods on a component's native ref.",
@@ -1240,11 +1291,16 @@ TIPS
           if (rootError) return rootError;
           const root = getFiberRoot()!;
 
-          const depth = (args.depth as number) || DEFAULT_DEPTH;
-          return serializeFiber(root, depth);
+          const treeDepth = (args.treeDepth as number) || DEFAULT_DEPTH;
+          return applyProjection(serializeFiber(root, treeDepth), args as ProjectionArgs);
         },
         inputSchema: {
-          depth: { description: 'Max traversal depth (default: 10).', type: 'number' },
+          ...PROJECTION_SCHEMA,
+          treeDepth: {
+            description:
+              'Max child traversal depth (default: 10). How far down the React fiber tree to walk before stopping. Independent of `depth` (which controls projection of values into `${...}` markers).',
+            type: 'number',
+          },
         },
       },
       invoke: {
@@ -1272,10 +1328,14 @@ TIPS
           }
 
           const result = callback(...(callbackArgs ?? []));
-          return { component: getComponentName(fiber), result, success: true };
+          return applyProjection(
+            { component: getComponentName(fiber), result, success: true },
+            args as ProjectionArgs
+          );
         },
         inputSchema: {
           ...FIND_SCHEMA,
+          ...PROJECTION_SCHEMA,
           args: {
             description: 'Arguments passed to the callback.',
             examples: [[true], ['text']],
@@ -1292,189 +1352,194 @@ TIPS
         description:
           'Chain-based fiber search. Each step narrows the result set via `scope` + criteria; multiple matches fan out into the next step. Returns { matches, total, truncated? }. Pass `waitFor` to poll until an element appears or disappears (optionally requiring stability for N ms) instead of a single-shot read. See the module description for scope, criteria, select and response reference.',
         handler: async (args) => {
-          const rootError = requireRoot();
-          if (rootError) return rootError;
-          const root = getFiberRoot()!;
+          const inner = async (): Promise<unknown> => {
+            const rootError = requireRoot();
+            if (rootError) return rootError;
+            const root = getFiberRoot()!;
 
-          const steps = args.steps as QueryStep[] | undefined;
-          if (!Array.isArray(steps) || steps.length === 0) {
-            return { error: 'query requires a non-empty `steps` array' };
-          }
+            const steps = args.steps as QueryStep[] | undefined;
+            if (!Array.isArray(steps) || steps.length === 0) {
+              return { error: 'query requires a non-empty `steps` array' };
+            }
 
-          const limit =
-            typeof args.limit === 'number' && args.limit > 0
-              ? Math.min(Math.floor(args.limit), QUERY_LIMIT_MAX)
-              : QUERY_LIMIT_DEFAULT;
-          const dedup = args.dedup !== false;
-          const useCacheDefault = args.cache !== false;
-          const onlyVisible = args.onlyVisible === true;
-          const projection = parseProjection(args.select);
-          const { fields, hooks: hookOpts, propsPick } = projection;
+            const limit =
+              typeof args.limit === 'number' && args.limit > 0
+                ? Math.min(Math.floor(args.limit), QUERY_LIMIT_MAX)
+                : QUERY_LIMIT_DEFAULT;
+            const dedup = args.dedup !== false;
+            const useCacheDefault = args.cache !== false;
+            const onlyVisible = args.onlyVisible === true;
+            const projection = parseProjection(args.select);
+            const { fields, hooks: hookOpts, props: propsOpts } = projection;
 
-          const runtime: QueryRuntime = { navigationRef, root };
+            const runtime: QueryRuntime = { navigationRef, root };
 
-          const runOnce = async (
-            useCache: boolean
-          ): Promise<{ matches: Record<string, unknown>[]; total: number; truncated?: true }> => {
-            const rawMatches = runCachedQuery(runtime, steps, useCache);
-            let all = dedup ? dedupAncestors(rawMatches) : rawMatches;
+            const runOnce = async (
+              useCache: boolean
+            ): Promise<{ matches: Record<string, unknown>[]; total: number; truncated?: true }> => {
+              const rawMatches = runCachedQuery(runtime, steps, useCache);
+              let all = dedup ? dedupAncestors(rawMatches) : rawMatches;
 
-            const boundsCache = new Map<Fiber, Bounds | null>();
-            const measure = async (fiber: Fiber): Promise<Bounds | null> => {
-              if (boundsCache.has(fiber)) return boundsCache.get(fiber) ?? null;
-              const b = await measureFiber(fiber);
-              boundsCache.set(fiber, b);
-              return b;
+              const boundsCache = new Map<Fiber, Bounds | null>();
+              const measure = async (fiber: Fiber): Promise<Bounds | null> => {
+                if (boundsCache.has(fiber)) return boundsCache.get(fiber) ?? null;
+                const b = await measureFiber(fiber);
+                boundsCache.set(fiber, b);
+                return b;
+              };
+
+              if (onlyVisible) {
+                const visibleRect = getVisibleRect();
+                if (visibleRect) {
+                  const rect = visibleRect;
+                  const measured = await Promise.all(
+                    all.map(async (fiber) => {
+                      return { bounds: await measure(fiber), fiber };
+                    })
+                  );
+                  all = measured
+                    .filter(({ bounds }) => {
+                      return bounds && intersectsRect(bounds, rect);
+                    })
+                    .map(({ fiber }) => {
+                      return fiber;
+                    });
+                }
+              }
+
+              const total = all.length;
+              const truncated = total > limit;
+              const picked = truncated ? all.slice(0, limit) : all;
+
+              const matches = await Promise.all(
+                picked.map(async (fiber) => {
+                  const result: Record<string, unknown> = {};
+                  if (fields.has('bounds')) {
+                    result.bounds = await measure(fiber);
+                  }
+                  if (fields.has('mcpId')) {
+                    result.mcpId = fiber.memoizedProps?.['data-mcp-id'];
+                  }
+                  if (fields.has('name')) {
+                    result.name = getComponentName(fiber);
+                  }
+                  if (fields.has('props')) {
+                    // Heavy field — projected here via select.props options
+                    // (path/depth/maxBytes). Top-level response stays raw so
+                    // mcpId/name/etc are always visible without projection.
+                    result.props = projectFiberValue(fiber.memoizedProps ?? {}, {
+                      depth: propsOpts.depth ?? 1,
+                      maxBytes: propsOpts.maxBytes,
+                      path: propsOpts.path,
+                    });
+                  }
+                  if (fields.has('testID')) {
+                    result.testID = fiber.memoizedProps?.testID;
+                  }
+                  if (fields.has('hooks')) {
+                    result.hooks = extractHooks(fiber, {
+                      ...hookOpts,
+                      redactPatterns,
+                    });
+                  }
+                  return result;
+                })
+              );
+
+              return truncated ? { matches, total, truncated: true } : { matches, total };
             };
 
-            if (onlyVisible) {
-              const visibleRect = getVisibleRect();
-              if (visibleRect) {
-                const rect = visibleRect;
-                const measured = await Promise.all(
-                  all.map(async (fiber) => {
-                    return { bounds: await measure(fiber), fiber };
-                  })
-                );
-                all = measured
-                  .filter(({ bounds }) => {
-                    return bounds && intersectsRect(bounds, rect);
-                  })
-                  .map(({ fiber }) => {
-                    return fiber;
-                  });
-              }
+            const waitForRaw = args.waitFor as
+              | { interval?: number; stable?: number; timeout?: number; until?: unknown }
+              | undefined;
+
+            if (!waitForRaw || typeof waitForRaw !== 'object') {
+              return runOnce(useCacheDefault);
             }
 
-            const total = all.length;
-            const truncated = total > limit;
-            const picked = truncated ? all.slice(0, limit) : all;
-
-            const matches = await Promise.all(
-              picked.map(async (fiber) => {
-                const result: Record<string, unknown> = {};
-                if (fields.has('bounds')) {
-                  result.bounds = await measure(fiber);
-                }
-                if (fields.has('mcpId')) {
-                  result.mcpId = fiber.memoizedProps?.['data-mcp-id'];
-                }
-                if (fields.has('name')) {
-                  result.name = getComponentName(fiber);
-                }
-                if (fields.has('props')) {
-                  const full = serializeProps(fiber.memoizedProps);
-                  if (propsPick) {
-                    const filtered: Record<string, unknown> = {};
-                    for (const key of propsPick) {
-                      if (key in full) filtered[key] = full[key];
-                    }
-                    result.props = filtered;
-                  } else {
-                    result.props = full;
-                  }
-                }
-                if (fields.has('testID')) {
-                  result.testID = fiber.memoizedProps?.testID;
-                }
-                if (fields.has('hooks')) {
-                  result.hooks = extractHooks(fiber, {
-                    ...hookOpts,
-                    redactPatterns,
-                  });
-                }
-                return result;
-              })
+            const until = waitForRaw.until;
+            if (until !== 'appear' && until !== 'disappear') {
+              return { error: 'waitFor.until must be "appear" or "disappear"' };
+            }
+            const waitUntil: WaitUntil = until;
+            const timeout = Math.min(
+              WAIT_TIMEOUT_MAX,
+              Math.max(0, waitForRaw.timeout ?? WAIT_TIMEOUT_DEFAULT)
             );
+            const interval = Math.max(
+              WAIT_INTERVAL_MIN,
+              waitForRaw.interval ?? WAIT_INTERVAL_DEFAULT
+            );
+            const stable = Math.max(0, waitForRaw.stable ?? 0);
+            const predicate = (total: number): boolean => {
+              return waitUntil === 'appear' ? total >= 1 : total === 0;
+            };
 
-            return truncated ? { matches, total, truncated: true } : { matches, total };
-          };
-
-          const waitForRaw = args.waitFor as
-            | { interval?: number; stable?: number; timeout?: number; until?: unknown }
-            | undefined;
-
-          if (!waitForRaw || typeof waitForRaw !== 'object') {
-            return runOnce(useCacheDefault);
-          }
-
-          const until = waitForRaw.until;
-          if (until !== 'appear' && until !== 'disappear') {
-            return { error: 'waitFor.until must be "appear" or "disappear"' };
-          }
-          const waitUntil: WaitUntil = until;
-          const timeout = Math.min(
-            WAIT_TIMEOUT_MAX,
-            Math.max(0, waitForRaw.timeout ?? WAIT_TIMEOUT_DEFAULT)
-          );
-          const interval = Math.max(
-            WAIT_INTERVAL_MIN,
-            waitForRaw.interval ?? WAIT_INTERVAL_DEFAULT
-          );
-          const stable = Math.max(0, waitForRaw.stable ?? 0);
-          const predicate = (total: number): boolean => {
-            return waitUntil === 'appear' ? total >= 1 : total === 0;
-          };
-
-          const startedAt = Date.now();
-          const deadline = startedAt + timeout;
-          let attempts = 0;
-          let stableSince: number | null = null;
-          let lastResult = await runOnce(false);
-          attempts++;
-
-          // eslint-disable-next-line no-constant-condition
-          while (true) {
-            const now = Date.now();
-            const elapsedMs = now - startedAt;
-            const met = predicate(lastResult.total);
-
-            if (met) {
-              if (stable === 0) {
-                return {
-                  ...lastResult,
-                  attempts,
-                  elapsedMs,
-                  timedOut: false,
-                  until: waitUntil,
-                  waited: true,
-                };
-              }
-              if (stableSince === null) stableSince = now;
-              if (now - stableSince >= stable) {
-                return {
-                  ...lastResult,
-                  attempts,
-                  elapsedMs,
-                  stableFor: now - stableSince,
-                  timedOut: false,
-                  until: waitUntil,
-                  waited: true,
-                };
-              }
-            } else {
-              stableSince = null;
-            }
-
-            if (now >= deadline) {
-              return {
-                ...lastResult,
-                attempts,
-                elapsedMs,
-                timedOut: true,
-                until: waitUntil,
-                waited: true,
-              };
-            }
-
-            const remaining = deadline - now;
-            const sleepMs = Math.min(interval, Math.max(0, remaining));
-            await new Promise<void>((resolve) => {
-              return setTimeout(resolve, sleepMs);
-            });
-            lastResult = await runOnce(false);
+            const startedAt = Date.now();
+            const deadline = startedAt + timeout;
+            let attempts = 0;
+            let stableSince: number | null = null;
+            let lastResult = await runOnce(false);
             attempts++;
-          }
+
+            // eslint-disable-next-line no-constant-condition
+            while (true) {
+              const now = Date.now();
+              const elapsedMs = now - startedAt;
+              const met = predicate(lastResult.total);
+
+              if (met) {
+                if (stable === 0) {
+                  return {
+                    ...lastResult,
+                    attempts,
+                    elapsedMs,
+                    timedOut: false,
+                    until: waitUntil,
+                    waited: true,
+                  };
+                }
+                if (stableSince === null) stableSince = now;
+                if (now - stableSince >= stable) {
+                  return {
+                    ...lastResult,
+                    attempts,
+                    elapsedMs,
+                    stableFor: now - stableSince,
+                    timedOut: false,
+                    until: waitUntil,
+                    waited: true,
+                  };
+                }
+              } else {
+                stableSince = null;
+              }
+
+              if (now >= deadline) {
+                return {
+                  ...lastResult,
+                  attempts,
+                  elapsedMs,
+                  timedOut: true,
+                  until: waitUntil,
+                  waited: true,
+                };
+              }
+
+              const remaining = deadline - now;
+              const sleepMs = Math.min(interval, Math.max(0, remaining));
+              await new Promise<void>((resolve) => {
+                return setTimeout(resolve, sleepMs);
+              });
+              lastResult = await runOnce(false);
+              attempts++;
+            }
+          };
+          // No top-level applyProjection here — heavy fields (props, hooks)
+          // are projected per-field via select. The rest of the response
+          // (matches array, mcpId/name/total/...) is light enough to return
+          // raw.
+          return inner();
         },
         inputSchema: {
           cache: {
@@ -1497,13 +1562,14 @@ TIPS
             type: 'boolean',
           },
           select: {
-            description: `Output fields: mcpId, name, testID, props, bounds, hooks. Default ${JSON.stringify(QUERY_DEFAULT_FIELDS)}. Each entry is either a string (\`"mcpId"\` — include the field with defaults) or an object whose keys are field names. Object values are \`true\` (include with defaults), \`false\` (exclude), or per-field options. Per-field options: \`props: { pick: string[] }\` keeps only the listed prop names (unknown keys silently dropped); \`hooks: { kinds?, names?, withValues?, maxDepthInValues?, expansionDepth?, format? }\` configures hook extraction. \`hooks.kinds\` filters by kind (State | Reducer | Memo | Callback | Ref | Effect | LayoutEffect | InsertionEffect | Context | Transition | DeferredValue | Id | SyncExternalStore | ImperativeHandle | Custom). \`hooks.names\` filters by name (exact or \`/regex/flags\`). Each hook entry carries \`{ kind, name, hook?, via?, expanded? }\` — \`hook\` is the source-level hook function (\`useState\`, \`useAnimatedStyle\`); \`expanded: true\` marks a parent custom-hook call whose sub-hooks follow. \`hooks.withValues: true\` adds resolved values. \`hooks.maxDepthInValues\` caps value recursion (default 3, max 8). \`hooks.expansionDepth\` caps custom-hook recursion — \`0\` = no expansion (top-level only), \`1\` = one level, default \`Infinity\`. \`hooks.format: "tree"\` returns nested \`children:\` instead of flat \`via:\`.`,
+            description: `Output fields: mcpId, name, testID, props, bounds, hooks. Default ${JSON.stringify(QUERY_DEFAULT_FIELDS)}. Each entry is either a string (\`"mcpId"\` — include with defaults) or an object whose keys are field names. Object values are \`true\` (include with defaults), \`false\` (exclude), or per-field options.\n\nLight fields (mcpId, name, testID, bounds) — no options, just toggle.\n\nHEAVY FIELDS — projected per-field via shared \`projectValue\` so heavy nested values become \`\${...}\`-keyed markers. Each takes its own \`path\` / \`depth\` / \`maxBytes\` — overall response stays raw, only these fields are projected.\n\nprops options: \`{ path?, depth?, maxBytes? }\`. \`path\` = JS-style drill into props (\`'style'\`, \`'style[0]'\`, \`'data["data-mcp-id"]'\`); \`depth\` = container expansion depth (default 1, max 8); \`maxBytes\` = soft cap on the projected props.\n\nhooks options: \`{ kinds?, names?, withValues?, expansionDepth?, format?, path?, depth?, maxBytes? }\`. \`kinds\` filters by kind (State | Reducer | Memo | Callback | Ref | Effect | LayoutEffect | InsertionEffect | Context | Transition | DeferredValue | Id | SyncExternalStore | ImperativeHandle | Custom). \`names\` filters by name (exact or \`/regex/flags\`). \`withValues: true\` adds resolved values. \`expansionDepth\` caps custom-hook recursion (\`0\` = top-level only; default Infinity). \`format: "tree"\` returns nested \`children:\` instead of flat \`via:\`. \`path\` / \`depth\` / \`maxBytes\` apply to each hook value when withValues:true.\n\nEach hook entry carries \`{ kind, name, hook?, via?, expanded? }\` — \`hook\` is the source-level hook function (\`useState\`, \`useAnimatedStyle\`); \`expanded: true\` marks a parent custom-hook call whose sub-hooks follow.`,
             examples: [
               ['mcpId', 'name', 'bounds'],
-              ['mcpId', { props: { pick: ['placeholder', 'value'] } }],
+              ['mcpId', { props: { path: 'style' } }],
+              ['mcpId', { props: { depth: 3 } }],
               [{ hooks: { kinds: ['State'], withValues: true }, mcpId: true }],
               [{ hooks: { expansionDepth: 1, format: 'tree', withValues: true }, mcpId: true }],
-              [{ hooks: { names: ['/^is/'], withValues: true }, mcpId: true }],
+              [{ hooks: { names: ['/^is/'], path: '[0].value', withValues: true }, mcpId: true }],
             ],
             type: 'array',
           },

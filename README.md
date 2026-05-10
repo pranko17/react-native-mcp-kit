@@ -288,7 +288,14 @@ Wrapper cascades (`PressableView → Pressable → View → RCTView`) collapse t
 
 Pass `waitFor: { until: 'appear' | 'disappear', timeout?, interval?, stable? }` to poll the same query until the target state is reached — e.g. `waitFor: { until: 'appear', stable: 300 }` waits for a screen to mount and hold stable for 300ms. Response carries `{ waited, attempts, elapsedMs, timedOut, stableFor? }` alongside the usual matches.
 
-Pass `select: [{ hooks: true }]` to read a component's hooks with variable names recovered from source — `useState` / `useMemo` / `useCallback` / `useRef` / `useEffect` / custom hooks all visible. Configure via the nested options: `select: [{ hooks: { kinds: [...], names: [...], withValues: true, expansionDepth: 1, format: "tree" } }]` — filter by kind/name (exact or `/regex/flags`), opt into resolved values, cap custom-hook recursion, switch flat/tree shape. Sensitive names (password, token, jwt, secret, credential, apiKey, authorization, *Pin) are auto-redacted — override via `fiberTreeModule({ redactHookNames, additionalRedactHookNames })`. Works against any HOC chain (`memo`, `forwardRef`, custom HOCs, `as` casts) and library hooks from react-query, react-redux, reanimated, react-navigation.
+**Per-field projection.** Heavy fields — `props` and `hooks` — are projected per-field via `select`, so the rest of the response (mcpId, name, total) stays raw and always visible. Each takes its own `path` / `depth` / `maxBytes` knobs:
+
+- `select: [{ props: { path: "data[0:5]", depth: 2 } }]` — drill into props.data[0..5) with 2 levels of expansion.
+- `select: [{ hooks: { kinds: ["State"], names: ["isLoading"], withValues: true, depth: 2, path: "[0].value" } }]` — filter hooks by kind/name + project hook values.
+
+Heavy nested values render as compact `${kind}`-keyed markers — `{"${arr}":47}`, `{"${fun}":"onPress"}`, `{"${str}":{ "len":1247, "preview":"..." }}` for long strings, `{"${Date}":"iso"}`, `{"${Err}":{ name, msg }}`, `{"${cyc}":true}`, `{"${ref}":{ mcpId, name }}` for component refs. Wide objects/arrays (>30 keys / >50 items) get a `${truncated}` sentinel as the first entry.
+
+Hooks pull `useState` / `useMemo` / `useCallback` / `useRef` / `useEffect` / custom hooks with variable names recovered from source (via `__mcp_hooks` metadata from the test-id babel plugin). `withValues: true` adds resolved values; `expansionDepth` caps custom-hook recursion (`0` = top-level only); `format: "tree"` returns nested children instead of flat `via` chains. Sensitive names (password, token, jwt, secret, credential, apiKey, authorization, *Pin) are auto-redacted — override via `fiberTreeModule({ redactHookNames, additionalRedactHookNames })`. Works against any HOC chain (`memo`, `forwardRef`, custom HOCs, `as` casts) and library hooks from react-query, react-redux, reanimated, react-navigation.
 
 ### i18n
 

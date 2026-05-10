@@ -27,7 +27,7 @@ export const DEFAULT_DEPTH = 1;
 export const MAX_DEPTH = 8;
 export const DEFAULT_OBJECT_CAP = 30;
 export const DEFAULT_ARRAY_CAP = 50;
-export const DEFAULT_PREVIEW_CAP = 50;
+export const DEFAULT_PREVIEW_CAP = 100;
 export const DEFAULT_MAX_BYTES = 50_000;
 
 export type CollapseRule = (value: unknown) => Record<string, unknown> | undefined;
@@ -39,7 +39,7 @@ export interface ProjectOptions {
   path?: string;
   previewCap?: number;
   redact?: RedactPatterns;
-  skipKeys?: ReadonlyArray<string>;
+  skipKeys?: ReadonlyArray<string | RegExp>;
 }
 
 export interface ProjectResult {
@@ -47,6 +47,80 @@ export interface ProjectResult {
   truncated: boolean;
   value: unknown;
 }
+
+/**
+ * Standard `path` / `depth` / `maxBytes` arg shape for any tool that returns
+ * heavy JSON. Modules call `makeProjectionSchema(defaultDepth)` to get a
+ * description string that reflects their per-tool default, and spread the
+ * result into their inputSchema. Args are then funnelled through
+ * `applyProjection` at the handler exit.
+ */
+export const makeProjectionSchema = (
+  defaultDepth: number = DEFAULT_DEPTH
+): Record<string, { description: string; type: string; examples?: unknown[] }> => {
+  return {
+    depth: {
+      description: `Container expansion depth (default ${defaultDepth}, max ${MAX_DEPTH}). Lower = leaner response with deeper levels collapsed to \`\${obj}\`/\`\${arr}\` markers; higher = expand further. Specials and overflow always become markers.`,
+      examples: [1, 3, 8],
+      type: 'number',
+    },
+    maxBytes: {
+      description: `Soft byte cap on the response (default ${DEFAULT_MAX_BYTES}). When exceeded the whole response is replaced with a \`\${str}\` marker carrying the original size + a 200-byte preview.`,
+      type: 'number',
+    },
+    path: {
+      description:
+        'JS-style path drill into the response. `.key`, `["quoted.key"]`, `[3]` (index), `[1:5]` (slice). After array slice, chained `.key` maps over each element; `[N]` picks one. Useful for taking a small piece out of a big response without retrieving the whole thing.',
+      examples: ['items[0].body', 'items[0:3].id', 'data.user.email'],
+      type: 'string',
+    },
+  };
+};
+
+/** Default-depth projection schema — for modules that don't override depth. */
+export const PROJECTION_SCHEMA = makeProjectionSchema();
+
+export interface ProjectionArgs {
+  depth?: number;
+  maxBytes?: number;
+  path?: string;
+}
+
+/**
+ * A projector function — takes a raw value + options, returns an
+ * agent-friendly projected value. Modules can plug in `projectFiberValue`
+ * (with fiber-aware collapse rules) or call `projectValue` directly.
+ */
+export type Projector = (value: unknown, options: ProjectOptions) => unknown;
+
+/**
+ * Convenience wrapper around `projectValue` that returns just the projected
+ * value (drops the `{ bytes, truncated }` envelope). Most module handlers
+ * want this form when they don't need byte-cap telemetry.
+ */
+export const projectAsValue: Projector = (value, options) => {
+  return projectValue(value, options).value;
+};
+
+/**
+ * Standard handler-exit hook. Call this on the final raw response with the
+ * tool's args; it pulls `path`/`depth`/`maxBytes` and forwards to the given
+ * projector. Modules may override `defaultDepth` per-tool (e.g. fiberTree
+ * uses 2 because its top-level shape is an array of matches and depth 1
+ * would collapse the array itself into a marker).
+ */
+export const applyProjection = (
+  result: unknown,
+  args: ProjectionArgs,
+  projector: Projector,
+  defaultDepth: number = DEFAULT_DEPTH
+): unknown => {
+  return projector(result, {
+    depth: args.depth ?? defaultDepth,
+    maxBytes: args.maxBytes,
+    path: args.path,
+  });
+};
 
 const isPlainObject = (v: unknown): v is Record<string, unknown> => {
   if (v === null || typeof v !== 'object') return false;
@@ -137,7 +211,7 @@ const walkObject = (
   seen: WeakSet<object>
 ): unknown => {
   const allKeys = Object.keys(obj).filter((k) => {
-    return !ctx.skipKeys.has(k);
+    return !matchesSkip(k, ctx);
   });
   const total = allKeys.length;
   const cap = ctx.objectCap;
@@ -162,8 +236,15 @@ interface WalkCtx {
   compiledRedact: ReturnType<typeof compileRedact>;
   objectCap: number;
   previewCap: number;
-  skipKeys: Set<string>;
+  skipExact: Set<string>;
+  skipRegex: RegExp[];
 }
+
+const matchesSkip = (key: string, ctx: WalkCtx): boolean => {
+  if (ctx.skipExact.has(key)) return true;
+  for (const rx of ctx.skipRegex) if (rx.test(key)) return true;
+  return false;
+};
 
 const walk = (v: unknown, remainingDepth: number, ctx: WalkCtx, seen: WeakSet<object>): unknown => {
   // primitives
@@ -201,7 +282,12 @@ export const projectValue = (input: unknown, options?: ProjectOptions): ProjectR
   const previewCap = opts.previewCap ?? DEFAULT_PREVIEW_CAP;
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
   const collapse = opts.collapse ?? [];
-  const skipKeys = new Set(opts.skipKeys ?? []);
+  const skipExact = new Set<string>();
+  const skipRegex: RegExp[] = [];
+  for (const k of opts.skipKeys ?? []) {
+    if (typeof k === 'string') skipExact.add(k);
+    else skipRegex.push(k);
+  }
   const compiledRedact = compileRedact(opts.redact);
 
   // resolve path first (if any) — applies to the input tree, not the projection
@@ -224,7 +310,8 @@ export const projectValue = (input: unknown, options?: ProjectOptions): ProjectR
     compiledRedact,
     objectCap,
     previewCap,
-    skipKeys,
+    skipExact,
+    skipRegex,
   };
 
   const seen = new WeakSet<object>();

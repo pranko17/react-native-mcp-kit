@@ -55,7 +55,15 @@ Gesture tools: \`host${MODULE_SEPARATOR}tap\` / \`host${MODULE_SEPARATOR}long_pr
 
 Stack traces: \`errors${MODULE_SEPARATOR}get_errors\` and \`log_box${MODULE_SEPARATOR}get_logs\` return parsed \`stackFrames\` you can pass straight into \`metro${MODULE_SEPARATOR}symbolicate\` to resolve bundled frames back to source paths via Metro.
 
-Component-local state: \`fiber_tree${MODULE_SEPARATOR}query\` with \`select: ["hooks"]\` reads a component's hook list — useState / useMemo / useRef / useEffect / custom hooks — with variable names recovered from source. Each entry carries \`{ kind, name, hook?, via?, expanded? }\`; configure extraction via the nested form \`select: [{ hooks: { withValues: true, format: "tree", expansionDepth: 1, kinds: [...], names: [...] } }]\`. Sensitive names (password, token, jwt, secret, credential, apiKey, authorization, Pin suffix) are auto-redacted; configure via \`fiberTreeModule({ redactHookNames, additionalRedactHookNames })\`.
+Heavy fields (\`props\`, \`hooks\`) are projected per-field via \`select\` — top-level response stays raw (mcpId/name/total/etc. always visible) while only those fields are rendered with \`\${...}\`-keyed markers for nested heavy values. Each takes its own \`path\` / \`depth\` / \`maxBytes\` knobs:
+
+  \`select: [{ props: { path: "style", depth: 2 } }]\`   — drill into props.style 2 levels deep
+  \`select: [{ props: { path: "data[0:5]" } }]\`         — slice path: take first 5 items of props.data
+  \`select: [{ props: { depth: 3 } }]\`                  — expand props 3 levels (heavy fields like style stay markers below depth 3)
+
+Hooks include the same projection knobs plus filters: \`select: [{ hooks: { kinds: ["State"], names: ["isLoading"], withValues: true, depth: 2, path: "[0].value" } }]\`. \`withValues: true\` adds resolved values; \`kinds\` filters by category (State/Effect/Memo/Ref/Custom/...); \`names\` matches by exact or \`/regex/flags\`; \`expansionDepth\` caps custom-hook recursion; \`format: "tree"\` returns nested children instead of flat \`via\` chains. Each hook entry carries \`{ kind, name, hook?, via?, expanded? }\`. Sensitive names (password, token, jwt, secret, credential, apiKey, authorization, Pin suffix) are auto-redacted; configure via \`fiberTreeModule({ redactHookNames, additionalRedactHookNames })\`.
+
+Marker format: \`{ "\${obj}": N }\` for collapsed objects (N keys), \`{ "\${arr}": N }\` for arrays (N items), \`{ "\${fun}": "name" }\` for functions, \`{ "\${str}": { len, preview } }\` for long strings, \`{ "\${Date}": "iso" }\` for Date, \`{ "\${Err}": { name, msg } }\` for Error, \`{ "\${cyc}": true }\` for cycles, \`{ "\${ref}": { mcpId, name } }\` for fiber/native refs, \`{ "\${cls}": { name, len } }\` for class instances, \`{ "\${truncated}": { total, slice } }\` first key/item when a container is wider than the cap (30 keys for objects, 50 items for arrays).
 `;
 
 type TextContent = { text: string; type: 'text' };
