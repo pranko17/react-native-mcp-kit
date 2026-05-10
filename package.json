@@ -1,6 +1,6 @@
 {
   "name": "react-native-mcp-kit",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "MCP server for React Native — drive, inspect, and debug running RN apps from AI agents via the real OS gesture pipeline",
   "license": "MIT",
   "author": "Aliaksei Pranko",
