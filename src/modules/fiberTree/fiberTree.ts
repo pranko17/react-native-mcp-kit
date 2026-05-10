@@ -6,9 +6,18 @@ import {
   makeProjectionSchema,
   type ProjectionArgs,
 } from '@/shared/projection/projectValue';
-import { loadRN } from '@/shared/rn/core';
 
 import { walkChildren } from './children';
+import {
+  FIBER_DEFAULT_DEPTH,
+  QUERY_LIMIT_DEFAULT,
+  QUERY_LIMIT_MAX,
+  WAIT_INTERVAL_DEFAULT,
+  WAIT_INTERVAL_MIN,
+  WAIT_TIMEOUT_DEFAULT,
+  WAIT_TIMEOUT_MAX,
+} from './constants';
+import { FIND_SCHEMA, findComponent, requireRoot } from './finder';
 import { extractHooks } from './hooks';
 import { type Projection, parseProjection, QUERY_DEFAULT_FIELDS } from './projection';
 import {
@@ -22,7 +31,6 @@ import {
 import { compileRedactPatterns, DEFAULT_REDACT_HOOK_NAMES } from './redact';
 import { type Bounds, type Fiber } from './types';
 import {
-  findAllByQuery,
   getAvailableMethods,
   getComponentName,
   getFiberRoot,
@@ -31,39 +39,8 @@ import {
   projectFiberValue,
   setRootRef,
 } from './utils';
-
-const QUERY_LIMIT_DEFAULT = 50;
-const QUERY_LIMIT_MAX = 500;
-
-const WAIT_TIMEOUT_DEFAULT = 10_000;
-const WAIT_TIMEOUT_MAX = 60_000;
-const WAIT_INTERVAL_DEFAULT = 300;
-const WAIT_INTERVAL_MIN = 100;
-
-type WaitUntil = 'appear' | 'disappear';
-
-const FIND_SCHEMA = {
-  index: {
-    description: '0-based index when several components match (default: 0).',
-    type: 'number',
-  },
-  mcpId: { description: 'Stable data-mcp-id to match.', type: 'string' },
-  name: { description: 'Component name to match.', type: 'string' },
-  testID: { description: 'testID to match.', type: 'string' },
-  text: { description: 'Rendered text substring (not prop values).', type: 'string' },
-  within: {
-    description: 'Parent component path. "/" nests, ":N" picks index.',
-    examples: ['LoginForm', 'Button:1/Pressable', 'TabBar/TabBarItem:2'],
-    type: 'string',
-  },
-};
-
-// Default depth for fiberTree handlers. Their typical response shape has
-// 3 nesting layers before the heavy values start (e.g. query: response →
-// matches array → match object → match fields → props content). depth=4
-// shows all match-level fields with heavy nested values (props.style etc.)
-// already collapsed into markers — useful balance of visibility vs lean.
-const FIBER_DEFAULT_DEPTH = 4;
+import { getVisibleRect, intersectsRect } from './viewport';
+import { runWaitForLoop, type WaitForArgs } from './waitFor';
 
 const PROJECTION_SCHEMA = makeProjectionSchema(FIBER_DEFAULT_DEPTH);
 
@@ -94,33 +71,6 @@ export interface FiberTreeModuleOptions {
   redactHookNames?: Array<string | RegExp>;
   rootRef?: RefObject<unknown>;
 }
-
-// Window dimensions → physical-pixel bounds rectangle for `onlyVisible` filter.
-const getVisibleRect = (): { height: number; width: number } | null => {
-  const RN = loadRN();
-  if (!RN) return null;
-  try {
-    const { Dimensions, PixelRatio } = RN;
-    const window = Dimensions?.get?.('window');
-    const ratio = PixelRatio?.get?.() ?? 1;
-    if (!window || !Number.isFinite(window.width) || !Number.isFinite(window.height)) return null;
-    return {
-      height: window.height * ratio,
-      width: window.width * ratio,
-    };
-  } catch {
-    return null;
-  }
-};
-
-const intersectsRect = (bounds: Bounds, rect: { height: number; width: number }): boolean => {
-  return (
-    bounds.x + bounds.width > 0 &&
-    bounds.y + bounds.height > 0 &&
-    bounds.x < rect.width &&
-    bounds.y < rect.height
-  );
-};
 
 export const fiberTreeModule = (options?: FiberTreeModuleOptions): McpModule => {
   if (options?.rootRef) {
@@ -158,65 +108,6 @@ export const fiberTreeModule = (options?: FiberTreeModuleOptions): McpModule => 
     const result = runQueryChain(runtime, steps);
     cacheEntries.set(key, result);
     return result;
-  };
-
-  const findInRoot = (root: ReturnType<typeof getFiberRoot>, segment: string) => {
-    if (!root) return null;
-    // Support "Name:index" format, e.g. "Button:1"
-    const [name, indexStr] = segment.split(':');
-    if (!name) return null;
-    const idx = indexStr ? parseInt(indexStr, 10) : 0;
-
-    const allByMcpId = findAllByQuery(root, { mcpId: name });
-    if (allByMcpId.length > 0) return allByMcpId[idx] ?? null;
-
-    const allByTestID = findAllByQuery(root, { testID: name });
-    if (allByTestID.length > 0) return allByTestID[idx] ?? null;
-
-    const allByName = findAllByQuery(root, { name });
-    return allByName[idx] ?? null;
-  };
-
-  const findComponent = (args: Record<string, unknown>) => {
-    let root = getFiberRoot();
-    if (!root) return null;
-
-    // "within" supports recursive path with index: "Parent/Child:1/GrandChild"
-    if (args.within) {
-      const path = (args.within as string).split('/');
-      for (const segment of path) {
-        root = findInRoot(root, segment);
-        if (!root) return null;
-      }
-    }
-
-    const index = (args.index as number) ?? 0;
-
-    if (args.mcpId) {
-      const all = findAllByQuery(root, { mcpId: args.mcpId as string });
-      return all[index] ?? null;
-    }
-    if (args.testID) {
-      const all = findAllByQuery(root, { testID: args.testID as string });
-      return all[index] ?? null;
-    }
-    if (args.name) {
-      const all = findAllByQuery(root, { name: args.name as string });
-      return all[index] ?? null;
-    }
-    if (args.text) {
-      const all = findAllByQuery(root, { text: args.text as string });
-      return all[index] ?? null;
-    }
-    return null;
-  };
-
-  const requireRoot = () => {
-    const root = getFiberRoot();
-    if (!root) {
-      return { error: 'Fiber root not available. The app may not have rendered yet.' };
-    }
-    return null;
   };
 
   return {
@@ -515,91 +406,16 @@ TIPS
               return truncated ? { matches, total, truncated: true } : { matches, total };
             };
 
-            const waitForRaw = args.waitFor as
-              | { interval?: number; stable?: number; timeout?: number; until?: unknown }
-              | undefined;
-
+            const waitForRaw = args.waitFor as WaitForArgs | undefined;
             if (!waitForRaw || typeof waitForRaw !== 'object') {
               return runOnce(useCacheDefault);
             }
-
-            const until = waitForRaw.until;
-            if (until !== 'appear' && until !== 'disappear') {
-              return { error: 'waitFor.until must be "appear" or "disappear"' };
-            }
-            const waitUntil: WaitUntil = until;
-            const timeout = Math.min(
-              WAIT_TIMEOUT_MAX,
-              Math.max(0, waitForRaw.timeout ?? WAIT_TIMEOUT_DEFAULT)
-            );
-            const interval = Math.max(
-              WAIT_INTERVAL_MIN,
-              waitForRaw.interval ?? WAIT_INTERVAL_DEFAULT
-            );
-            const stable = Math.max(0, waitForRaw.stable ?? 0);
-            const predicate = (total: number): boolean => {
-              return waitUntil === 'appear' ? total >= 1 : total === 0;
-            };
-
-            const startedAt = Date.now();
-            const deadline = startedAt + timeout;
-            let attempts = 0;
-            let stableSince: number | null = null;
-            let lastResult = await runOnce(false);
-            attempts++;
-
-            // eslint-disable-next-line no-constant-condition
-            while (true) {
-              const now = Date.now();
-              const elapsedMs = now - startedAt;
-              const met = predicate(lastResult.total);
-
-              if (met) {
-                if (stable === 0) {
-                  return {
-                    ...lastResult,
-                    attempts,
-                    elapsedMs,
-                    timedOut: false,
-                    until: waitUntil,
-                    waited: true,
-                  };
-                }
-                if (stableSince === null) stableSince = now;
-                if (now - stableSince >= stable) {
-                  return {
-                    ...lastResult,
-                    attempts,
-                    elapsedMs,
-                    stableFor: now - stableSince,
-                    timedOut: false,
-                    until: waitUntil,
-                    waited: true,
-                  };
-                }
-              } else {
-                stableSince = null;
-              }
-
-              if (now >= deadline) {
-                return {
-                  ...lastResult,
-                  attempts,
-                  elapsedMs,
-                  timedOut: true,
-                  until: waitUntil,
-                  waited: true,
-                };
-              }
-
-              const remaining = deadline - now;
-              const sleepMs = Math.min(interval, Math.max(0, remaining));
-              await new Promise<void>((resolve) => {
-                return setTimeout(resolve, sleepMs);
-              });
-              lastResult = await runOnce(false);
-              attempts++;
-            }
+            // Cache is always bypassed inside the polling loop — `runOnce`
+            // with cache:true would just keep returning the stale match
+            // set the cache captured pre-mount.
+            return runWaitForLoop(waitForRaw, () => {
+              return runOnce(false);
+            });
           };
           // No top-level projection on the query response — the response
           // shell ({ matches, total, ... }) is light by construction;
