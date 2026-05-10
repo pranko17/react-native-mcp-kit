@@ -377,24 +377,16 @@ export const networkModule = (options?: NetworkModuleOptions): McpModule => {
   return {
     description: `Intercepted fetch + XMLHttpRequest — method, URL, status, duration, headers, bodies.
 
-CAPTURE
-  Each entry carries a numeric \`id\`. Bodies are stored raw up to bodyMaxBytes
-  (default 20KB); larger payloads collapse to a \`\${str}\` marker carrying the
-  original byte count + a short preview. Sensitive headers (Authorization,
-  Cookie, Set-Cookie, X-Api-Key, X-Auth-*) and body keys (password, token,
-  accessToken, refreshToken, apiKey, secret, otp, pin) are redacted at capture
-  time. Capture starts at module-import time (before React mounts) so
-  cold-start traffic is not lost.
+Each entry carries a numeric \`id\`. Bodies are stored raw up to bodyMaxBytes
+(default 20KB); larger payloads collapse at capture time to a \`\${str}\`
+marker. Sensitive headers (Authorization, Cookie, Set-Cookie, X-Api-Key,
+X-Auth-*) and body keys (password, token, accessToken, refreshToken,
+apiKey, secret, otp, pin) are redacted at capture time. Capture starts at
+module-import time so cold-start traffic is not lost.
 
-QUERY
-  All listing tools accept the standard \`path\` / \`depth\` / \`maxBytes\` projection
-  args (default depth ${NETWORK_DEFAULT_DEPTH} — entries expanded, headers map and bodies collapse
-  to \`\${obj}\` markers). Drill into a body via path:
-    network__get_requests({ path: '[-1:][0].response.body' })          // last entry's response body
-    network__get_requests({ path: '[-1:][0].response.body', depth: 8 }) // fully expanded
-
-WebSocket / Metro / symbolicate traffic is auto-ignored. Buffer size, body
-cap, and redaction lists are configurable via networkModule options.`,
+Listing tools accept path / depth / maxBytes (default depth ${NETWORK_DEFAULT_DEPTH}). WebSocket /
+Metro / symbolicate traffic is auto-ignored. Buffer size, body cap, and
+redaction lists are configurable via networkModule options.`,
     name: 'network',
     tools: {
       clear_requests: {
@@ -405,8 +397,7 @@ cap, and redaction lists are configurable via networkModule options.`,
         },
       },
       get_errors: {
-        description:
-          'Failed requests only (non-2xx or network errors). Bodies collapse to markers by default; drill via `path`/`depth`.',
+        description: 'Failed requests only (non-2xx or network errors).',
         handler: (args) => {
           const result = buffer.filter((e) => {
             return e.status === 'error';
@@ -416,7 +407,7 @@ cap, and redaction lists are configurable via networkModule options.`,
         inputSchema: PROJECTION_SCHEMA,
       },
       get_pending: {
-        description: 'In-flight requests (bodies collapse to markers by default; drill via path).',
+        description: 'In-flight requests.',
         handler: (args) => {
           const result = buffer.filter((e) => {
             return e.status === 'pending';
@@ -426,8 +417,7 @@ cap, and redaction lists are configurable via networkModule options.`,
         inputSchema: PROJECTION_SCHEMA,
       },
       get_request: {
-        description:
-          'Requests whose URL contains the given substring. Bodies collapse to markers by default.',
+        description: 'Requests whose URL contains the given substring.',
         handler: (args) => {
           const urlFilter = args.url as string;
           const result = buffer.filter((e) => {
@@ -441,8 +431,7 @@ cap, and redaction lists are configurable via networkModule options.`,
         },
       },
       get_requests: {
-        description:
-          'All captured requests; filterable by method / status / URL substring. Bodies collapse to markers by default; drill via `path`/`depth`.',
+        description: 'All captured requests; filterable by method / status / URL substring.',
         handler: (args) => {
           let result = [...buffer];
           if (args.method) {

@@ -21,9 +21,9 @@ export const getEventsTool = (): HostToolHandler => {
 
 Metro emits events for the whole bundler lifecycle — \`bundle_build_started\` / \`bundle_build_done\` / \`bundle_build_failed\`, \`bundling_error\`, \`hmr_update\`, \`hmr_client_error\`, \`initial_update_done\`, \`transform_cache_reset\`, \`dep_graph_loading\` / \`dep_graph_loaded\`, \`client_log\`, \`worker_stdout_chunk\` / \`worker_stderr_chunk\`. When an agent edits a file and HMR silently fails (syntax error, broken import), the red box may not appear — but the \`bundling_error\` / \`hmr_client_error\` event already explains why.
 
-The capture is lazy (connects on first call) and auto-reconnects. Buffer holds the last 200 events. Pass \`since: <msEpoch>\` to get only what arrived after a known checkpoint ("events since right before I edited Foo.tsx"). \`type\` filters to one or several event types.
+The capture is lazy (connects on first call) and auto-reconnects. Buffer holds the last 200 events. Pass \`since: <msEpoch>\` to get only what arrived after a known checkpoint. \`type\` filters to one or several event types.
 
-Each event has \`{ id, receivedAt, type, data }\`; \`data\` is the raw Metro payload minus the \`type\` field. Response goes through the standard \`path\` / \`depth\` / \`maxBytes\` projection (default depth ${EVENTS_DEFAULT_DEPTH}); drill via \`path: 'events[-3:]'\` for the last 3 events, \`path: 'events[-1:][0].data'\` for one specific payload.`,
+Each event: \`{ id, receivedAt, type, data }\`; \`data\` is the raw Metro payload minus the \`type\` field. Response accepts path / depth / maxBytes (default depth ${EVENTS_DEFAULT_DEPTH}).`,
     handler: async (args, ctx) => {
       const metroUrl = resolveMetroUrl(args, ctx);
       const capture = getEventCapture(metroUrl);

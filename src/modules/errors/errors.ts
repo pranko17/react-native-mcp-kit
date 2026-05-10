@@ -150,17 +150,11 @@ export const errorsModule = (options?: ErrorsModuleOptions): McpModule => {
 
 Captures via ErrorUtils.setGlobalHandler + console.error sniffing.
 Deduplicates within a 100ms window. Capture starts at module-import
-time (before React mounts) so early fatal crashes are visible to the
-agent. Each entry carries a monotonic numeric \`id\`, parsed
-\`stackFrames\` (V8 + Hermes formats, ready for metro__symbolicate),
-and the raw \`stack\` string. Buffer size configurable via
-errorsModule options.
-
-Listing tools accept the standard \`path\` / \`depth\` / \`maxBytes\`
-projection args (default depth ${ERRORS_DEFAULT_DEPTH} — entries + stackFrames expanded;
-long \`stack\` strings auto-wrap in \`\${str}\` markers). Drill via
-  errors__get_errors({ path: '[-1:][0].stack' })  // full stack of last error
-  errors__get_errors({ path: '[-1:][0].stackFrames[0]' }) // top frame`,
+time so early fatal crashes are visible. Each entry carries a monotonic
+numeric \`id\`, parsed \`stackFrames\` (V8 + Hermes formats, ready for
+metro__symbolicate), and the raw \`stack\` string. Listing tools accept
+path / depth / maxBytes (default depth ${ERRORS_DEFAULT_DEPTH}). Buffer size configurable via
+errorsModule options.`,
     name: 'errors',
     tools: {
       clear_errors: {
@@ -172,7 +166,7 @@ long \`stack\` strings auto-wrap in \`\${str}\` markers). Drill via
       },
       get_errors: {
         description:
-          'Captured errors; filterable by source / fatal / time range. Stack frames are parsed structurally; raw `stack` string auto-wraps in `${str}` if long. Use `metro__symbolicate` on stackFrames to resolve bundled paths back to source.',
+          'Captured errors; filterable by source / fatal / time range. Use `metro__symbolicate` on stackFrames to resolve bundled paths back to source.',
         handler: (args) => {
           let result = [...buffer];
           if (args.source) {

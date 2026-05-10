@@ -55,15 +55,33 @@ Gesture tools: \`host${MODULE_SEPARATOR}tap\` / \`host${MODULE_SEPARATOR}long_pr
 
 Stack traces: \`errors${MODULE_SEPARATOR}get_errors\` and \`log_box${MODULE_SEPARATOR}get_logs\` return parsed \`stackFrames\` you can pass straight into \`metro${MODULE_SEPARATOR}symbolicate\` to resolve bundled frames back to source paths via Metro.
 
-Heavy fields (\`props\`, \`hooks\`) are projected per-field via \`select\` — top-level response stays raw (mcpId/name/total/etc. always visible) while only those fields are rendered with \`\${...}\`-keyed markers for nested heavy values. Each takes its own \`path\` / \`depth\` / \`maxBytes\` knobs:
+## Path-based drill into heavy responses
 
+All listing tools that return heavy JSON (console / network / errors / storage / reactQuery / log_box / navigation / metro events / fiber_tree) accept the standard \`path\` / \`depth\` / \`maxBytes\` projection args. Heavy nested values collapse to compact \`\${...}\`-keyed markers; primitives stay raw. Drill into a specific subtree via the same tool with \`path\` — no separate by-id fetcher.
+
+  \`network__get_requests({ path: '[-1:][0].response.body' })\`         — last request's body
+  \`network__get_requests({ path: '[-1:][0].response.body', depth: 8 })\` — fully expanded
+  \`console__get_logs({ path: '[-3:][0].args[1]' })\`                    — second arg of the third-from-last log
+  \`storage__get_item({ key: 'session', path: 'value.user.email' })\`    — drill into a stored value
+  \`query__get_data({ key: '["users"]', path: 'data.email' })\`         — drill into cached data
+
+Path syntax (JS-style):
+  \`.key\` or \`["key.with.dots"]\` — object key access
+  \`[N]\` — index (numeric for arrays, positional for object keys in insertion order)
+  \`[start:end]\` / \`[start:]\` / \`[:end]\` — slice (Python/jq-style; negative indices count from end). After array slice, chained \`.key\` maps over each element; \`[N]\` picks one.
+
+Path drilling to a string scalar returns the raw string (not wrapped in a \`\${str}\` preview marker) — caller asked for the leaf, gets the leaf.
+
+\`depth\` (default per tool, max 8) controls how many container levels are walked before collapsing to a marker. Bump \`depth\` for an exploratory survey, use \`path\` for a targeted drill. \`maxBytes\` (default 50KB) caps the total response size — overflow is replaced with a single \`\${str}\` marker carrying the original byte count + a preview.
+
+For \`fiber_tree__query\`, heavy fields (\`props\`, \`hooks\`) take projection knobs per-field via \`select\` so the rest of the response stays raw:
   \`select: [{ props: { path: "style", depth: 2 } }]\`   — drill into props.style 2 levels deep
   \`select: [{ props: { path: "data[0:5]" } }]\`         — slice path: take first 5 items of props.data
-  \`select: [{ props: { depth: 3 } }]\`                  — expand props 3 levels (heavy fields like style stay markers below depth 3)
+  \`select: [{ hooks: { kinds: ["State"], names: ["isLoading"], withValues: true, depth: 2 } }]\` — filter + project hook values
 
-Hooks include the same projection knobs plus filters: \`select: [{ hooks: { kinds: ["State"], names: ["isLoading"], withValues: true, depth: 2, path: "[0].value" } }]\`. \`withValues: true\` adds resolved values; \`kinds\` filters by category (State/Effect/Memo/Ref/Custom/...); \`names\` matches by exact or \`/regex/flags\`; \`expansionDepth\` caps custom-hook recursion; \`format: "tree"\` returns nested children instead of flat \`via\` chains. Each hook entry carries \`{ kind, name, hook?, via?, expanded? }\`. Sensitive names (password, token, jwt, secret, credential, apiKey, authorization, Pin suffix) are auto-redacted; configure via \`fiberTreeModule({ redactHookNames, additionalRedactHookNames })\`.
+Hook filters: \`kinds\` (State/Effect/Memo/Ref/Custom/...), \`names\` (exact or \`/regex/flags\`), \`withValues\` (adds resolved values), \`expansionDepth\` (caps custom-hook recursion), \`format: "tree"\` (nested children vs flat \`via\` chains). Each hook entry carries \`{ kind, name, hook?, via?, expanded? }\`. Sensitive names (password, token, jwt, secret, credential, apiKey, authorization, Pin suffix) are auto-redacted; configure via \`fiberTreeModule({ redactHookNames, additionalRedactHookNames })\`.
 
-Marker format: \`{ "\${obj}": N }\` for collapsed objects (N keys), \`{ "\${arr}": N }\` for arrays (N items), \`{ "\${fun}": "name" }\` for functions, \`{ "\${str}": { len, preview } }\` for long strings, \`{ "\${Date}": "iso" }\` for Date, \`{ "\${Err}": { name, msg } }\` for Error, \`{ "\${cyc}": true }\` for cycles, \`{ "\${ref}": { mcpId, name } }\` for fiber/native refs, \`{ "\${cls}": { name, len } }\` for class instances, \`{ "\${truncated}": { total, slice } }\` first key/item when a container is wider than the cap (30 keys for objects, 50 items for arrays).
+Marker format: \`{ "\${obj}": N }\` for collapsed objects (N keys), \`{ "\${arr}": N }\` for arrays (N items), \`{ "\${fun}": "name" }\` for functions, \`{ "\${str}": { len, preview } }\` for long strings (>100 chars), \`{ "\${Date}": "iso" }\` for Date, \`{ "\${Err}": { name, msg } }\` for Error, \`{ "\${RegExp}": "/.../i" }\` for RegExp, \`{ "\${map}": N }\` / \`{ "\${set}": N }\` for Map/Set sizes, \`{ "\${cyc}": true }\` for cycles, \`{ "\${ref}": { mcpId, name } }\` for fiber/native refs, \`{ "\${cls}": { name, len } }\` for class instances, \`{ "\${truncated}": { total, slice } }\` first key/item when a container is wider than the cap (30 keys for objects, 50 items for arrays).
 `;
 
 type TextContent = { text: string; type: 'text' };

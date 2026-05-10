@@ -110,20 +110,10 @@ export const consoleModule = (options?: ConsoleModuleOptions): McpModule => {
   return {
     description: `Ring buffer of console.log/warn/error/info/debug.
 
-Each entry carries a numeric \`id\` (monotonic). Args are stored raw and
-projected at query time via the shared \`projectValue\` — Errors / Dates /
-RegExp / Maps / Sets / class instances / cycles / functions / Symbols all
-collapse to compact \`\${kind}\` markers; primitives stay raw. Stack traces
-are captured per level (default error+warn).
-
-All listing tools accept the standard \`path\` / \`depth\` / \`maxBytes\`
-projection args (default depth ${CONSOLE_DEFAULT_DEPTH} — entries expanded, args array opened with
-nested objects collapsed to \`\${obj}\` markers). Drill deeper via path:
-  console__get_logs({ path: '[-3:]' })                   // last 3 entries
-  console__get_logs({ path: '[-1:][0].args[1]' })        // 2nd arg of last entry
-  console__get_logs({ path: '[-1:][0].args[1]', depth: 8 }) // fully expanded
-
-Capture starts at module-import time (before React mounts) so cold-start
+Each entry carries a monotonic numeric \`id\`. Args are stored raw; the
+shared projection runs at query time. Stack traces captured per level
+(default error+warn). Listing tools accept path / depth / maxBytes
+(default depth ${CONSOLE_DEFAULT_DEPTH}). Capture starts at module-import time so cold-start
 logs are not lost. Buffer size and captured levels are configurable via
 consoleModule options.`,
     name: 'console',

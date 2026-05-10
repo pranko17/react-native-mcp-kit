@@ -171,7 +171,7 @@ export const navigationModule = (navigation: NavigationRef): McpModule => {
     description: `React Navigation control + 100-entry transition history.
 
 SCREEN ENRICHMENT
-  get_current_route and get_current_route_state include a \`screen\` field
+  get_current_route / get_current_route_state include a \`screen\` field
   pointing at the React component rendering the focused route:
     screen: { componentName, mcpId?, filePath?, line? }
   componentName is the developer's component (RN Navigation wrappers are
@@ -180,12 +180,7 @@ SCREEN ENRICHMENT
 
 PROJECTION
   get_state / get_history / get_current_route / get_current_route_state
-  accept the standard \`path\` / \`depth\` / \`maxBytes\` projection args.
-  get_state defaults to depth ${STATE_DEFAULT_DEPTH} (top expanded, route children collapsed),
-  get_history to depth ${HISTORY_DEFAULT_DEPTH} (entries' route/state/timestamp visible, nested
-  state collapsed), routes to depth ${ROUTE_DEFAULT_DEPTH}. Drill via path:
-    navigation__get_state({ path: 'routes[0].state' })
-    navigation__get_history({ path: 'entries[-1:][0].state' })`,
+  accept path / depth / maxBytes — defaults: state ${STATE_DEFAULT_DEPTH}, history ${HISTORY_DEFAULT_DEPTH}, routes ${ROUTE_DEFAULT_DEPTH}.`,
     name: 'navigation',
     tools: {
       get_current_route: {
@@ -220,7 +215,7 @@ PROJECTION
       },
       get_history: {
         description:
-          'Screen transition log (up to 100 entries, oldest first) with timestamps. Each entry carries `route`, full root `state`, `timestamp`. State collapses to a marker by default — drill via path or bump depth.',
+          'Screen transition log (up to 100 entries, oldest first). Each entry: { route, state, timestamp }.',
         handler: (args) => {
           const result = { entries: history, total: history.length };
           return applyProjection(

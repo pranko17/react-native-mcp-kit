@@ -66,16 +66,13 @@ Query keys are passed as JSON strings to preserve array structure — e.g.
 '["users","list"]' or '"users"'. Omit \`key\` on invalidate / refetch /
 remove / reset to target every cached query at once.
 
-\`get_queries\` returns metadata only (no \`data\`). \`get_data\` returns
-the full query state for one key — its \`data\` field can be heavy, so
-the response goes through the standard \`path\` / \`depth\` / \`maxBytes\`
-projection (default depth ${DATA_DEFAULT_DEPTH} — outer expanded, data walked one level;
-drill via \`path: 'data.user.email'\`).`,
+\`get_queries\` returns metadata only (no \`data\`, default depth ${QUERIES_DEFAULT_DEPTH}).
+\`get_data\` returns the full query state for one key (default depth ${DATA_DEFAULT_DEPTH}).
+Both accept path / depth / maxBytes.`,
     name: 'query',
     tools: {
       get_data: {
-        description:
-          'Cached data for one query by exact key. Heavy `data` collapses to markers by default — drill via `path` / bump `depth`.',
+        description: 'Cached data for one query by exact key.',
         handler: (args) => {
           const key = parseKey(args.key as string);
           const queries = getAllQueries();

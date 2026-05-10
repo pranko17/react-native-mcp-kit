@@ -55,22 +55,25 @@ export interface ProjectResult {
  * result into their inputSchema. Args are then funnelled through
  * `applyProjection` at the handler exit.
  */
+// Reusable description shared across all tools: full path/depth/maxBytes
+// semantics live in the server BASE_INSTRUCTIONS — schemas just reference it
+// to keep `describe_tool` payloads small.
 export const makeProjectionSchema = (
   defaultDepth: number = DEFAULT_DEPTH
 ): Record<string, { description: string; type: string; examples?: unknown[] }> => {
   return {
     depth: {
-      description: `Container expansion depth (default ${defaultDepth}, max ${MAX_DEPTH}). Lower = leaner response with deeper levels collapsed to \`\${obj}\`/\`\${arr}\` markers; higher = expand further. Specials and overflow always become markers.`,
+      description: `Expansion depth (default ${defaultDepth}, max ${MAX_DEPTH}). See server instructions § Path-based drill.`,
       examples: [1, 3, 8],
       type: 'number',
     },
     maxBytes: {
-      description: `Soft byte cap on the response (default ${DEFAULT_MAX_BYTES}). When exceeded the whole response is replaced with a \`\${str}\` marker carrying the original size + a 200-byte preview.`,
+      description: `Soft byte cap (default ${DEFAULT_MAX_BYTES}). See server instructions § Path-based drill.`,
       type: 'number',
     },
     path: {
       description:
-        'JS-style path drill into the response. `.key`, `["quoted.key"]`, `[3]` (index), `[1:5]` (slice). After array slice, chained `.key` maps over each element; `[N]` picks one. Useful for taking a small piece out of a big response without retrieving the whole thing.',
+        'Path drill into response (`.key`, `[N]`, `[a:b]`). See server instructions § Path-based drill for full syntax.',
       examples: ['items[0].body', 'items[0:3].id', 'data.user.email'],
       type: 'string',
     },

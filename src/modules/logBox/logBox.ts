@@ -90,12 +90,7 @@ Clear warning toasts that block the UI during tests, suppress noisy
 warnings with ignore patterns, or mute LogBox entirely for a test run.
 LogBox is a dev-only surface — in production these tools are no-ops.
 
-\`get_logs\` accepts the standard \`path\` / \`depth\` / \`maxBytes\` projection
-args (default depth ${LOGBOX_DEFAULT_DEPTH} — rows + stack frames expanded; long messages
-auto-wrap in \`\${str}\` markers). Drill via path:
-  log_box__get_logs({ path: '[-3:]' })             // last 3 rows
-  log_box__get_logs({ path: '[0].stack[0]' })      // top frame of first row
-  log_box__get_logs({ path: '[0].message' })       // raw message string
+\`get_logs\` accepts path / depth / maxBytes (default depth ${LOGBOX_DEFAULT_DEPTH}).
 
 IGNORE PATTERNS
   Strings match as substrings. Wrap in /.../flags to use a RegExp,
@@ -158,7 +153,7 @@ LEVELS
       },
       get_logs: {
         description:
-          'Current LogBox rows — { index, level, category, message, count, stack? }. Index feeds dismiss. Filter by level; drill via standard `path` / `depth` / `maxBytes`.',
+          'Current LogBox rows — { index, level, category, message, count, stack? }. Index feeds dismiss. Filter by level.',
         handler: (args) => {
           let rows = getLogsArray().map((log, i) => {
             return serializeLog(log, i);

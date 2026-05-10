@@ -50,13 +50,8 @@ custom). Only \`get\` is required on the adapter; \`set\` / \`delete\` /
 possible. The \`storage\` argument picks a named store; omit to target
 the first-registered one.
 
-\`get_item\` and \`get_all\` accept the standard \`path\` / \`depth\` /
-\`maxBytes\` projection args — heavy nested values collapse to
-\`\${obj}\`/\`\${arr}\` markers; drill via path. For \`get_item\` the
-response is \`{ key, value }\` — path starts from there
-(\`path: 'value.user.name'\`). For \`get_all\` the response is the
-key→value object — path starts from a key
-(\`path: 'session.user.email'\`).`,
+\`get_item\` returns \`{ key, value }\` (default depth ${ITEM_DEFAULT_DEPTH}); \`get_all\` returns
+key→value object (default depth ${ALL_DEFAULT_DEPTH}). Both accept path / depth / maxBytes.`,
     name: 'storage',
     tools: {
       delete_item: {
@@ -74,8 +69,7 @@ key→value object — path starts from a key
         },
       },
       get_all: {
-        description:
-          'All key-value pairs; values JSON-parsed when possible. Default projection collapses each value to a marker — use `path` to drill specific keys.',
+        description: 'All key-value pairs; values JSON-parsed when possible.',
         handler: async (args) => {
           const storage = getStorage(args.storage as string | undefined);
           if (!storage) return { error: 'Storage not found' };
