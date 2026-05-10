@@ -275,7 +275,7 @@ Read-only view of platform facts (OS, version, dimensions in DP and physical pix
 
 ### errors
 
-Captures unhandled JS errors (via `ErrorUtils.setGlobalHandler`) and unhandled promise rejections. Each entry has parsed `stackFrames` designed to feed into `metro__symbolicate` — one call resolves bundle paths back to `src/components/Foo.tsx:42:10`.
+Captures unhandled JS errors (via `ErrorUtils.setGlobalHandler`) and unhandled promise rejections. Each entry has a monotonic `id`, parsed `stackFrames` designed to feed into `metro__symbolicate` (one call resolves bundle paths back to `src/components/Foo.tsx:42:10`), plus the raw `stack` string. Listing tools accept standard `path` / `depth` / `maxBytes` projection args (default depth 4 — entries + stackFrames expanded; long stacks wrap in `${str}` markers); drill via `path: '[-1:][0].stack'` for the full text.
 
 ### fiber_tree
 

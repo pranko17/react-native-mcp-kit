@@ -1,5 +1,10 @@
 import { type McpModule } from '@/client/models/types';
-import { applySlice, parseSliceArg, sliceSchemaDescription } from '@/shared/slice';
+import {
+  applyProjection,
+  makeProjectionSchema,
+  projectAsValue,
+  type ProjectionArgs,
+} from '@/shared/projectValue';
 
 import {
   type ErrorEntry,
@@ -9,6 +14,15 @@ import {
 } from './types';
 
 const DEFAULT_MAX_ENTRIES = 50;
+
+// Default depth 4 — top is array of entries, level 2 expands each entry
+// (id/isFatal/message/source/timestamp inline, stack/stackFrames still
+// markers), level 3 opens stackFrames (each frame as `${obj}` marker),
+// level 4 opens each frame (file/line/method/column inline). Long `stack`
+// string auto-wraps in `${str}` regardless. Drill deeper via path.
+const ERRORS_DEFAULT_DEPTH = 4;
+
+const PROJECTION_SCHEMA = makeProjectionSchema(ERRORS_DEFAULT_DEPTH);
 
 // Match both the V8 `    at method (file:line:col)` and Hermes / JSC
 // `method@file:line:col` stack formats. Keep parsing lightweight — full
@@ -119,6 +133,10 @@ const installPatches = (): void => {
 
 installPatches();
 
+const project = (entries: ErrorEntry[], args: ProjectionArgs): unknown => {
+  return applyProjection(entries, args, projectAsValue, ERRORS_DEFAULT_DEPTH);
+};
+
 export const errorsModule = (options?: ErrorsModuleOptions): McpModule => {
   if (typeof options?.maxEntries === 'number') {
     maxEntries = options.maxEntries;
@@ -133,7 +151,16 @@ export const errorsModule = (options?: ErrorsModuleOptions): McpModule => {
 Captures via ErrorUtils.setGlobalHandler + console.error sniffing.
 Deduplicates within a 100ms window. Capture starts at module-import
 time (before React mounts) so early fatal crashes are visible to the
-agent. Buffer size configurable via errorsModule options.`,
+agent. Each entry carries a monotonic numeric \`id\`, parsed
+\`stackFrames\` (V8 + Hermes formats, ready for metro__symbolicate),
+and the raw \`stack\` string. Buffer size configurable via
+errorsModule options.
+
+Listing tools accept the standard \`path\` / \`depth\` / \`maxBytes\`
+projection args (default depth ${ERRORS_DEFAULT_DEPTH} — entries + stackFrames expanded;
+long \`stack\` strings auto-wrap in \`\${str}\` markers). Drill via
+  errors__get_errors({ path: '[-1:][0].stack' })  // full stack of last error
+  errors__get_errors({ path: '[-1:][0].stackFrames[0]' }) // top frame`,
     name: 'errors',
     tools: {
       clear_errors: {
@@ -145,7 +172,7 @@ agent. Buffer size configurable via errorsModule options.`,
       },
       get_errors: {
         description:
-          'Captured errors; filterable by source / fatal / time range. Default: omits raw `stack` string (keeps `stackFrames`). Pass includeStack: true to get both. Use `metro__symbolicate` on stackFrames to resolve bundled paths back to source.',
+          'Captured errors; filterable by source / fatal / time range. Stack frames are parsed structurally; raw `stack` string auto-wraps in `${str}` if long. Use `metro__symbolicate` on stackFrames to resolve bundled paths back to source.',
         handler: (args) => {
           let result = [...buffer];
           if (args.source) {
@@ -174,32 +201,15 @@ agent. Buffer size configurable via errorsModule options.`,
               });
             }
           }
-          result = applySlice(result, parseSliceArg(args.slice));
-          const includeStack = args.includeStack === true;
-          return result.map((entry) => {
-            if (includeStack) return entry;
-            const { stack, ...rest } = entry;
-            return { ...rest, hasRawStack: typeof stack === 'string' };
-          });
+          return project(result, args as ProjectionArgs);
         },
         inputSchema: {
+          ...PROJECTION_SCHEMA,
           fatal: { description: 'Filter by fatal flag.', type: 'boolean' },
-          includeStack: {
-            description:
-              'Include the raw `stack` string alongside parsed `stackFrames`. Default false — stackFrames already carries the structured form for metro__symbolicate.',
-            type: 'boolean',
-          },
           since: {
             description: 'ISO timestamp — only entries at or after this point.',
             examples: ['2026-04-19T22:00:00.000Z'],
             type: 'string',
-          },
-          slice: {
-            description: sliceSchemaDescription(
-              'Default omitted → every matching entry is returned.'
-            ),
-            examples: [[-10], [-20, -10], [0, 50]],
-            type: 'array',
           },
           source: {
             description: 'Filter by source.',
@@ -218,14 +228,9 @@ agent. Buffer size configurable via errorsModule options.`,
           const result = buffer.filter((e) => {
             return e.isFatal;
           });
-          return applySlice(result, parseSliceArg(args.slice));
+          return project(result, args as ProjectionArgs);
         },
-        inputSchema: {
-          slice: {
-            description: sliceSchemaDescription('Default omitted → every fatal entry is returned.'),
-            type: 'array',
-          },
-        },
+        inputSchema: PROJECTION_SCHEMA,
       },
       get_stats: {
         description: 'Error counts — total, by source, fatal.',
