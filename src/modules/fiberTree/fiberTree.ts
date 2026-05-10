@@ -65,7 +65,7 @@ export interface FiberTreeModuleOptions {
    * responses. Strings = case-insensitive substring; RegExp = literal.
    * Default list (when this option is omitted) catches the common
    * security-sensitive names: `password`, `token`, `jwt`, `secret`,
-   * `credential`, `apiKey`, plus `/Pin$/` and `/passcode/i`. Pass `[]` to
+   * `credential`, `apiKey`, `authorization`, plus `/Pin$/`. Pass `[]` to
    * disable redaction entirely.
    */
   redactHookNames?: Array<string | RegExp>;

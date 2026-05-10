@@ -26,14 +26,14 @@ AI Agent  --stdio/MCP-->  MCP Server (Node.js)  --WebSocket-->  RN App (device)
 
 ### MCP server tools
 
-The server registers 8 static tools via `this.mcp.registerTool` in `src/server/mcpServer.ts`:
+The server registers 6 static tools via `this.mcp.registerTool` in `src/server/mcpServer.ts`:
 
 - **`call`** — Universal dispatcher. Format: `call(tool: "module__method", args: {...})`. `args` accepts either a plain object or a JSON string — objects are preferred. Dynamic tools from `useMcpTool` hooks use the `_dynamic_` prefix: `call(tool: "_dynamic_logout")`. When multiple clients are connected, `clientId` must be specified.
 - **`wait_until`** — Polls any other tool until a predicate over its result holds or timeout. Leaf predicate `{ op, path?, value? }` supports `equals / notEquals / contains / notContains / exists / notExists / gt / gte / lt / lte`. Compound forms `{ all: [...] } / { any: [...] } / { not: predicate }` nest arbitrarily. Returns `{ ok: true, attempts, elapsedMs, matched? }` on success (matched = resolved path value for leaf predicates only) or `{ ok: false, reason, attempts, elapsedMs, lastResult, lastError? }` on timeout.
 - **`assert`** — Single-shot checkpoint with the same predicate vocabulary. Returns `{ pass: true, actual? }` / `{ pass: false, actual, expected?, op?, path?, message?, result }` / `{ pass: false, error, message? }` on dispatch throw.
 - **`list_tools`** — Lists all tools across all clients, grouped by module, with compact (schema-less) output. Clients with structurally identical modules are deduplicated into one entry with a `clientIds` array. Optional filters: `module?` (narrow to one module), `clientId?` (narrow to one client), `compact?: boolean` (drop module-level descriptions).
 - **`describe_tool`** — Returns the full input schema for a specific tool. For in-app tools, `clientId` only needed when more than one client has the same tool with different schemas.
-- **`connection_status`** — Lists connected clients with platform, label, deviceId, bundleId, and the module names they've registered.
+- **`connection_status`** — Lists connected clients with `id`, `platform`, `label`, `deviceId`, `bundleId`, `appName`, `appVersion`, `devServer`, `connectedAt`, and registered module names; plus host module names.
 
 Shared server-side helpers live at the top of the file: `parseCallArgs` (object-or-string args), `resolvePath` (dot-path + array-index + `.length`), `evalPredicate` (recursive). `dispatchTool` is the private method that resolves `module__method` against the host map or the client bridge — used by `call`, `wait_until`, `assert`, and exposed to host handlers via `HostContext.dispatch` for tools like `host__tap_fiber` that need to chain.
 

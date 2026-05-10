@@ -430,7 +430,7 @@ Replaces "screenshot in a loop + sleep" with a declarative check. Typical use:
   • wait for navigation to land on a screen
   • wait for a spinner / toast to disappear
   • wait for a fiber_tree.query to return matches (or stop returning them)
-  • wait for network.get_pending.length to hit 0
+  • wait for network.get_requests({ status: "pending" }).length to hit 0
 
 PREDICATE
   Leaf form: { op, path?, value? }
