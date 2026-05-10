@@ -1,3 +1,12 @@
+/**
+ * Loose alias for React's internal Fiber shape — we only ever poke a handful
+ * of fields (memoizedProps, memoizedState, type, return, sibling, child)
+ * and the exact shape drifts between React versions. Centralised here so
+ * every sub-module reaches for the same alias instead of re-declaring it.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type Fiber = any;
+
 export type ComponentType = 'composite' | 'host' | 'other' | 'text';
 
 export interface Bounds {
