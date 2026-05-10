@@ -1,6 +1,24 @@
 import { type McpModule } from '@/client/models/types';
+import {
+  applyProjection,
+  makeProjectionSchema,
+  projectAsValue,
+  type ProjectionArgs,
+} from '@/shared/projectValue';
 
 import { type QueryClientLike } from './types';
+
+// `get_queries` shape: array of compact entries (metadata only, no `data`).
+// Default depth 2 — array opened, each entry opened (all primitives inline).
+const QUERIES_DEFAULT_DEPTH = 2;
+
+// `get_data` shape: { data, dataUpdatedAt, error, fetchStatus, key, status }.
+// Default depth 2 — outer object expanded, `data` walked one level (top-level
+// fields visible, nested containers collapse to markers). Drill via path.
+const DATA_DEFAULT_DEPTH = 2;
+
+const QUERIES_SCHEMA = makeProjectionSchema(QUERIES_DEFAULT_DEPTH);
+const DATA_SCHEMA = makeProjectionSchema(DATA_DEFAULT_DEPTH);
 
 const serializeQuery = (query: {
   queryHash: string;
@@ -46,11 +64,18 @@ export const reactQueryModule = (queryClient: QueryClientLike): McpModule => {
 
 Query keys are passed as JSON strings to preserve array structure — e.g.
 '["users","list"]' or '"users"'. Omit \`key\` on invalidate / refetch /
-remove / reset to target every cached query at once.`,
+remove / reset to target every cached query at once.
+
+\`get_queries\` returns metadata only (no \`data\`). \`get_data\` returns
+the full query state for one key — its \`data\` field can be heavy, so
+the response goes through the standard \`path\` / \`depth\` / \`maxBytes\`
+projection (default depth ${DATA_DEFAULT_DEPTH} — outer expanded, data walked one level;
+drill via \`path: 'data.user.email'\`).`,
     name: 'query',
     tools: {
       get_data: {
-        description: 'Cached data for one query by exact key.',
+        description:
+          'Cached data for one query by exact key. Heavy `data` collapses to markers by default — drill via `path` / bump `depth`.',
         handler: (args) => {
           const key = parseKey(args.key as string);
           const queries = getAllQueries();
@@ -58,7 +83,7 @@ remove / reset to target every cached query at once.`,
             return JSON.stringify(q.queryKey) === JSON.stringify(key);
           });
           if (!query) return { error: `Query with key ${args.key} not found` };
-          return {
+          const result = {
             data: query.state.data,
             dataUpdatedAt: query.state.dataUpdatedAt
               ? new Date(query.state.dataUpdatedAt).toISOString()
@@ -68,8 +93,15 @@ remove / reset to target every cached query at once.`,
             key: query.queryKey,
             status: query.state.status,
           };
+          return applyProjection(
+            result,
+            args as ProjectionArgs,
+            projectAsValue,
+            DATA_DEFAULT_DEPTH
+          );
         },
         inputSchema: {
+          ...DATA_SCHEMA,
           key: {
             description: 'Query key (JSON string).',
             examples: ['["users"]', '["users","list"]', '"users"'],
@@ -92,9 +124,15 @@ remove / reset to target every cached query at once.`,
               return q.queryHash.includes(keyStr);
             });
           }
-          return queries.map(serializeQuery);
+          return applyProjection(
+            queries.map(serializeQuery),
+            args as ProjectionArgs,
+            projectAsValue,
+            QUERIES_DEFAULT_DEPTH
+          );
         },
         inputSchema: {
+          ...QUERIES_SCHEMA,
           key: { description: 'Substring filter on the serialized key.', type: 'string' },
           status: {
             description: 'Filter by status.',

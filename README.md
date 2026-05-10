@@ -325,7 +325,7 @@ networkModule({
 
 ### query
 
-React Query cache inspection: list cached queries, fetch cached data by key, get stats, and run `invalidate` / `refetch` / `remove` / `reset` against specific keys or the whole cache.
+React Query cache inspection: list cached queries, fetch cached data by key, get stats, and run `invalidate` / `refetch` / `remove` / `reset` against specific keys or the whole cache. `get_data` accepts standard `path` / `depth` / `maxBytes` projection args — heavy `data` collapses to `${obj}`/`${arr}` markers by default; drill via `path: 'data.user.email'`.
 
 ### storage
 
