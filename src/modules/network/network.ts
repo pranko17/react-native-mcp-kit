@@ -1,19 +1,30 @@
 import { type McpModule } from '@/client/models/types';
-import { applySlice, parseSliceArg, sliceSchemaDescription } from '@/shared/slice';
+import {
+  applyProjection,
+  makeProjectionSchema,
+  projectAsValue,
+  type ProjectionArgs,
+} from '@/shared/projectValue';
+import {
+  compileRedact,
+  redactHeaders as redactHeadersMap,
+  redactValue,
+  type RedactPatterns,
+} from '@/shared/redact';
 
-import { type CapturedBody, type NetworkEntry, type NetworkModuleOptions } from './types';
+import { type NetworkEntry, type NetworkModuleOptions } from './types';
 
 const DEFAULT_MAX_ENTRIES = 100;
 const DEFAULT_BODY_MAX_BYTES = 20_000;
 const DEFAULT_BODY_PREVIEW = 200;
-const DEFAULT_IGNORE_URLS: Array<string | RegExp> = [
+const DEFAULT_IGNORE_URLS: ReadonlyArray<string | RegExp> = [
   /^ws:/,
   /^wss:/,
   /localhost:8081/,
   /symbolicate/,
 ];
 
-const DEFAULT_REDACT_HEADERS = [
+const DEFAULT_REDACT_HEADERS: ReadonlyArray<string | RegExp> = [
   'authorization',
   'cookie',
   'set-cookie',
@@ -21,7 +32,7 @@ const DEFAULT_REDACT_HEADERS = [
   'x-auth-token',
   'x-access-token',
 ];
-const DEFAULT_REDACT_BODY_KEYS = [
+const DEFAULT_REDACT_BODY_KEYS: ReadonlyArray<string | RegExp> = [
   'accessToken',
   'apiKey',
   'otp',
@@ -32,7 +43,15 @@ const DEFAULT_REDACT_BODY_KEYS = [
   'token',
 ];
 
-const shouldIgnore = (url: string, patterns: Array<string | RegExp>): boolean => {
+// Network entries top-level shape: array of entries, each with nested
+// request/response objects holding headers map + body. Default depth 3
+// means: array (1) → entry (2) → request/response (3) expanded; headers map
+// and body collapse to markers. Drill via `path` or bump `depth`.
+const NETWORK_DEFAULT_DEPTH = 3;
+
+const PROJECTION_SCHEMA = makeProjectionSchema(NETWORK_DEFAULT_DEPTH);
+
+const shouldIgnore = (url: string, patterns: ReadonlyArray<string | RegExp>): boolean => {
   return patterns.some((pattern) => {
     if (typeof pattern === 'string') return url.includes(pattern);
     return pattern.test(url);
@@ -53,35 +72,6 @@ const parseHeaders = (
   return headers as Record<string, string>;
 };
 
-const redactHeadersMap = (
-  headers: Record<string, string>,
-  redact: Set<string> | null
-): Record<string, string> => {
-  if (!redact || redact.size === 0) return headers;
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(headers)) {
-    out[key] = redact.has(key.toLowerCase()) ? '[redacted]' : value;
-  }
-  return out;
-};
-
-// Walk an object graph replacing values for any key (case-insensitive) in
-// `redact`. Preserves shape so the agent still sees the field exists.
-const redactBodyValue = (value: unknown, redact: Set<string> | null): unknown => {
-  if (!redact || redact.size === 0) return value;
-  if (value === null || typeof value !== 'object') return value;
-  if (Array.isArray(value)) {
-    return value.map((item) => {
-      return redactBodyValue(item, redact);
-    });
-  }
-  const out: Record<string, unknown> = {};
-  for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
-    out[key] = redact.has(key.toLowerCase()) ? '[redacted]' : redactBodyValue(v, redact);
-  }
-  return out;
-};
-
 const tryParseJson = (text: string): unknown => {
   try {
     return JSON.parse(text);
@@ -99,10 +89,24 @@ const byteLengthOf = (value: unknown): number => {
   }
 };
 
+interface CapturedBody {
+  body: unknown;
+  bodyBytes: number;
+}
+
+/**
+ * Capture a request / response body into the buffer. JSON-parses string
+ * input, applies the body-key redactor, and either stores the raw value or,
+ * if its serialized size exceeds `bodyMaxBytes`, replaces it with a
+ * `${str}` marker that carries the original size + a short preview.
+ *
+ * The result is held in raw form (no `projectValue` walk) so query-time
+ * `path`/`depth` can drill freely; projection happens at the handler exit.
+ */
 const captureBody = (
   raw: unknown,
   bodyMaxBytes: number,
-  redactKeys: Set<string> | null
+  compiledBodyRedact: ReturnType<typeof compileRedact>
 ): CapturedBody | undefined => {
   if (raw === null || raw === undefined) return undefined;
   if (bodyMaxBytes <= 0) return undefined;
@@ -112,45 +116,20 @@ const captureBody = (
     parsed = tryParseJson(raw);
   }
 
-  const redacted = redactBodyValue(parsed, redactKeys);
+  const redacted = redactValue(parsed, compiledBodyRedact);
   const bytes = byteLengthOf(redacted);
 
   if (bytes > bodyMaxBytes) {
-    const preview =
+    const previewStr =
       typeof redacted === 'string'
         ? redacted.slice(0, DEFAULT_BODY_PREVIEW)
-        : JSON.stringify(redacted).slice(0, DEFAULT_BODY_PREVIEW);
-    return { bytes, preview, truncated: true };
+        : (JSON.stringify(redacted) ?? '').slice(0, DEFAULT_BODY_PREVIEW);
+    return {
+      body: { ['${str}']: { len: bytes, preview: previewStr } },
+      bodyBytes: bytes,
+    };
   }
-  return { bytes, data: redacted };
-};
-
-const toRedactSet = (
-  list: string[] | false | undefined,
-  defaults: string[]
-): Set<string> | null => {
-  if (list === false) return null;
-  const src = list === undefined ? defaults : list;
-  return new Set(
-    src.map((s) => {
-      return s.toLowerCase();
-    })
-  );
-};
-
-const withoutBody = (entry: NetworkEntry): NetworkEntry => {
-  const req = entry.request.body ? { ...entry.request.body, data: undefined } : undefined;
-  const res = entry.response?.body ? { ...entry.response.body, data: undefined } : undefined;
-  return {
-    ...entry,
-    request: { ...entry.request, body: req },
-    response: entry.response
-      ? {
-          ...entry.response,
-          body: res,
-        }
-      : null,
-  };
+  return { body: redacted, bodyBytes: bytes };
 };
 
 const percentile = (sorted: number[], p: number): number | null => {
@@ -171,9 +150,9 @@ const buffer: NetworkEntry[] = [];
 let nextId = 1;
 let maxEntries = DEFAULT_MAX_ENTRIES;
 let bodyMaxBytes = DEFAULT_BODY_MAX_BYTES;
-let ignoreUrls: Array<string | RegExp> = [...DEFAULT_IGNORE_URLS];
-let redactHeaderSet: Set<string> | null = toRedactSet(undefined, DEFAULT_REDACT_HEADERS);
-let redactBodyKeySet: Set<string> | null = toRedactSet(undefined, DEFAULT_REDACT_BODY_KEYS);
+let ignoreUrls: ReadonlyArray<string | RegExp> = [...DEFAULT_IGNORE_URLS];
+let compiledHeaderRedact = compileRedact(DEFAULT_REDACT_HEADERS);
+let compiledBodyRedact = compileRedact(DEFAULT_REDACT_BODY_KEYS);
 
 const addEntry = (base: Omit<NetworkEntry, 'id'>): NetworkEntry => {
   const entry: NetworkEntry = { ...base, id: nextId++ };
@@ -201,14 +180,16 @@ const installPatches = (): void => {
       return originalFetch(input, init);
     }
 
+    const reqBody = captureBody(init?.body, bodyMaxBytes, compiledBodyRedact);
     const entry = addEntry({
       duration: null,
       method: method.toUpperCase(),
       request: {
-        body: captureBody(init?.body, bodyMaxBytes, redactBodyKeySet),
+        body: reqBody?.body,
+        bodyBytes: reqBody?.bodyBytes,
         headers: redactHeadersMap(
           parseHeaders(init?.headers as Record<string, string>),
-          redactHeaderSet
+          compiledHeaderRedact
         ),
       },
       response: null,
@@ -224,20 +205,21 @@ const installPatches = (): void => {
       entry.duration = Date.now() - startTime;
       entry.status = 'success';
 
-      let responseBody: CapturedBody | undefined;
+      let resBody: CapturedBody | undefined;
       if (bodyMaxBytes > 0) {
         try {
           const cloned = response.clone();
           const text = await cloned.text();
-          responseBody = captureBody(text, bodyMaxBytes, redactBodyKeySet);
+          resBody = captureBody(text, bodyMaxBytes, compiledBodyRedact);
         } catch {
-          responseBody = undefined;
+          resBody = undefined;
         }
       }
 
       entry.response = {
-        body: responseBody,
-        headers: redactHeadersMap(parseHeaders(response.headers), redactHeaderSet),
+        body: resBody?.body,
+        bodyBytes: resBody?.bodyBytes,
+        headers: redactHeadersMap(parseHeaders(response.headers), compiledHeaderRedact),
         status: response.status,
       };
 
@@ -245,8 +227,10 @@ const installPatches = (): void => {
     } catch (error) {
       entry.duration = Date.now() - startTime;
       entry.status = 'error';
+      const message = error instanceof Error ? error.message : String(error);
       entry.response = {
-        body: { bytes: 0, data: error instanceof Error ? error.message : String(error) },
+        body: message,
+        bodyBytes: message.length,
         headers: {},
         status: 0,
       };
@@ -294,12 +278,14 @@ const installPatches = (): void => {
       return originalSend.call(this, body);
     }
 
+    const reqBody = captureBody(body, bodyMaxBytes, compiledBodyRedact);
     const entry = addEntry({
       duration: null,
       method: (method ?? 'GET').toUpperCase(),
       request: {
-        body: captureBody(body, bodyMaxBytes, redactBodyKeySet),
-        headers: redactHeadersMap(headers ?? {}, redactHeaderSet),
+        body: reqBody?.body,
+        bodyBytes: reqBody?.bodyBytes,
+        headers: redactHeadersMap(headers ?? {}, compiledHeaderRedact),
       },
       response: null,
       startedAt: new Date().toISOString(),
@@ -313,25 +299,26 @@ const installPatches = (): void => {
       entry.duration = Date.now() - startTime;
       entry.status = this.status >= 200 && this.status < 400 ? 'success' : 'error';
 
-      let responseBody: CapturedBody | undefined;
+      let resBody: CapturedBody | undefined;
       if (bodyMaxBytes > 0) {
         const responseType = this.responseType;
         if (responseType === '' || responseType === 'text') {
           try {
-            responseBody = captureBody(this.responseText, bodyMaxBytes, redactBodyKeySet);
+            resBody = captureBody(this.responseText, bodyMaxBytes, compiledBodyRedact);
           } catch {
-            responseBody = undefined;
+            resBody = undefined;
           }
         } else if (responseType === 'json') {
-          responseBody = captureBody(this.response, bodyMaxBytes, redactBodyKeySet);
+          resBody = captureBody(this.response, bodyMaxBytes, compiledBodyRedact);
         } else {
           // blob | arraybuffer | document — don't serialize binary / DOM payloads.
-          responseBody = { bytes: 0, preview: `[${responseType}]` };
+          resBody = { body: `[${responseType}]`, bodyBytes: 0 };
         }
       }
 
       entry.response = {
-        body: responseBody,
+        body: resBody?.body,
+        bodyBytes: resBody?.bodyBytes,
         headers: redactHeadersMap(
           parseHeaders(
             this.getAllResponseHeaders?.()
@@ -343,7 +330,7 @@ const installPatches = (): void => {
                 return acc;
               }, {})
           ),
-          redactHeaderSet
+          compiledHeaderRedact
         ),
         status: this.status,
       };
@@ -355,6 +342,18 @@ const installPatches = (): void => {
 
 installPatches();
 
+const project = (entries: NetworkEntry[], args: ProjectionArgs): unknown => {
+  return applyProjection(entries, args, projectAsValue, NETWORK_DEFAULT_DEPTH);
+};
+
+const resolveRedactList = (
+  override: RedactPatterns | undefined,
+  defaults: ReadonlyArray<string | RegExp>
+): ReturnType<typeof compileRedact> => {
+  // override === false → disable; undefined → defaults; array → override list
+  return compileRedact(override ?? defaults);
+};
+
 export const networkModule = (options?: NetworkModuleOptions): McpModule => {
   if (typeof options?.maxEntries === 'number') {
     maxEntries = options.maxEntries;
@@ -362,47 +361,37 @@ export const networkModule = (options?: NetworkModuleOptions): McpModule => {
       buffer.splice(0, buffer.length - maxEntries);
     }
   }
-  if (options?.includeBodies === false) {
-    bodyMaxBytes = 0;
-  } else if (typeof options?.bodyMaxBytes === 'number') {
+  if (typeof options?.bodyMaxBytes === 'number') {
     bodyMaxBytes = options.bodyMaxBytes;
   }
   if (Array.isArray(options?.ignoreUrls)) {
     ignoreUrls = [...DEFAULT_IGNORE_URLS, ...options.ignoreUrls];
   }
   if (options?.redactHeaders !== undefined) {
-    redactHeaderSet = toRedactSet(options.redactHeaders, DEFAULT_REDACT_HEADERS);
+    compiledHeaderRedact = resolveRedactList(options.redactHeaders, DEFAULT_REDACT_HEADERS);
   }
   if (options?.redactBodyKeys !== undefined) {
-    redactBodyKeySet = toRedactSet(options.redactBodyKeys, DEFAULT_REDACT_BODY_KEYS);
+    compiledBodyRedact = resolveRedactList(options.redactBodyKeys, DEFAULT_REDACT_BODY_KEYS);
   }
-
-  const project = (entries: NetworkEntry[], full: boolean): NetworkEntry[] => {
-    if (full) return entries;
-    return entries.map(withoutBody);
-  };
-
-  const findById = (id: number): NetworkEntry | undefined => {
-    return buffer.find((e) => {
-      return e.id === id;
-    });
-  };
 
   return {
     description: `Intercepted fetch + XMLHttpRequest — method, URL, status, duration, headers, bodies.
 
 CAPTURE
-  Each entry carries a numeric \`id\`. Bodies are stored up to bodyMaxBytes
-  (default 20KB); larger payloads keep only a preview + truncated marker.
-  Sensitive headers (Authorization, Cookie, Set-Cookie, X-Api-Key, X-Auth-*)
-  and body keys (password, token, accessToken, refreshToken, apiKey, secret,
-  otp, pin) are redacted at capture time. Capture starts at module-import
-  time (before React mounts) so cold-start traffic is not lost.
+  Each entry carries a numeric \`id\`. Bodies are stored raw up to bodyMaxBytes
+  (default 20KB); larger payloads collapse to a \`\${str}\` marker carrying the
+  original byte count + a short preview. Sensitive headers (Authorization,
+  Cookie, Set-Cookie, X-Api-Key, X-Auth-*) and body keys (password, token,
+  accessToken, refreshToken, apiKey, secret, otp, pin) are redacted at capture
+  time. Capture starts at module-import time (before React mounts) so
+  cold-start traffic is not lost.
 
 QUERY
-  get_requests / get_errors / get_request drop full \`data\` from each body
-  by default — pass includeBodies: true to get them inline. Use get_body to
-  fetch one specific body without polluting the response with the rest.
+  All listing tools accept the standard \`path\` / \`depth\` / \`maxBytes\` projection
+  args (default depth ${NETWORK_DEFAULT_DEPTH} — entries expanded, headers map and bodies collapse
+  to \`\${obj}\` markers). Drill into a body via path:
+    network__get_requests({ path: '[-1:][0].response.body' })          // last entry's response body
+    network__get_requests({ path: '[-1:][0].response.body', depth: 8 }) // fully expanded
 
 WebSocket / Metro / symbolicate traffic is auto-ignored. Buffer size, body
 cap, and redaction lists are configurable via networkModule options.`,
@@ -415,88 +404,45 @@ cap, and redaction lists are configurable via networkModule options.`,
           return { success: true };
         },
       },
-      get_body: {
-        description:
-          'Fetch one captured request or response body by entry id (from get_requests). Returns { id, kind, body } or { error }. body.data is the parsed payload when the original size was below bodyMaxBytes; otherwise only preview + truncated are set.',
-        handler: (args) => {
-          const id = args.id as number;
-          const kind = (args.kind as string) ?? 'response';
-          if (typeof id !== 'number') return { error: 'id required (number).' };
-          const entry = findById(id);
-          if (!entry) return { error: `No entry with id ${id} (buffer has ${buffer.length}).` };
-          if (kind !== 'request' && kind !== 'response') {
-            return { error: `kind must be "request" or "response", got ${kind}.` };
-          }
-          const body = kind === 'request' ? entry.request.body : entry.response?.body;
-          return { body: body ?? null, id, kind };
-        },
-        inputSchema: {
-          id: { description: 'Entry id from get_requests.', type: 'number' },
-          kind: {
-            description: 'Which body to return: "request" or "response". Default "response".',
-            examples: ['request', 'response'],
-            type: 'string',
-          },
-        },
-      },
       get_errors: {
         description:
-          'Failed requests only (non-2xx or network errors). Bodies stripped by default; pass includeBodies: true to keep them.',
+          'Failed requests only (non-2xx or network errors). Bodies collapse to markers by default; drill via `path`/`depth`.',
         handler: (args) => {
-          let result = buffer.filter((e) => {
+          const result = buffer.filter((e) => {
             return e.status === 'error';
           });
-          result = applySlice(result, parseSliceArg(args.slice));
-          return project(result, args.includeBodies === true);
+          return project(result, args as ProjectionArgs);
         },
-        inputSchema: {
-          includeBodies: {
-            description: 'Include full body data in each entry. Default false.',
-            type: 'boolean',
-          },
-          slice: {
-            description: sliceSchemaDescription(
-              'Default omitted → every failed request is returned.'
-            ),
-            type: 'array',
-          },
-        },
+        inputSchema: PROJECTION_SCHEMA,
       },
       get_pending: {
-        description: 'In-flight requests (bodies stripped by default).',
+        description: 'In-flight requests (bodies collapse to markers by default; drill via path).',
         handler: (args) => {
           const result = buffer.filter((e) => {
             return e.status === 'pending';
           });
-          return project(result, args.includeBodies === true);
+          return project(result, args as ProjectionArgs);
         },
-        inputSchema: {
-          includeBodies: {
-            description: 'Include full body data. Default false.',
-            type: 'boolean',
-          },
-        },
+        inputSchema: PROJECTION_SCHEMA,
       },
       get_request: {
-        description: 'Requests whose URL contains the given substring. Bodies stripped by default.',
+        description:
+          'Requests whose URL contains the given substring. Bodies collapse to markers by default.',
         handler: (args) => {
           const urlFilter = args.url as string;
           const result = buffer.filter((e) => {
             return e.url.includes(urlFilter);
           });
-          return project(result, args.includeBodies === true);
+          return project(result, args as ProjectionArgs);
         },
         inputSchema: {
-          includeBodies: {
-            description: 'Include full body data. Default false.',
-            type: 'boolean',
-          },
+          ...PROJECTION_SCHEMA,
           url: { description: 'URL substring.', type: 'string' },
         },
       },
       get_requests: {
         description:
-          'All captured requests; filterable by method / status / URL substring. Bodies stripped by default.',
+          'All captured requests; filterable by method / status / URL substring. Bodies collapse to markers by default; drill via `path`/`depth`.',
         handler: (args) => {
           let result = [...buffer];
           if (args.method) {
@@ -516,25 +462,14 @@ cap, and redaction lists are configurable via networkModule options.`,
               return e.url.includes(urlFilter);
             });
           }
-          result = applySlice(result, parseSliceArg(args.slice));
-          return project(result, args.includeBodies === true);
+          return project(result, args as ProjectionArgs);
         },
         inputSchema: {
-          includeBodies: {
-            description: 'Include full body data in each entry. Default false.',
-            type: 'boolean',
-          },
+          ...PROJECTION_SCHEMA,
           method: {
             description: 'HTTP method filter.',
             examples: ['GET', 'POST', 'PUT', 'DELETE'],
             type: 'string',
-          },
-          slice: {
-            description: sliceSchemaDescription(
-              'Default omitted → every captured request is returned.'
-            ),
-            examples: [[-10], [-20, -10], [0, 50]],
-            type: 'array',
           },
           status: {
             description: 'Status filter.',
@@ -557,8 +492,8 @@ cap, and redaction lists are configurable via networkModule options.`,
             byMethod[entry.method] = (byMethod[entry.method] ?? 0) + 1;
             byStatus[entry.status] = (byStatus[entry.status] ?? 0) + 1;
             if (typeof entry.duration === 'number') durations.push(entry.duration);
-            bytes += entry.request.body?.bytes ?? 0;
-            bytes += entry.response?.body?.bytes ?? 0;
+            bytes += entry.request.bodyBytes ?? 0;
+            bytes += entry.response?.bodyBytes ?? 0;
           }
 
           durations.sort((a, b) => {

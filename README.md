@@ -311,7 +311,7 @@ Drive React Navigation from outside — navigate, push, pop, replace, reset — 
 
 ### network
 
-Intercepts `fetch` and `XMLHttpRequest` into a ring buffer — method, URL, status, duration, headers, bodies. Bodies are capped per-entry (default 20KB) and sensitive headers / body keys are redacted at capture time (`Authorization`, `Cookie`, `password`, `token`, etc. — configurable). Query tools strip body data by default; fetch a specific body via `get_body({ id })`. WebSocket, Metro, and symbolicate traffic are auto-ignored.
+Intercepts `fetch` and `XMLHttpRequest` into a ring buffer — method, URL, status, duration, headers, bodies. Bodies are stored raw (post JSON-parse + redact) up to `bodyMaxBytes` (default 20KB); larger payloads collapse at capture time to `{ "${str}": { len, preview } }`. Sensitive headers / body keys are redacted at capture time (`Authorization`, `Cookie`, `password`, `token`, etc. — configurable). Listing tools accept standard `path` / `depth` / `maxBytes` projection args (default depth 3 — entries expanded, headers and bodies collapse to `${obj}` markers); drill into a body via `path: '[-1:][0].response.body'` or bump `depth` to expand inline. WebSocket, Metro, and symbolicate traffic are auto-ignored.
 
 ```ts
 networkModule({
