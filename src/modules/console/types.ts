@@ -2,6 +2,7 @@ export type LogLevel = 'debug' | 'error' | 'info' | 'log' | 'warn';
 
 export interface LogEntry {
   args: unknown[];
+  id: number;
   level: LogLevel;
   timestamp: string;
   stack?: string;

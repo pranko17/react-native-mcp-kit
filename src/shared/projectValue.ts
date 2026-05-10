@@ -292,6 +292,7 @@ export const projectValue = (input: unknown, options?: ProjectOptions): ProjectR
 
   // resolve path first (if any) — applies to the input tree, not the projection
   let target: unknown = input;
+  let pathResolved = false;
   if (opts.path) {
     const res = resolvePath(input, opts.path);
     if (!res.ok) {
@@ -302,6 +303,21 @@ export const projectValue = (input: unknown, options?: ProjectOptions): ProjectR
       };
     }
     target = res.value;
+    pathResolved = true;
+  }
+
+  // When path explicitly resolves to a string scalar, return the raw string
+  // (truncated only if it would blow the maxBytes cap). The user navigated
+  // to a leaf — they asked for the content, not a preview marker.
+  if (pathResolved && typeof target === 'string') {
+    if (target.length > maxBytes) {
+      return {
+        bytes: target.length,
+        truncated: true,
+        value: { ['${str}']: { len: target.length, preview: target.slice(0, 200) } },
+      };
+    }
+    return { bytes: target.length, truncated: false, value: target };
   }
 
   const ctx: WalkCtx = {

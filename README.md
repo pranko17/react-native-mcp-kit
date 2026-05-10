@@ -259,7 +259,7 @@ Show a native `Alert.alert` from the agent with any combination of `default` / `
 
 ### console
 
-Tails `console.log` / `warn` / `error` / `info` / `debug` into a ring buffer the agent can read or clear. Complex values (Errors, Dates, class instances, cyclic refs, functions, Symbols) are serialized safely. Buffer size, captured levels, and whether stack traces are collected are all configurable.
+Tails `console.log` / `warn` / `error` / `info` / `debug` into a ring buffer the agent can read or clear. Each entry carries a monotonic `id`. Args are stored raw and projected at query time — Errors, Dates, class instances, cyclic refs, functions, Symbols, Maps, Sets all collapse to compact `${kind}` markers. Listing tools accept standard `path` / `depth` / `maxBytes` projection args (default depth 3); drill via `path: '[-1:][0].args[1]'` to fetch one specific arg. Buffer size, captured levels, and whether stack traces are collected are all configurable.
 
 ```ts
 consoleModule({

@@ -1,5 +1,10 @@
 import { type McpModule } from '@/client/models/types';
-import { applySlice, parseSliceArg, sliceSchemaDescription } from '@/shared/slice';
+import {
+  applyProjection,
+  makeProjectionSchema,
+  projectAsValue,
+  type ProjectionArgs,
+} from '@/shared/projectValue';
 
 import { type ConsoleModuleOptions, type LogEntry, type LogLevel } from './types';
 
@@ -7,59 +12,13 @@ const ALL_LEVELS: LogLevel[] = ['debug', 'error', 'info', 'log', 'warn'];
 const DEFAULT_MAX_ENTRIES = 100;
 const DEFAULT_STACK_LEVELS: LogLevel[] = ['error', 'warn'];
 
-const serializeArg = (arg: unknown, seen = new WeakSet<object>()): unknown => {
-  if (arg === null || arg === undefined) return arg;
+// Default depth 3 — top level is array of entries, level 2 expands each
+// entry (id/level/timestamp inline, args/stack still markers), level 3
+// opens the args array (primitive args inline, nested objects → ${obj}
+// markers). Drill deeper via `path` or bump `depth`.
+const CONSOLE_DEFAULT_DEPTH = 3;
 
-  if (typeof arg === 'function') {
-    return `[Function: ${arg.name || 'anonymous'}]`;
-  }
-
-  if (typeof arg === 'symbol') {
-    return arg.toString();
-  }
-
-  if (typeof arg !== 'object') return arg;
-
-  if (arg instanceof Error) {
-    return {
-      message: arg.message,
-      name: arg.name,
-      stack: arg.stack,
-    };
-  }
-
-  if (arg instanceof Date) {
-    return arg.toISOString();
-  }
-
-  if (arg instanceof RegExp) {
-    return arg.toString();
-  }
-
-  if (seen.has(arg)) {
-    return '[Circular]';
-  }
-  seen.add(arg);
-
-  if (Array.isArray(arg)) {
-    return arg.map((item) => {
-      return serializeArg(item, seen);
-    });
-  }
-
-  const className = arg.constructor?.name;
-  const serialized: Record<string, unknown> = {};
-
-  if (className && className !== 'Object') {
-    serialized.__class = className;
-  }
-
-  for (const key of Object.keys(arg)) {
-    serialized[key] = serializeArg((arg as Record<string, unknown>)[key], seen);
-  }
-
-  return serialized;
-};
+const PROJECTION_SCHEMA = makeProjectionSchema(CONSOLE_DEFAULT_DEPTH);
 
 const captureStack = (): string | undefined => {
   const stack = new Error().stack;
@@ -78,16 +37,20 @@ const captureStack = (): string | undefined => {
 // applies caller-supplied options retroactively.
 
 const buffer: LogEntry[] = [];
+let nextId = 1;
 let maxEntries = DEFAULT_MAX_ENTRIES;
 let capturedLevels = new Set<LogLevel>(ALL_LEVELS);
 let stackLevels = new Set<LogLevel>(DEFAULT_STACK_LEVELS);
 
 const addEntry = (level: LogLevel, args: unknown[]): void => {
   if (!capturedLevels.has(level)) return;
+  // Args are stored RAW (no per-arg serializer). Projection — depth walk,
+  // marker collapse, cycle / class detection, redaction — runs at query
+  // time via the shared `projectValue`. This keeps cold-start capture
+  // cheap and lets the agent drill any path / depth at query time.
   const entry: LogEntry = {
-    args: args.map((arg) => {
-      return serializeArg(arg);
-    }),
+    args,
+    id: nextId++,
     level,
     timestamp: new Date().toISOString(),
   };
@@ -115,6 +78,16 @@ const installPatches = (): void => {
 
 installPatches();
 
+const project = (entries: LogEntry[], args: ProjectionArgs): unknown => {
+  return applyProjection(entries, args, projectAsValue, CONSOLE_DEFAULT_DEPTH);
+};
+
+const filterByLevel = (level: LogLevel): LogEntry[] => {
+  return buffer.filter((entry) => {
+    return entry.level === level;
+  });
+};
+
 export const consoleModule = (options?: ConsoleModuleOptions): McpModule => {
   // Apply options retroactively to the already-running buffer.
   if (typeof options?.maxEntries === 'number') {
@@ -134,24 +107,22 @@ export const consoleModule = (options?: ConsoleModuleOptions): McpModule => {
     stackLevels = new Set(options.stackTrace);
   }
 
-  const filterByLevel = (level: LogLevel, slice: unknown): LogEntry[] => {
-    const filtered = buffer.filter((entry) => {
-      return entry.level === level;
-    });
-    return applySlice(filtered, parseSliceArg(slice));
-  };
-
-  const sliceSchema = {
-    description: sliceSchemaDescription('Default omitted → every matching entry is returned.'),
-    examples: [[-10], [-20, -10], [0, 50]],
-    type: 'array',
-  };
-
   return {
     description: `Ring buffer of console.log/warn/error/info/debug.
 
-Complex values (Errors, Dates, class instances, cyclic refs, functions,
-Symbols) are serialized safely. Stack traces can be captured per level.
+Each entry carries a numeric \`id\` (monotonic). Args are stored raw and
+projected at query time via the shared \`projectValue\` — Errors / Dates /
+RegExp / Maps / Sets / class instances / cycles / functions / Symbols all
+collapse to compact \`\${kind}\` markers; primitives stay raw. Stack traces
+are captured per level (default error+warn).
+
+All listing tools accept the standard \`path\` / \`depth\` / \`maxBytes\`
+projection args (default depth ${CONSOLE_DEFAULT_DEPTH} — entries expanded, args array opened with
+nested objects collapsed to \`\${obj}\` markers). Drill deeper via path:
+  console__get_logs({ path: '[-3:]' })                   // last 3 entries
+  console__get_logs({ path: '[-1:][0].args[1]' })        // 2nd arg of last entry
+  console__get_logs({ path: '[-1:][0].args[1]', depth: 8 }) // fully expanded
+
 Capture starts at module-import time (before React mounts) so cold-start
 logs are not lost. Buffer size and captured levels are configurable via
 consoleModule options.`,
@@ -167,58 +138,51 @@ consoleModule options.`,
       get_debug: {
         description: 'Return console.debug entries.',
         handler: (args) => {
-          return filterByLevel('debug', args.slice);
+          return project(filterByLevel('debug'), args as ProjectionArgs);
         },
-        inputSchema: {
-          slice: sliceSchema,
-        },
+        inputSchema: PROJECTION_SCHEMA,
       },
       get_errors: {
         description: 'Return console.error entries.',
         handler: (args) => {
-          return filterByLevel('error', args.slice);
+          return project(filterByLevel('error'), args as ProjectionArgs);
         },
-        inputSchema: {
-          slice: sliceSchema,
-        },
+        inputSchema: PROJECTION_SCHEMA,
       },
       get_info: {
         description: 'Return console.info entries.',
         handler: (args) => {
-          return filterByLevel('info', args.slice);
+          return project(filterByLevel('info'), args as ProjectionArgs);
         },
-        inputSchema: {
-          slice: sliceSchema,
-        },
+        inputSchema: PROJECTION_SCHEMA,
       },
       get_logs: {
-        description: 'Return all log entries, optionally filtered by level and slice.',
+        description: 'Return all log entries, optionally filtered by level.',
         handler: (args) => {
-          let result = [...buffer];
+          let result: LogEntry[] = buffer;
           if (args.level) {
+            const lvl = args.level as LogLevel;
             result = result.filter((entry) => {
-              return entry.level === (args.level as LogLevel);
+              return entry.level === lvl;
             });
           }
-          return applySlice(result, parseSliceArg(args.slice));
+          return project(result, args as ProjectionArgs);
         },
         inputSchema: {
+          ...PROJECTION_SCHEMA,
           level: {
             description: 'Filter by level.',
             examples: ['log', 'warn', 'error', 'info', 'debug'],
             type: 'string',
           },
-          slice: sliceSchema,
         },
       },
       get_warnings: {
         description: 'Return console.warn entries.',
         handler: (args) => {
-          return filterByLevel('warn', args.slice);
+          return project(filterByLevel('warn'), args as ProjectionArgs);
         },
-        inputSchema: {
-          slice: sliceSchema,
-        },
+        inputSchema: PROJECTION_SCHEMA,
       },
     },
   };
