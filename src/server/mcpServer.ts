@@ -5,7 +5,12 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 
-import { DYNAMIC_PREFIX, MODULE_SEPARATOR, type ModuleDescriptor } from '@/shared/protocol';
+import {
+  DYNAMIC_PREFIX,
+  MODULE_SEPARATOR,
+  type ModuleDescriptor,
+  PACKAGE_NAME,
+} from '@/shared/protocol';
 
 import { type Bridge, type ClientEntry } from './bridge';
 import { type HostModule, type HostToolHandler } from './host/types';
@@ -321,7 +326,7 @@ export class McpServerWrapper {
     }
 
     this.mcp = new McpServer(
-      { name: 'react-native-mcp-kit', version: PACKAGE_VERSION },
+      { name: PACKAGE_NAME, version: PACKAGE_VERSION },
       { instructions: BASE_INSTRUCTIONS }
     );
 

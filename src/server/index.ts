@@ -1,9 +1,9 @@
+import { DEFAULT_PORT } from '@/shared/protocol';
+
 import { Bridge } from './bridge';
 import { type HostModule } from './host/types';
 import { McpServerWrapper } from './mcpServer';
 import { type ServerConfig } from './types';
-
-const DEFAULT_PORT = 8347;
 
 export async function createServer(config?: ServerConfig): Promise<void> {
   const port = config?.port ?? DEFAULT_PORT;

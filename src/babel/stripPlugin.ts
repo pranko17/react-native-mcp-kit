@@ -1,5 +1,7 @@
 import { type PluginObj, type types as BabelTypes } from '@babel/core';
 
+import { PACKAGE_NAME } from '@/shared/protocol';
+
 interface PluginOptions {
   /** Additional function names to strip */
   additionalFunctions?: string[];
@@ -7,7 +9,7 @@ interface PluginOptions {
   additionalSources?: string[];
 }
 
-const DEFAULT_SOURCES = ['react-native-mcp-kit'];
+const DEFAULT_SOURCES = [PACKAGE_NAME];
 
 const DEFAULT_FUNCTIONS = ['useMcpTool', 'useMcpModule', 'initMcp'];
 

@@ -1,3 +1,13 @@
+/** npm package name. Single source of truth for the server identity reported
+ * in the MCP handshake (`mcpServer.ts`) and for the default `import` source
+ * the strip babel plugin recognises (`stripPlugin.ts`). */
+export const PACKAGE_NAME = 'react-native-mcp-kit';
+
+/** Default WebSocket port the bridge listens on and the RN client connects to.
+ * Used by the server (`createServer`) and the client (`McpClient.initialize`)
+ * — they must agree, hence shared. */
+export const DEFAULT_PORT = 8347;
+
 /** Separator between module name and tool name in MCP call format */
 export const MODULE_SEPARATOR = '__';
 

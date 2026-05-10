@@ -2,6 +2,7 @@ import { type McpModule, type ToolHandler } from '@/client/models/types';
 import { McpConnection } from '@/client/utils/connection';
 import { ModuleRunner } from '@/client/utils/moduleRunner';
 import {
+  DEFAULT_PORT,
   type DevServerInfo,
   MODULE_SEPARATOR,
   PROTOCOL_VERSION,
@@ -9,7 +10,6 @@ import {
   type ToolRequest,
 } from '@/shared/protocol';
 
-const DEFAULT_PORT = 8347;
 const TAG = '\x1b[1;35m[rn-mcp-kit]\x1b[0m';
 const ARROW_IN = '\x1b[36m→\x1b[0m';
 const ARROW_OUT = '\x1b[32m←\x1b[0m';
