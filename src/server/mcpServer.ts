@@ -1,14 +1,14 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer, type RegisteredTool } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { z } from 'zod';
 
 import { DYNAMIC_PREFIX, MODULE_SEPARATOR, type ModuleDescriptor } from '@/shared/protocol';
 
-import { type Bridge, type ClientEntry } from './bridge';
+import { type Bridge, type ClientEntry, type DynamicToolEntry } from './bridge';
 import { type HostModule, type HostToolHandler } from './host/types';
+import { convertInputSchema, hashInputSchema } from './inputSchemaToZod';
 
 // Read the shipped package.json so the MCP handshake reports an accurate
 // server version — keeps clients' connection logs in sync with the installed
@@ -23,194 +23,37 @@ const PACKAGE_VERSION = ((): string => {
   }
 })();
 
-const BASE_INSTRUCTIONS = `You are connected to a running React Native app via the react-native-mcp-kit bridge.
+const BASE_INSTRUCTIONS = `You are connected to one or more React Native apps via the react-native-mcp-kit bridge.
 
-Multiple React Native apps can connect simultaneously — each is identified by a short ID like "ios-1", "android-1", or "client-1". Use \`connection_status\` or \`list_tools\` to see which clients are connected and their IDs, platforms, and labels.
+EVERY TOOL IS TOP-LEVEL
+  Module tools shipped by the app (\`fiber_tree__query\`, \`network__get_pending\`, \`navigation__navigate\`, ...), dynamic tools registered via \`useMcpTool\`, and host tools (\`host__screenshot\`, \`host__tap\`, \`metro__reload\`, \`host__connection_status\`, ...) are all registered as first-class top-level MCP tools. Invoke them directly by name with their full schema visible in your catalog — no proxy layer.
 
-## How to interact
+MULTI-CLIENT ROUTING
+  Every tool accepts an optional \`clientId\` arg (e.g. \`"ios-1"\`, \`"android-1"\`). With a single client connected the field can be omitted — it auto-picks. With more than one connected, omitting it returns an error listing the available IDs. Use \`host__connection_status\` to discover them along with platform/label/app metadata.
 
-1. Use \`connection_status\` to check which clients are connected.
-2. Use \`list_tools\` to browse all available tool names and short descriptions. The response is compact — modules that are structurally identical across multiple clients are deduplicated into a single entry with a \`clientIds\` array, and input schemas are omitted. Narrow the listing with \`{ module }\` or \`{ clientId }\`, or pass \`{ compact: true }\` to drop module-level descriptions.
-3. Use \`describe_tool\` with \`{ tool, clientId? }\` to fetch the full input schema of a specific tool before calling it. Required when you need to know the argument shape. Host tools are resolved directly (no clientId needed). For in-app tools, omit \`clientId\` to auto-pick; specify it only when multiple clients have the same tool with different schemas.
-4. Use \`call\` to invoke any tool with format: module${MODULE_SEPARATOR}method (e.g. navigation${MODULE_SEPARATOR}navigate). When more than one client is connected, specify \`clientId\`. When exactly one client is connected, \`clientId\` is optional — it's auto-picked. \`args\` accepts either a plain object or a JSON string — prefer objects to avoid quote escaping.
-5. Use \`wait_until\` to poll any tool until a predicate over its result holds (or timeout). Replaces "screenshot in a loop + sleep" for state-level waits ("wait for network to idle", "wait for state key X to become Y"). Predicate supports compound forms: { all: [...] } (AND), { any: [...] } (OR), { not: predicate }.
-6. For UI-level waits ("wait for a screen to appear", "wait for a spinner to disappear") use \`fiber_tree${MODULE_SEPARATOR}query\` with \`waitFor: { until: "appear" | "disappear", timeout?, interval?, stable? }\` — it polls the same query with cache bypassed until the target state holds. \`stable: <ms>\` requires continuous presence/absence for that many ms to ignore transient matches during screen transitions.
-7. Use \`assert\` for a single-shot checkpoint after actions — same predicate vocabulary as wait_until, returns { pass, actual, expected?, result? }. Natural pair: do action → wait_until / fiber_tree waitFor → assert.
-8. Use \`host${MODULE_SEPARATOR}tap_fiber\` to collapse "fiber_tree__query → host__tap at bounds" into one call. Pass fiber_tree steps; if exactly one fiber matches, its center is tapped. Ambiguous match returns the candidate list so you can add \`index\` or narrow the chain.
+CATALOG REFRESH
+  The tool catalog updates when RN clients connect / disconnect or when components mount / unmount \`useMcpTool\` calls — the server emits \`notifications/tools/list_changed\`. Most MCP clients respect this; if the catalog feels stale after the app reloads, restart the session.
 
-Some tools run inline on the MCP server host (e.g. \`host${MODULE_SEPARATOR}screenshot\`, \`host${MODULE_SEPARATOR}list_devices\`, \`host${MODULE_SEPARATOR}launch_app\`, \`host${MODULE_SEPARATOR}terminate_app\`, \`host${MODULE_SEPARATOR}restart_app\`, \`metro${MODULE_SEPARATOR}reload\`, \`metro${MODULE_SEPARATOR}symbolicate\`) and work even when no React Native client is connected. They use xcrun simctl / adb on the dev machine. When \`clientId\` is provided, host tools use that client's platform/label/deviceId as hints to resolve the target device; otherwise they prefer the device of the single connected client, falling back to the single booted sim / online device. \`launch_app\`, \`terminate_app\`, and \`restart_app\` accept an \`appId\` arg (iOS bundle ID / Android package name); omit it to reuse the target client's registered \`bundleId\` from its connection metadata.
+DRIVING THE UI
+  1. \`host${MODULE_SEPARATOR}tap_fiber\` with \`steps: [...]\` — canonical user-tap simulator. One call locates the fiber and taps its center through the real OS gesture pipeline so Pressable feedback, gesture responders, and hit-test all run.
+  2. \`fiber_tree${MODULE_SEPARATOR}query\` with \`select: ["mcpId","name","bounds"]\` + \`host${MODULE_SEPARATOR}tap\` — when you want to inspect bounds before committing.
+  3. \`fiber_tree${MODULE_SEPARATOR}invoke\` — non-gesture callbacks where the gesture pipeline is unwanted (off-screen, virtualised, callback isolation).
+  4. \`host${MODULE_SEPARATOR}screenshot\` + manual coordinates + \`host${MODULE_SEPARATOR}tap\` — only for non-React surfaces (system permission dialogs, native alerts, the on-screen keyboard, WebView).
 
-## Driving the UI — pick the right tool
-1. **\`host${MODULE_SEPARATOR}tap_fiber\` with \`steps: [...]\`** — the canonical way to simulate a user tap. One call locates the fiber via fiber_tree__query and taps its center through the real OS gesture pipeline, so Pressable feedback, gesture responders, and hit-test logic all run. Ambiguous matches return a candidate list so you can add \`index\` or narrow \`steps\`. This is what you want whenever the user asks to simulate a tap / press / button click.
-2. **\`fiber_tree${MODULE_SEPARATOR}query\` with \`select: ["mcpId","name","bounds"]\` + \`host${MODULE_SEPARATOR}tap\`** when you want to inspect a match set before committing — e.g. verify bounds, or skim candidates before picking one. \`props\` is opt-in on \`select\` to keep responses small.
-3. **\`fiber_tree${MODULE_SEPARATOR}invoke\`** for non-gesture callbacks — anything state-driving the user didn't trigger with a finger. Good when the component is off-screen / virtualised, when a scroll-handler parent swallows taps, or when you're specifically testing a callback in isolation without the gesture pipeline. For simulating a user tap, prefer tap_fiber (above).
-4. **\`host${MODULE_SEPARATOR}screenshot\` + manual coordinate estimation + \`host${MODULE_SEPARATOR}tap\`** ONLY for non-React surfaces: system permission dialogs, native alerts, the on-screen keyboard, WebView content, native splash. These have no fiber and no bounds. Pair with \`region: { x, y, width, height }\` to screenshot just the area you're inspecting — vision-token cheap.
+POLLING / WAITING
+  \`fiber_tree${MODULE_SEPARATOR}query\` accepts \`waitFor: { until: "appear" | "disappear", timeout?, interval?, stable? }\` for UI-state waits. Generic per-tool polling is not a server primitive — modules expose \`waitFor\` themselves where it makes sense.
 
-Gesture tools: \`host${MODULE_SEPARATOR}tap\` / \`host${MODULE_SEPARATOR}long_press\` / \`host${MODULE_SEPARATOR}swipe\` / \`host${MODULE_SEPARATOR}drag\` / \`host${MODULE_SEPARATOR}type_text\` / \`host${MODULE_SEPARATOR}type_text_batch\` / \`host${MODULE_SEPARATOR}press_key\` work on both platforms with no external daemons: Android via \`adb shell input\`, iOS via a bundled \`ios-hid\` binary that injects HID events directly into iOS Simulator through SimulatorKit.
+STACK TRACES
+  \`errors${MODULE_SEPARATOR}get_errors\` and \`log_box${MODULE_SEPARATOR}get_logs\` return parsed \`stackFrames\` you can pass straight into \`metro${MODULE_SEPARATOR}symbolicate\` to resolve bundled frames back to source paths via Metro.
 
-Stack traces: \`errors${MODULE_SEPARATOR}get_errors\` and \`log_box${MODULE_SEPARATOR}get_logs\` return parsed \`stackFrames\` you can pass straight into \`metro${MODULE_SEPARATOR}symbolicate\` to resolve bundled frames back to source paths via Metro.
+COMPONENT-LOCAL STATE
+  \`fiber_tree${MODULE_SEPARATOR}query\` with \`select: ["hooks"]\` reads a component's hook list — useState / useMemo / useRef / useEffect / custom hooks — with variable names recovered from source. Each entry carries \`{ kind, name, hook?, via?, expanded? }\`; pass \`hooksInclude: { withValues: true }\` for resolved values, \`format: "tree"\` for nested children, \`expansionDepth: N\` to cap recursion. Sensitive names (password, token, jwt, secret, credential, apiKey, authorization, Pin suffix) are auto-redacted; configure via \`fiberTreeModule({ redactHookNames, additionalRedactHookNames })\`.
 
-Component-local state: \`fiber_tree${MODULE_SEPARATOR}query\` with \`select: ["hooks"]\` reads a component's hook list — useState / useMemo / useRef / useEffect / custom hooks — with variable names recovered from source. Each entry carries \`{ kind, name, hook?, via?, expanded? }\`; pass \`hooksInclude: { withValues: true }\` for resolved values, \`format: "tree"\` for nested children, \`expansionDepth: N\` to cap recursion depth. Sensitive names (password, token, jwt, secret, credential, apiKey, authorization, Pin suffix) are auto-redacted; configure via \`fiberTreeModule({ redactHookNames, additionalRedactHookNames })\`.
+HOST GESTURE BACKENDS
+  iOS input (tap / swipe / type_text / press_key) goes through a bundled ios-hid binary — HID injection into iOS Simulator via SimulatorKit. Android input / screenshots go through adb. All (x, y) coordinates are PHYSICAL pixels, top-left origin — they match \`fiber_tree\` bounds.centerX/centerY directly.
 `;
 
 type TextContent = { text: string; type: 'text' };
-
-interface ToolGroup {
-  description: string | undefined;
-  module: string;
-  tools: Array<{
-    description: string;
-    name: string;
-    inputSchema?: Record<string, unknown>;
-  }>;
-}
-
-const jsonError = (msg: string): { content: TextContent[] } => {
-  return {
-    content: [{ text: JSON.stringify({ error: msg }), type: 'text' as const }],
-  };
-};
-
-/**
- * Drill into a value by dot-path. Arrays accept numeric indices and also
- * respond to `.length` (handy for "wait until list is empty"). Returns
- * undefined when any intermediate segment is missing.
- */
-const resolvePath = (value: unknown, path: string | undefined): unknown => {
-  if (!path) return value;
-  let current: unknown = value;
-  for (const key of path.split('.')) {
-    if (current == null) return undefined;
-    if (Array.isArray(current)) {
-      if (key === 'length') {
-        current = current.length;
-        continue;
-      }
-      const idx = Number.parseInt(key, 10);
-      current = Number.isNaN(idx) ? undefined : current[idx];
-      continue;
-    }
-    if (typeof current === 'object') {
-      current = (current as Record<string, unknown>)[key];
-      continue;
-    }
-    return undefined;
-  }
-  return current;
-};
-
-type PredicateOp =
-  | 'contains'
-  | 'equals'
-  | 'exists'
-  | 'gt'
-  | 'gte'
-  | 'lt'
-  | 'lte'
-  | 'notContains'
-  | 'notEquals'
-  | 'notExists';
-
-/**
- * Recursive predicate. Leaf form is { op, path?, value? }. Compound forms
- * compose: { all: [...] } (AND), { any: [...] } (OR), { not: predicate }
- * (negation). Compound forms can nest.
- */
-interface LeafPredicate {
-  op: PredicateOp;
-  path?: string;
-  value?: unknown;
-}
-type Predicate = LeafPredicate | { all: Predicate[] } | { any: Predicate[] } | { not: Predicate };
-
-const evalLeaf = (actual: unknown, op: PredicateOp, expected: unknown): boolean => {
-  switch (op) {
-    case 'exists':
-      return actual !== undefined && actual !== null;
-    case 'notExists':
-      return actual === undefined || actual === null;
-    case 'equals':
-      return Object.is(actual, expected);
-    case 'notEquals':
-      return !Object.is(actual, expected);
-    case 'contains': {
-      if (typeof actual === 'string' && typeof expected === 'string') {
-        return actual.includes(expected);
-      }
-      if (Array.isArray(actual)) return actual.includes(expected);
-      return false;
-    }
-    case 'notContains': {
-      if (typeof actual === 'string' && typeof expected === 'string') {
-        return !actual.includes(expected);
-      }
-      if (Array.isArray(actual)) return !actual.includes(expected);
-      return false;
-    }
-    case 'gt':
-      return typeof actual === 'number' && typeof expected === 'number' && actual > expected;
-    case 'gte':
-      return typeof actual === 'number' && typeof expected === 'number' && actual >= expected;
-    case 'lt':
-      return typeof actual === 'number' && typeof expected === 'number' && actual < expected;
-    case 'lte':
-      return typeof actual === 'number' && typeof expected === 'number' && actual <= expected;
-    default:
-      return false;
-  }
-};
-
-/**
- * Evaluate a predicate (leaf or compound) against a result object. Compound
- * forms short-circuit: all stops on first false, any stops on first true.
- */
-const evalPredicate = (result: unknown, predicate: Predicate): boolean => {
-  if ('all' in predicate && Array.isArray(predicate.all)) {
-    for (const sub of predicate.all) {
-      if (!evalPredicate(result, sub)) return false;
-    }
-    return true;
-  }
-  if ('any' in predicate && Array.isArray(predicate.any)) {
-    for (const sub of predicate.any) {
-      if (evalPredicate(result, sub)) return true;
-    }
-    return false;
-  }
-  if ('not' in predicate && predicate.not && typeof predicate.not === 'object') {
-    return !evalPredicate(result, predicate.not);
-  }
-  const leaf = predicate as LeafPredicate;
-  if (typeof leaf.op !== 'string') return false;
-  return evalLeaf(resolvePath(result, leaf.path), leaf.op, leaf.value);
-};
-
-/**
- * Parse a `call`-style args argument that may arrive as a JSON string (older
- * clients) or a plain object (new form). Returns { ok, args } or { ok: false,
- * error } on malformed JSON.
- */
-const parseCallArgs = (
-  raw: unknown
-): { args: Record<string, unknown>; ok: true } | { error: string; ok: false } => {
-  if (raw === undefined || raw === null) return { args: {}, ok: true };
-  if (typeof raw === 'string') {
-    if (raw.length === 0) return { args: {}, ok: true };
-    try {
-      const parsed = JSON.parse(raw) as unknown;
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        return { args: parsed as Record<string, unknown>, ok: true };
-      }
-      return { error: 'Parsed args must be an object.', ok: false };
-    } catch {
-      return { error: 'Invalid JSON in args.', ok: false };
-    }
-  }
-  if (typeof raw === 'object' && !Array.isArray(raw)) {
-    return { args: raw as Record<string, unknown>, ok: true };
-  }
-  return { error: 'args must be an object or a JSON string.', ok: false };
-};
 
 interface HostToolEntry {
   handler: HostToolHandler['handler'];
@@ -219,89 +62,28 @@ interface HostToolEntry {
   timeout?: number;
 }
 
-interface ToolDescriptorShape {
+interface ModuleToolDescriptor {
   description: string;
-  name: string;
   inputSchema?: Record<string, unknown>;
 }
 
-/**
- * Recursively serializes a value to JSON with sorted object keys, producing a
- * stable canonical form that's safe to use as a dedup Map key. Arrays keep
- * their original order — caller is responsible for normalizing them when
- * order-independence is desired.
- */
-const canonicalize = (value: unknown): string => {
-  return JSON.stringify(value, (_key, v: unknown) => {
-    if (v && typeof v === 'object' && !Array.isArray(v)) {
-      const sorted: Record<string, unknown> = {};
-      for (const k of Object.keys(v as Record<string, unknown>).sort()) {
-        sorted[k] = (v as Record<string, unknown>)[k];
-      }
-      return sorted;
-    }
-    return v;
-  });
-};
+interface ModuleToolRegistryEntry {
+  refCount: number;
+  registered: RegisteredTool;
+  schemaHash: string;
+}
 
-/**
- * Produces a canonical key for a ToolGroup that's independent of tool
- * registration order. Two modules with the same name + tools (regardless of
- * order) + descriptions + schemas produce the same key.
- */
-const canonicalizeGroup = (group: ToolGroup): string => {
-  const normalized = {
-    description: group.description,
-    module: group.module,
-    tools: [...group.tools].sort((a, b) => {
-      return a.name.localeCompare(b.name);
-    }),
+const jsonError = (msg: string): { content: TextContent[] } => {
+  return {
+    content: [{ text: JSON.stringify({ error: msg }), type: 'text' as const }],
   };
-  return canonicalize(normalized);
-};
-
-/**
- * Looks up a full tool descriptor on a client by its full name
- * (`module__method`). Checks both static modules and dynamic tools registered
- * via useMcpTool. Returns null if the tool is not on this client.
- */
-const findToolInClient = (
-  client: ClientEntry,
-  toolFullName: string
-): ToolDescriptorShape | null => {
-  for (const mod of client.modules) {
-    const prefix = `${mod.name}${MODULE_SEPARATOR}`;
-    if (toolFullName.startsWith(prefix)) {
-      const methodName = toolFullName.slice(prefix.length);
-      const toolDef = mod.tools.find((t) => {
-        return t.name === methodName;
-      });
-      if (toolDef) {
-        return {
-          description: toolDef.description,
-          inputSchema: toolDef.inputSchema,
-          name: toolFullName,
-        };
-      }
-    }
-  }
-
-  const dynamicEntry = client.dynamicTools.get(toolFullName);
-  if (dynamicEntry) {
-    return {
-      description: dynamicEntry.description,
-      inputSchema: dynamicEntry.inputSchema,
-      name: toolFullName,
-    };
-  }
-
-  return null;
 };
 
 export class McpServerWrapper {
   private hostModules: HostModule[];
   private hostToolMap = new Map<string, HostToolEntry>();
   private mcp: McpServer;
+  private moduleTools = new Map<string, ModuleToolRegistryEntry>();
 
   constructor(
     private readonly bridge: Bridge,
@@ -325,561 +107,270 @@ export class McpServerWrapper {
       { instructions: BASE_INSTRUCTIONS }
     );
 
-    this.registerTools();
+    this.registerHostTools();
+    this.subscribeToBridge();
   }
 
   async start(): Promise<void> {
+    // Give RN clients a short window to connect to the bridge BEFORE we
+    // initialize the MCP transport. Some MCP agents (notably Claude Code) only
+    // populate their tool catalog from the initial `tools/list` response and
+    // ignore `notifications/tools/list_changed` afterwards — so any module
+    // tools registered after the handshake never reach the agent. Waiting for
+    // the first client (with a short cap so a fresh boot without an app still
+    // exposes host tools quickly) lets the typical "app was already running"
+    // case put module tools into the very first tools/list.
+    await this.waitForFirstClient(2000);
     const transport = new StdioServerTransport();
     await this.mcp.connect(transport);
+    // Belt-and-suspenders re-broadcast for clients that connect after the
+    // transport opens — agents that DO honour list_changed will pick them up.
+    this.mcp.sendToolListChanged();
   }
 
-  private registerTools(): void {
-    this.mcp.registerTool(
-      'call',
-      {
-        annotations: {
-          openWorldHint: true,
-          title: 'Call Tool',
-        },
-        description:
-          'Call a tool registered by a React Native app client. Use list_tools first to see available tools. When multiple clients are connected, specify clientId; otherwise it is auto-picked. `args` accepts either a plain object or a JSON string — objects are preferred to avoid escaping quotes.',
-        inputSchema: {
-          args: z
-            .union([z.string(), z.record(z.string(), z.unknown())])
-            .optional()
-            .describe(
-              'Tool arguments as a plain object (e.g. { screen: "AUTH_LOGIN_SCREEN" }) or a JSON string.'
-            ),
-          clientId: z
-            .string()
-            .optional()
-            .describe(
-              'Target client ID (e.g. "ios-1", "android-1"). Optional when exactly one client is connected.'
-            ),
-          tool: z
-            .string()
-            .describe(
-              `Tool name in format "module${MODULE_SEPARATOR}method" (e.g. "navigation${MODULE_SEPARATOR}navigate")`
-            ),
-        },
-      },
-      async ({ args, clientId, tool }) => {
-        const parsed = parseCallArgs(args);
-        if (!parsed.ok) return jsonError(parsed.error);
-        const dispatch = await this.dispatchTool(tool, parsed.args, clientId);
-        if (!dispatch.ok) return jsonError(dispatch.error);
-        return { content: this.formatResult(dispatch.result) };
-      }
-    );
+  private async waitForFirstClient(timeoutMs: number): Promise<void> {
+    if (this.bridge.isAnyClientConnected()) return;
+    return new Promise((resolve) => {
+      let settled = false;
+      const settle = (): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this.bridge.off('clientAdded', onClient);
+        resolve();
+      };
+      const onClient = (): void => {
+        // Tool list is registered synchronously inside the clientAdded
+        // listener earlier in the chain; resolve on the next microtask so
+        // those registrations land before mcp.connect runs.
+        setImmediate(settle);
+      };
+      const timer = setTimeout(settle, timeoutMs);
+      this.bridge.on('clientAdded', onClient);
+    });
+  }
 
-    this.mcp.registerTool(
-      'wait_until',
-      {
-        annotations: {
-          openWorldHint: true,
-          title: 'Wait Until',
-        },
-        description: `Poll a tool until its result satisfies a predicate, or timeout.
-
-Replaces "screenshot in a loop + sleep" with a declarative check. Typical use:
-  • wait for navigation to land on a screen
-  • wait for a spinner / toast to disappear
-  • wait for a fiber_tree.query to return matches (or stop returning them)
-  • wait for network.get_pending.length to hit 0
-
-PREDICATE
-  Leaf form: { op, path?, value? }
-    op: equals | notEquals | contains | notContains | exists | notExists | gt | gte | lt | lte
-    path drills through objects + array indices; arrays also expose .length.
-  Compound forms compose and nest:
-    { all: [predicate, ...] }   — AND
-    { any: [predicate, ...] }   — OR
-    { not: predicate }          — negation
-  Example: { all: [{op:"equals", path:"name", value:"CART"}, {op:"gt", path:"items.length", value:0}] }
-
-RETURNS
-  { ok: true, attempts, elapsedMs, matched? } on success — matched is the path-
-    resolved value for leaf predicates, omitted for compound.
-  { ok: false, reason, attempts, elapsedMs, lastResult, lastError? } on timeout.`,
-        inputSchema: {
-          args: z
-            .union([z.string(), z.record(z.string(), z.unknown())])
-            .optional()
-            .describe('Arguments for the polled tool — object or JSON string.'),
-          clientId: z.string().optional().describe('Target client ID, same semantics as `call`.'),
-          intervalMs: z
-            .number()
-            .optional()
-            .describe('Delay between poll attempts. Default 300, min 50, max 5000.'),
-          predicate: z
-            .looseObject({})
-            .describe(
-              'Leaf { op, path?, value? } or compound { all|any: [...] } / { not: predicate }. See tool description for ops and composition.'
-            ),
-          timeoutMs: z
-            .number()
-            .optional()
-            .describe('Total wait budget. Default 10000, min 500, max 60000.'),
-          tool: z
-            .string()
-            .describe(`Tool name to poll (e.g. "navigation${MODULE_SEPARATOR}get_current_route").`),
-        },
-      },
-      async ({ args, clientId, intervalMs, predicate, timeoutMs, tool }) => {
-        const parsedArgs = parseCallArgs(args);
-        if (!parsedArgs.ok) return jsonError(parsedArgs.error);
-        const pred = predicate as Predicate;
-        const isLeaf = typeof (pred as LeafPredicate).op === 'string';
-        const leafPath = isLeaf ? (pred as LeafPredicate).path : undefined;
-        const timeout = Math.max(500, Math.min(60_000, timeoutMs ?? 10_000));
-        const interval = Math.max(50, Math.min(5_000, intervalMs ?? 300));
-        const started = Date.now();
-        let attempts = 0;
-        let lastResult: unknown;
-        let lastError: string | undefined;
-
-        while (Date.now() - started < timeout) {
-          attempts += 1;
-          const dispatch = await this.dispatchTool(tool, parsedArgs.args, clientId);
-          if (dispatch.ok) {
-            lastResult = dispatch.result;
-            if (evalPredicate(lastResult, pred)) {
-              const payload: Record<string, unknown> = {
-                attempts,
-                elapsedMs: Date.now() - started,
-                ok: true,
-              };
-              if (isLeaf) {
-                payload.matched = resolvePath(lastResult, leafPath);
-              }
-              return {
-                content: [{ text: JSON.stringify(payload, null, 2), type: 'text' as const }],
-              };
-            }
-          } else {
-            lastError = dispatch.error;
-          }
-          const remaining = timeout - (Date.now() - started);
-          if (remaining <= 0) break;
-          await new Promise((r) => {
-            return setTimeout(r, Math.min(interval, remaining));
-          });
-        }
-
-        return {
-          content: [
-            {
-              text: JSON.stringify(
-                {
-                  attempts,
-                  elapsedMs: Date.now() - started,
-                  lastError,
-                  lastResult,
-                  ok: false,
-                  reason: lastError
-                    ? `Last dispatch failed: ${lastError}`
-                    : `Predicate did not hold within ${timeout}ms`,
-                },
-                null,
-                2
-              ),
-              type: 'text' as const,
-            },
-          ],
-        };
-      }
-    );
-
-    this.mcp.registerTool(
-      'assert',
-      {
-        annotations: {
-          openWorldHint: true,
-          title: 'Assert',
-        },
-        description: `Single-shot assertion over a tool's result. Same predicate vocabulary (including { all / any / not }) as wait_until, but one attempt and a standardized diff on failure.
-
-Returns { pass: true, actual? } on success — actual is the path-resolved value for leaf predicates, omitted for compound.
-Returns { pass: false, actual, expected?, op?, path?, message?, result } on predicate failure.
-Returns { pass: false, error, message? } when the tool dispatch itself threw.
-
-Useful after wait_until as a checkpoint — the pair reads "do action → wait → assert" which produces a clean audit trail in session logs.`,
-        inputSchema: {
-          args: z
-            .union([z.string(), z.record(z.string(), z.unknown())])
-            .optional()
-            .describe('Arguments for the asserted tool — object or JSON string.'),
-          clientId: z.string().optional().describe('Target client ID, same semantics as `call`.'),
-          message: z
-            .string()
-            .optional()
-            .describe(
-              'Optional human-readable description of the check; echoed in the failure payload.'
-            ),
-          predicate: z
-            .looseObject({})
-            .describe(
-              'Leaf { op, path?, value? } or compound { all|any: [...] } / { not: predicate }. See wait_until for full semantics.'
-            ),
-          tool: z
-            .string()
-            .describe(`Tool name to call once (e.g. "fiber_tree${MODULE_SEPARATOR}query").`),
-        },
-      },
-      async ({ args, clientId, message, predicate, tool }) => {
-        const parsedArgs = parseCallArgs(args);
-        if (!parsedArgs.ok) return jsonError(parsedArgs.error);
-        const dispatch = await this.dispatchTool(tool, parsedArgs.args, clientId);
-        if (!dispatch.ok) {
-          return {
-            content: [
-              {
-                text: JSON.stringify({ error: dispatch.error, message, pass: false }, null, 2),
-                type: 'text' as const,
-              },
-            ],
-          };
-        }
-        const pred = predicate as Predicate;
-        const isLeaf = typeof (pred as LeafPredicate).op === 'string';
-        const leafPath = isLeaf ? (pred as LeafPredicate).path : undefined;
-        const leafValue = isLeaf ? (pred as LeafPredicate).value : undefined;
-        const leafOp = isLeaf ? (pred as LeafPredicate).op : undefined;
-        const pass = evalPredicate(dispatch.result, pred);
-        const payload: Record<string, unknown> = { pass };
-        if (isLeaf) payload.actual = resolvePath(dispatch.result, leafPath);
-        if (!pass) {
-          if (isLeaf) {
-            payload.expected = leafValue;
-            payload.op = leafOp;
-            if (leafPath) payload.path = leafPath;
-          }
-          if (message) payload.message = message;
-          payload.result = dispatch.result;
-        }
-        return {
-          content: [{ text: JSON.stringify(payload, null, 2), type: 'text' as const }],
-        };
-      }
-    );
-
-    this.mcp.registerTool(
-      'list_tools',
-      {
-        annotations: {
-          readOnlyHint: true,
-          title: 'List Tools',
-        },
-        description:
-          'Browse available tools with compact (schema-free) descriptions. Modules with identical shape across multiple clients are deduplicated into a single entry with a clientIds array. Use describe_tool to fetch the full input schema for a specific tool before calling it. Pass `module` to narrow to one module, `clientId` to narrow to one client, `compact: true` to drop long module-level descriptions.',
-        inputSchema: {
-          clientId: z
-            .string()
-            .optional()
-            .describe('Narrow listing to a single client. Omit for all connected clients.'),
-          compact: z
-            .boolean()
-            .optional()
-            .describe(
-              'Drop module-level descriptions (still keeps per-tool one-liners). Default false.'
-            ),
-          module: z
-            .string()
-            .optional()
-            .describe(
-              'Narrow listing to a single module name (e.g. "fiber_tree", "host"). Omit for all.'
-            ),
-        },
-      },
-      async ({ clientId, compact, module }) => {
-        const allClients = this.bridge.listClients();
-        const clients = clientId
-          ? allClients.filter((c) => {
-              return c.id === clientId;
-            })
-          : allClients;
-
-        // Dedup tool groups across clients by canonical shape
-        const dedupMap = new Map<string, { clientIds: string[]; group: ToolGroup }>();
-        for (const client of clients) {
-          const groups = this.buildToolGroups(client);
-          for (const group of groups) {
-            if (module && group.module !== module) continue;
-            const key = canonicalizeGroup(group);
-            const existing = dedupMap.get(key);
-            if (existing) {
-              existing.clientIds.push(client.id);
-            } else {
-              dedupMap.set(key, { clientIds: [client.id], group });
-            }
-          }
-        }
-
-        const modulesPayload = [...dedupMap.values()].map(({ clientIds, group }) => {
-          return {
-            clientIds,
-            description: compact ? undefined : group.description,
-            name: group.module,
-            tools: group.tools.map((t) => {
-              return {
-                description: t.description,
-                name: t.name,
-              };
-            }),
-          };
-        });
-
-        const hostToolsPayload = this.hostModules
-          .filter((mod) => {
-            return !module || mod.name === module;
-          })
-          .map((mod) => {
-            return {
-              description: compact ? undefined : mod.description,
-              name: mod.name,
-              tools: Object.entries(mod.tools).map(([toolName, tool]) => {
-                return {
-                  description: tool.description,
-                  name: `${mod.name}${MODULE_SEPARATOR}${toolName}`,
-                };
-              }),
-            };
-          });
-
-        const clientsPayload = clients.map((client) => {
-          return {
-            appName: client.appName,
-            appVersion: client.appVersion,
-            bundleId: client.bundleId,
-            devServer: client.devServer,
-            deviceId: client.deviceId,
-            id: client.id,
-            label: client.label,
-            platform: client.platform,
-          };
-        });
-
-        const payload: {
-          clientCount: number;
-          clients: typeof clientsPayload;
-          hostTools: typeof hostToolsPayload;
-          modules: typeof modulesPayload;
-          clientError?: string;
-        } = {
-          clientCount: clients.length,
-          clients: clientsPayload,
-          hostTools: hostToolsPayload,
-          modules: modulesPayload,
-        };
-
-        if (clients.length === 0) {
-          payload.clientError = 'No React Native clients connected';
-        }
-
-        return {
-          content: [{ text: JSON.stringify(payload, null, 2), type: 'text' as const }],
-        };
-      }
-    );
-
-    this.mcp.registerTool(
-      'connection_status',
-      {
-        annotations: {
-          readOnlyHint: true,
-          title: 'Connection Status',
-        },
-        description:
-          'List connected React Native clients with their IDs, platforms, labels, and registered module names.',
-      },
-      async () => {
-        const clients = this.bridge.listClients();
-        const payload = {
-          clientCount: clients.length,
-          clients: clients.map((c) => {
-            return {
-              appName: c.appName,
-              appVersion: c.appVersion,
-              bundleId: c.bundleId,
-              connectedAt: new Date(c.connectedAt).toISOString(),
-              devServer: c.devServer,
-              deviceId: c.deviceId,
-              id: c.id,
-              label: c.label,
-              modules: c.modules.map((m) => {
-                return m.name;
-              }),
-              platform: c.platform,
-            };
-          }),
-          hostModules: this.hostModules.map((m) => {
-            return m.name;
-          }),
-        };
-        return {
-          content: [{ text: JSON.stringify(payload, null, 2), type: 'text' as const }],
-        };
-      }
-    );
-
-    this.mcp.registerTool(
-      'describe_tool',
-      {
-        annotations: {
-          readOnlyHint: true,
-          title: 'Describe Tool',
-        },
-        description:
-          'Fetch the full description and input schema for a single tool. Use this after list_tools to learn how to construct arguments for a tool before calling it. For host tools, clientId is ignored. For in-app tools, omit clientId to auto-pick the shared descriptor; specify it only when multiple clients have the same tool with different schemas.',
-        inputSchema: {
-          clientId: z
-            .string()
-            .optional()
-            .describe(
-              'Target client ID for in-app tools. Required only when multiple clients have the same tool with different schemas. Ignored for host tools.'
-            ),
-          tool: z
-            .string()
-            .describe(
-              `Full tool name in the format "module${MODULE_SEPARATOR}method" (e.g. "navigation${MODULE_SEPARATOR}navigate", "host${MODULE_SEPARATOR}screenshot").`
-            ),
-        },
-      },
-      async ({ clientId, tool }) => {
-        // 1. Host tool path — resolved via hostToolMap, clientId is ignored
-        const hostEntry = this.hostToolMap.get(tool);
-        if (hostEntry) {
-          const mod = this.hostModules.find((m) => {
-            return m.name === hostEntry.moduleName;
-          });
-          const hostTool = mod?.tools[hostEntry.toolName];
-          if (!hostTool) {
-            return jsonError(
-              `Host tool '${tool}' metadata inconsistent — entry in hostToolMap but missing from hostModules.`
-            );
-          }
-          return {
-            content: [
-              {
-                text: JSON.stringify(
-                  {
-                    description: hostTool.description,
-                    inputSchema: hostTool.inputSchema,
-                    name: tool,
-                    scope: 'host',
-                  },
-                  null,
-                  2
-                ),
-                type: 'text' as const,
-              },
-            ],
-          };
-        }
-
-        // 2. Explicit clientId — look up the specific client
-        if (clientId) {
-          const client = this.bridge.getClient(clientId);
-          if (!client) {
-            const available =
-              this.bridge
-                .listClients()
-                .map((c) => {
-                  return c.id;
-                })
-                .join(', ') || '(none)';
-            return jsonError(`Client '${clientId}' not connected. Available: ${available}`);
-          }
-          const found = findToolInClient(client, tool);
-          if (!found) {
-            return jsonError(`Tool '${tool}' not found on client '${clientId}'.`);
-          }
-          return {
-            content: [
-              {
-                text: JSON.stringify(
-                  {
-                    clientIds: [clientId],
-                    description: found.description,
-                    inputSchema: found.inputSchema,
-                    name: tool,
-                    scope: 'client',
-                  },
-                  null,
-                  2
-                ),
-                type: 'text' as const,
-              },
-            ],
-          };
-        }
-
-        // 3. Auto-pick across all connected clients
-        const clients = this.bridge.listClients();
-        const matches: Array<{ clientId: string; descriptor: ToolDescriptorShape }> = [];
-        for (const c of clients) {
-          const found = findToolInClient(c, tool);
-          if (found) {
-            matches.push({ clientId: c.id, descriptor: found });
-          }
-        }
-        if (matches.length === 0) {
-          return jsonError(
-            `Tool '${tool}' not found on any client. Use list_tools to see available tools.`
-          );
-        }
-
-        // Group by canonical descriptor shape — same shape across clients is not ambiguous
-        const byShape = new Map<string, { clientIds: string[]; descriptor: ToolDescriptorShape }>();
-        for (const match of matches) {
-          const key = canonicalize(match.descriptor);
-          const existing = byShape.get(key);
-          if (existing) {
-            existing.clientIds.push(match.clientId);
-          } else {
-            byShape.set(key, { clientIds: [match.clientId], descriptor: match.descriptor });
-          }
-        }
-
-        if (byShape.size === 1) {
-          const [first] = byShape.values();
-          const { clientIds, descriptor } = first!;
-          return {
-            content: [
-              {
-                text: JSON.stringify(
-                  {
-                    clientIds,
-                    description: descriptor.description,
-                    inputSchema: descriptor.inputSchema,
-                    name: tool,
-                    scope: 'client',
-                  },
-                  null,
-                  2
-                ),
-                type: 'text' as const,
-              },
-            ],
-          };
-        }
-
-        const candidates = [...byShape.values()]
-          .map(({ clientIds }) => {
-            return clientIds.join('+');
-          })
-          .join('; ');
-        return jsonError(
-          `Tool '${tool}' exists on multiple clients with different schemas: ${candidates}. Specify clientId.`
+  /**
+   * Host tools are static for the server's lifetime — register them once at
+   * startup. No refcount: they don't depend on any RN client being connected.
+   * `clientId` is still injected (optional) because some host handlers use it
+   * as a device-resolution hint (`host__screenshot`, `host__launch_app`).
+   */
+  private registerHostTools(): void {
+    for (const mod of this.hostModules) {
+      for (const [toolName, tool] of Object.entries(mod.tools)) {
+        const fullName = `${mod.name}${MODULE_SEPARATOR}${toolName}`;
+        this.mcp.registerTool(
+          fullName,
+          {
+            description: tool.description,
+            inputSchema: convertInputSchema(tool.inputSchema),
+          },
+          this.makeToolHandler(fullName)
         );
       }
+    }
+  }
+
+  private subscribeToBridge(): void {
+    this.bridge.on('clientAdded', (client) => {
+      this.acquireClientTools(client);
+      this.flushToolListChanged();
+    });
+
+    this.bridge.on('clientRemoved', (_clientId, modules, dynamics) => {
+      this.releaseClientTools(modules, dynamics);
+      this.flushToolListChanged();
+    });
+
+    this.bridge.on('clientReregistered', (client, prevModules) => {
+      // Diff old vs new (moduleName, toolName) pairs.
+      const before = new Set<string>();
+      for (const mod of prevModules) {
+        for (const t of mod.tools) {
+          before.add(`${mod.name}${MODULE_SEPARATOR}${t.name}`);
+        }
+      }
+      const after = new Set<string>();
+      const afterDescriptors = new Map<string, ModuleToolDescriptor>();
+      for (const mod of client.modules) {
+        for (const t of mod.tools) {
+          const fullName = `${mod.name}${MODULE_SEPARATOR}${t.name}`;
+          after.add(fullName);
+          afterDescriptors.set(fullName, {
+            description: t.description,
+            inputSchema: t.inputSchema,
+          });
+        }
+      }
+      for (const fullName of before) {
+        if (!after.has(fullName)) this.releaseTool(fullName);
+      }
+      for (const fullName of after) {
+        if (!before.has(fullName)) {
+          const descriptor = afterDescriptors.get(fullName);
+          if (descriptor) this.acquireTool(fullName, descriptor);
+        }
+      }
+      this.flushToolListChanged();
+    });
+
+    this.bridge.on('dynamicToolAdded', (_client, fullName, entry) => {
+      this.acquireTool(fullName, {
+        description: entry.description,
+        inputSchema: entry.inputSchema,
+      });
+      this.flushToolListChanged();
+    });
+
+    this.bridge.on('dynamicToolRemoved', (_client, fullName) => {
+      this.releaseTool(fullName);
+      this.flushToolListChanged();
+    });
+
+    this.bridge.on('bridgeStopping', () => {
+      // Drain — release every still-registered module tool. SDK auto-emits
+      // notifications/tools/list_changed for each, but the connection is on
+      // its way down anyway so the listChanged storm doesn't matter.
+      for (const fullName of [...this.moduleTools.keys()]) {
+        const entry = this.moduleTools.get(fullName);
+        if (entry) {
+          try {
+            entry.registered.remove();
+          } catch {
+            // SDK may throw if already removed — safe to ignore at shutdown.
+          }
+          this.moduleTools.delete(fullName);
+        }
+      }
+    });
+  }
+
+  /**
+   * Coalesce tool-list-changed notifications across a batch of acquire/release
+   * calls within the same tick. SDK already auto-emits per registerTool/remove,
+   * but in practice the agent (Claude Code) doesn't always pick those up — an
+   * explicit broadcast after the batch is the reliable way to make it re-fetch
+   * `tools/list`.
+   */
+  private listChangedTimer: ReturnType<typeof setImmediate> | null = null;
+  private flushToolListChanged(): void {
+    if (this.listChangedTimer) return;
+    this.listChangedTimer = setImmediate(() => {
+      this.listChangedTimer = null;
+      try {
+        this.mcp.sendToolListChanged();
+      } catch {
+        // Pre-handshake or transport gone — safe to ignore; the next event
+        // will re-broadcast, and `start()` re-broadcasts after connect.
+      }
+    });
+  }
+
+  private acquireClientTools(client: ClientEntry): void {
+    for (const mod of client.modules) {
+      for (const t of mod.tools) {
+        this.acquireTool(`${mod.name}${MODULE_SEPARATOR}${t.name}`, {
+          description: t.description,
+          inputSchema: t.inputSchema,
+        });
+      }
+    }
+    for (const [fullName, entry] of client.dynamicTools) {
+      this.acquireTool(fullName, {
+        description: entry.description,
+        inputSchema: entry.inputSchema,
+      });
+    }
+  }
+
+  private releaseClientTools(
+    modules: ModuleDescriptor[],
+    dynamics: Map<string, DynamicToolEntry>
+  ): void {
+    for (const mod of modules) {
+      for (const t of mod.tools) {
+        this.releaseTool(`${mod.name}${MODULE_SEPARATOR}${t.name}`);
+      }
+    }
+    for (const fullName of dynamics.keys()) {
+      this.releaseTool(fullName);
+    }
+  }
+
+  /**
+   * Increment refcount or register fresh. Two clients shipping the same tool
+   * with matching schema share one MCP-level tool — handler dispatches to the
+   * right client via the optional `clientId` arg. A schema mismatch (e.g.
+   * rolling upgrade with version skew) skips the new registration with a
+   * warning instead of namespacing.
+   */
+  private acquireTool(fullName: string, descriptor: ModuleToolDescriptor): void {
+    if (this.hostToolMap.has(fullName)) {
+      console.warn(
+        `[mcp-kit] Module tool "${fullName}" collides with a host tool of the same name — module registration skipped.`
+      );
+      return;
+    }
+    const schemaHash = hashInputSchema(descriptor.description, descriptor.inputSchema);
+    const existing = this.moduleTools.get(fullName);
+    if (existing) {
+      if (existing.schemaHash === schemaHash) {
+        existing.refCount += 1;
+        return;
+      }
+      console.warn(
+        `[mcp-kit] Tool "${fullName}" schema differs across clients — keeping the first registration. Existing: ${existing.schemaHash}; new: ${schemaHash}.`
+      );
+      return;
+    }
+    const registered = this.mcp.registerTool(
+      fullName,
+      {
+        description: descriptor.description,
+        inputSchema: convertInputSchema(descriptor.inputSchema),
+      },
+      this.makeToolHandler(fullName)
     );
+    this.moduleTools.set(fullName, { refCount: 1, registered, schemaHash });
+  }
+
+  private releaseTool(fullName: string): void {
+    const entry = this.moduleTools.get(fullName);
+    if (!entry) return;
+    entry.refCount -= 1;
+    if (entry.refCount <= 0) {
+      try {
+        entry.registered.remove();
+      } catch {
+        // SDK may throw if already removed — safe to ignore.
+      }
+      this.moduleTools.delete(fullName);
+    }
+  }
+
+  /**
+   * Builds the per-tool handler used by both host and client-module
+   * registrations. Every tool exposes an optional `clientId` arg; the rest of
+   * `rawArgs` flows straight into `dispatchTool`, which already handles
+   * auto-pick, host vs client routing, dynamic-prefix fallback, and error
+   * formatting.
+   */
+  private makeToolHandler(fullName: string) {
+    return async (rawArgs: Record<string, unknown> | undefined) => {
+      const args = { ...(rawArgs ?? {}) };
+      const clientId = typeof args.clientId === 'string' ? args.clientId : undefined;
+      delete args.clientId;
+      const dispatch = await this.dispatchTool(fullName, args, clientId);
+      if (!dispatch.ok) return jsonError(dispatch.error);
+      return { content: this.formatResult(dispatch.result) };
+    };
   }
 
   /**
    * Execute a single tool by full name, returning the raw handler result.
-   * Used by both the `call` tool and meta-tools like `wait_until` that need to
-   * invoke other tools without going through the full MCP content wrapping.
+   * Used by every registered MCP tool's handler — host tools, client module
+   * tools, and `useMcpTool`-driven dynamic tools all funnel through here.
    */
   private async dispatchTool(
     tool: string,
@@ -977,47 +468,6 @@ Useful after wait_until as a checkpoint — the pair reads "do action → wait �
     } catch (err) {
       return { error: (err as Error).message, ok: false };
     }
-  }
-
-  private buildToolGroups(client: ClientEntry): ToolGroup[] {
-    const groups: ToolGroup[] = client.modules.map((mod) => {
-      return {
-        description: mod.description,
-        module: mod.name,
-        tools: mod.tools.map((t) => {
-          return {
-            description: t.description,
-            inputSchema: t.inputSchema,
-            name: `${mod.name}${MODULE_SEPARATOR}${t.name}`,
-          };
-        }),
-      };
-    });
-
-    if (client.dynamicTools.size > 0) {
-      const dynamicByModule = new Map<
-        string,
-        Array<{ description: string; name: string; inputSchema?: Record<string, unknown> }>
-      >();
-      for (const [fullName, info] of client.dynamicTools) {
-        const existing = dynamicByModule.get(info.module) ?? [];
-        existing.push({
-          description: info.description,
-          inputSchema: info.inputSchema,
-          name: fullName,
-        });
-        dynamicByModule.set(info.module, existing);
-      }
-      for (const [module, dynTools] of dynamicByModule) {
-        groups.push({
-          description: 'Dynamically registered tools from useMcpTool hooks',
-          module: `${module} (dynamic)`,
-          tools: dynTools,
-        });
-      }
-    }
-
-    return groups;
   }
 
   private formatResult(result: unknown) {

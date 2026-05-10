@@ -23,6 +23,39 @@ export async function createServer(config?: ServerConfig): Promise<void> {
         : '\n')
   );
 
+  // Graceful shutdown — without these the WebSocketServer keeps the event loop
+  // alive after the MCP client disconnects, leaving an orphan that holds the
+  // port and breaks the next session with EADDRINUSE.
+  let shuttingDown = false;
+  const shutdown = async (reason: string): Promise<void> => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    process.stderr.write(`react-native-mcp-kit shutting down: ${reason}\n`);
+    try {
+      await bridge.stop();
+    } catch {
+      // best effort — exit anyway
+    }
+    process.exit(0);
+  };
+
+  // Parent (Claude Code / Cursor / etc.) closing stdio = our cue to exit.
+  process.stdin.on('end', () => {
+    void shutdown('stdin ended');
+  });
+  process.stdin.on('close', () => {
+    void shutdown('stdin closed');
+  });
+  process.on('SIGINT', () => {
+    void shutdown('SIGINT');
+  });
+  process.on('SIGTERM', () => {
+    void shutdown('SIGTERM');
+  });
+  process.on('SIGHUP', () => {
+    void shutdown('SIGHUP');
+  });
+
   await mcpServer.start();
 }
 

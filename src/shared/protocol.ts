@@ -5,14 +5,19 @@ export const MODULE_SEPARATOR = '__';
 export const DYNAMIC_PREFIX = `${MODULE_SEPARATOR}dynamic${MODULE_SEPARATOR}`;
 
 /**
- * Wire-protocol version. Bumped on any breaking change to the messages below.
- * Independent of the npm package semver — a major package release does not
- * imply a protocol bump, and a protocol bump does not imply a new major.
+ * Wire-protocol version. Bumped on any breaking change to the messages below
+ * OR on a major server-surface revision where mismatched client/server pairs
+ * would silently misbehave.
  *
  * Introduced in package v2.0.0. Older clients/servers don't send or expect a
  * version field; the handshake treats their absence as an incompatibility.
+ *
+ * v2: server external surface rewritten — meta-tools removed, every tool
+ * registered top-level. Wire shapes below are unchanged from v1, but the bump
+ * forces older clients onto a clear "update your library" error instead of
+ * silent behaviour drift.
  */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 /** WebSocket close code used when the server refuses the client over protocol mismatch. */
 export const WS_CLOSE_PROTOCOL_MISMATCH = 4010;

@@ -144,14 +144,16 @@ Start Metro + your app. The `McpProvider` connects to `ws://localhost:8347` on m
 From your agent, a typical first session looks like:
 
 ```
-connection_status
+host__connection_status
  → { clientCount: 1, clients: [{ id: "ios-1", label: "iPhone 17 Pro", ... }] }
 
-list_tools { compact: true }
- → catalog of every module registered by the app, grouped by client
+fiber_tree__query { steps: [{ name: "ProductCard" }], select: ["mcpId", "name", "bounds"] }
+ → { matches: [...], total: 3 }
 ```
 
-After that, every tool is callable by name via `call`. If the server isn't running yet, the provider just retries silently — no crash, no error toast.
+Every module tool, dynamic tool (`useMcpTool`), and host tool is registered as a first-class top-level MCP tool with its full Zod schema visible in the agent's catalog — no proxy layer, no `list_tools` / `describe_tool` / `call` round-trip. With more than one client connected, every tool accepts an optional `clientId` arg (`"ios-1"`, `"android-1"`); with one client it's auto-picked.
+
+If the server isn't running yet, the provider just retries silently — no crash, no error toast.
 
 ## `McpProvider` reference
 
@@ -169,13 +171,14 @@ interface McpProviderProps {
 
 Wrap your whole app in it — every optional prop opts a module in when supplied.
 
-## MCP server tools
+## How the agent sees tools
 
-The Node server exposes a small set of entry-point tools agents use directly — you don't register or configure them:
+Every tool — module tools shipped by the app (`fiber_tree__query`, `network__get_pending`, `navigation__navigate`), dynamic tools registered via `useMcpTool`, and host tools (`host__screenshot`, `host__tap`, `metro__reload`, `host__connection_status`) — is registered as a first-class top-level MCP tool. The agent invokes them directly by name with their full schema visible in its catalog.
 
-- **Discovery & dispatch** — `connection_status`, `list_tools`, `describe_tool`, `call`.
-- **Test automation** — `wait_until` (poll any tool until a predicate holds, replacing screenshot-in-a-loop + sleep) and `assert` (single-shot checkpoint with a standardized diff on failure).
-- **UI-level waits** — `fiber_tree__query` has a built-in `waitFor: { until: "appear" | "disappear", stable? }` option; see the [fiber_tree section](#fiber_tree).
+- **Multi-client routing** — every tool accepts an optional `clientId` arg. With one client connected it's auto-picked; with several, omitting it returns an error listing the available IDs. Use `host__connection_status` to discover them.
+- **Dedup across clients** — when multiple clients connect with the same library version, identical tools share one MCP-level entry (refcount). Disconnect a client and only its unique tools disappear.
+- **Live catalog** — connecting / disconnecting a client and mounting / unmounting `useMcpTool` calls trigger `notifications/tools/list_changed`. Most MCP clients refresh on this; if the catalog feels stale, restart the session.
+- **UI-level waits** — `fiber_tree__query` has a built-in `waitFor: { until: "appear" | "disappear", stable? }` option; see the [fiber_tree section](#fiber_tree). Generic per-tool polling is not a server primitive — modules expose `waitFor` themselves where it makes sense.
 
 ## Host tools (device-level control)
 
@@ -251,7 +254,7 @@ Reading state is unified through `fiber_tree__query` with `select: ["hooks"]` �
 | [query](#query)           | `reactQueryModule(queryClient)` | `QueryClient`                             |
 | [storage](#storage)       | `storageModule(...storages)`    | one or more `NamedStorage`                |
 
-The full tool list for every module is always available via `list_tools` at runtime — the sections below describe what each module gives you, not each tool.
+The full tool list for every module shows up directly in the agent's MCP catalog — the sections below describe what each module gives you, not each tool.
 
 ### alert
 
@@ -365,7 +368,7 @@ const myModule = (): McpModule => ({
 useMcpModule(() => myModule(), []);
 ```
 
-Agents see the module + its tools in `list_tools` and call them via `call(tool: "myModule__greet")`.
+Agents see `myModule__greet` as a top-level tool in their catalog and call it directly.
 
 ## Dev vs production
 
@@ -404,7 +407,7 @@ module.exports = {
 
 ## API reference
 
-The recommended entry point is `<McpProvider />` — it owns the client singleton and you rarely need to touch `McpClient` directly. For advanced cases the class exposes `McpClient.initialize` / `getInstance` / `registerModule(s)` / `registerTool` / `setState` / `removeState` / `dispose` / `enableDebug` (all idempotent, `initialize` returns the existing instance on repeat calls).
+The recommended entry point is `<McpProvider />` — it owns the client singleton and you rarely need to touch `McpClient` directly. For advanced cases the class exposes `McpClient.initialize` / `getInstance` / `registerModule(s)` / `registerTool` / `dispose` / `enableDebug` (all idempotent, `initialize` returns the existing instance on repeat calls).
 
 Module and tool types:
 

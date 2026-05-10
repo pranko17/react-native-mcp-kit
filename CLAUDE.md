@@ -26,18 +26,22 @@ AI Agent  --stdio/MCP-->  MCP Server (Node.js)  --WebSocket-->  RN App (device)
 
 ### MCP server tools
 
-The server registers 8 static tools via `this.mcp.registerTool` in `src/server/mcpServer.ts`:
+There are **no fixed meta-tools** (no `call`, `list_tools`, `describe_tool`, `wait_until`, `assert`, `connection_status` — all removed). Every tool — host tools, RN module tools, `useMcpTool`-driven dynamic tools — is registered as a top-level MCP tool with its real Zod schema. The agent invokes them by name; the schema is visible inline in the MCP catalog (`tools/list`).
 
-- **`call`** — Universal dispatcher. Format: `call(tool: "module__method", args: {...})`. `args` accepts either a plain object or a JSON string — objects are preferred. Dynamic tools from `useMcpTool` hooks use the `_dynamic_` prefix: `call(tool: "_dynamic_logout")`. When multiple clients are connected, `clientId` must be specified.
-- **`wait_until`** — Polls any other tool until a predicate over its result holds or timeout. Leaf predicate `{ op, path?, value? }` supports `equals / notEquals / contains / notContains / exists / notExists / gt / gte / lt / lte`. Compound forms `{ all: [...] } / { any: [...] } / { not: predicate }` nest arbitrarily. Returns `{ ok: true, attempts, elapsedMs, matched? }` on success (matched = resolved path value for leaf predicates only) or `{ ok: false, reason, attempts, elapsedMs, lastResult, lastError? }` on timeout.
-- **`assert`** — Single-shot checkpoint with the same predicate vocabulary. Returns `{ pass: true, actual? }` / `{ pass: false, actual, expected?, op?, path?, message?, result }` / `{ pass: false, error, message? }` on dispatch throw.
-- **`list_tools`** — Lists all tools across all clients, grouped by module, with compact (schema-less) output. Clients with structurally identical modules are deduplicated into one entry with a `clientIds` array. Optional filters: `module?` (narrow to one module), `clientId?` (narrow to one client), `compact?: boolean` (drop module-level descriptions).
-- **`describe_tool`** — Returns the full input schema for a specific tool. For in-app tools, `clientId` only needed when more than one client has the same tool with different schemas.
-- **`connection_status`** — Lists connected clients with platform, label, deviceId, bundleId, and the module names they've registered.
+Implementation in `src/server/mcpServer.ts`:
 
-Shared server-side helpers live at the top of the file: `parseCallArgs` (object-or-string args), `resolvePath` (dot-path + array-index + `.length`), `evalPredicate` (recursive). `dispatchTool` is the private method that resolves `module__method` against the host map or the client bridge — used by `call`, `wait_until`, `assert`, and exposed to host handlers via `HostContext.dispatch` for tools like `host__tap_fiber` that need to chain.
+- `registerHostTools()` runs once in the constructor — iterates `this.hostModules` and calls `mcp.registerTool` for every host tool with full name `${mod.name}__${toolName}` (e.g. `host__screenshot`, `host__connection_status`, `metro__reload`). No refcount: host tools are static for the server's lifetime.
+- `subscribeToBridge()` wires `Bridge` lifecycle events (`clientAdded`, `clientRemoved`, `clientReregistered`, `dynamicToolAdded`, `dynamicToolRemoved`, `bridgeStopping`) to `acquireTool` / `releaseTool` helpers. RN module tools and dynamic tools come and go as clients connect/disconnect or `useMcpTool` mounts/unmounts; the SDK auto-emits `notifications/tools/list_changed` on each `.remove()` / `.update()`.
+- `moduleTools: Map<fullName, { registered, refCount, schemaHash }>` — refcount registry. Two clients shipping the same tool with matching schema share one MCP-level entry; mismatched schemas (rolling-upgrade only) log a warning and skip the second registration. Hash is `hashInputSchema(description, inputSchema)` from `inputSchemaToZod.ts` — strips `examples` first since they're documentation, not contract.
+- `makeToolHandler(fullName)` builds the per-tool callback. Pulls optional `clientId` from raw args, funnels the rest into `dispatchTool(fullName, args, clientId)` — same dispatcher as before, kept private.
+- `dispatchTool` resolves `module__method` against `hostToolMap` first, then the client bridge (auto-pick when no `clientId`, dynamic-prefix fallback). Exposed to host handlers via `HostContext.dispatch` so tools like `host__tap_fiber` can chain `fiber_tree__query` → `host__tap`.
 
-Server instructions + tool annotations (`readOnlyHint`, `openWorldHint`, `title`) live alongside each `registerTool` call.
+Schema conversion lives in `src/server/inputSchemaToZod.ts`:
+
+- `convertInputSchema(schema, { injectClientId })` — turns the wire-format flat dict (`{ key: { type, description?, examples? } }`) into a Zod raw shape suitable for `mcp.registerTool`. All fields optional (RN handlers self-validate). `examples` get folded into `description` because Zod has no first-class examples.
+- `hashInputSchema(description, schema)` — stable canonical hash for refcount dedup. Reuses `canonicalize` from `src/server/canonicalize.ts`.
+
+`BASE_INSTRUCTIONS` walks the agent through direct invocation, `clientId` semantics, the catalog refresh model, UI-driving tool selection, polling via per-tool `waitFor`, and the host-gesture backends — no meta-tool guidance.
 
 ### Host module (OS-level control)
 
@@ -48,6 +52,7 @@ Exposed when `hostModule` is passed to `createServer` (the default in `cli.ts`).
 - **Capture** (`host/tools/capture.ts`): `host__screenshot` — WebP, auto-resized (default width 280), diff-cached via SHA-256 per device (returns `unchanged: true` when identical to last capture). Accepts `region: { x, y, width, height }` in original device pixels — crops BEFORE resize; pair with fiber bounds to snapshot one element for ~20-60 vision tokens. Response is `[image, metadataText]` where metadata JSON includes `{ width, height, originalWidth, originalHeight, scale, bytes, region? }`.
 - **Lifecycle** (`host/tools/lifecycle.ts`): `host__launch_app`, `host__terminate_app`, `host__restart_app`. `appId` optional when a connected client registered its `bundleId`.
 - **Devices** (`host/tools/devices.ts`): `host__list_devices` — annotates each device with `connected: true` / `clientId` when it matches a live client.
+- **Connection status** (`host/tools/connectionStatus.ts`): `host__connection_status` — lists connected RN clients with their IDs, platforms, labels, app metadata, and registered module names. Used to disambiguate `clientId` when more than one app is connected.
 
 ### Metro module (`src/server/metro/`)
 
@@ -98,8 +103,10 @@ src/
     models/types.ts         — McpModule, ToolHandler
     utils/                  — McpConnection (WS client), ModuleRunner
   server/
-    mcpServer.ts            — 6 static MCP tools (call / wait_until / assert / list_tools / describe_tool / connection_status), dispatchTool helper used by meta-tools and host tools, image-content support
-    bridge.ts               — WS server, request/response dispatch, client identity
+    mcpServer.ts            — Direct top-level registration of every tool (host + module + dynamic) via Bridge lifecycle events; refcount dedup across clients; dispatchTool helper for handler routing; image-content support
+    bridge.ts               — WS server, request/response dispatch, client identity, typed EventEmitter for client + dynamic-tool lifecycle
+    canonicalize.ts         — Stable JSON.stringify with sorted keys (used by hashInputSchema)
+    inputSchemaToZod.ts     — Flat-shape inputSchema → Zod raw shape; hashInputSchema for refcount dedup (strips `examples`)
     host/                   — Host module (OS-level tools that shell out)
       hostModule.ts
       iosInput.ts           — Wraps dist/bin/ios-hid
@@ -111,6 +118,7 @@ src/
         lifecycle.ts        — launch / terminate / restart
         devices.ts          — list_devices
         tapFiber.ts         — fiber_tree__query + host__tap one-shot (uses HostContext.dispatch)
+        connectionStatus.ts — connection_status (lists connected RN clients)
     metro/                  — Metro dev-server control plane (HTTP + WS)
       metroModule.ts
       resolveMetroUrl.ts    — per-client devServer.url (from handshake) → HTTP base
@@ -182,7 +190,7 @@ Three entry points for module registration, equivalent semantically:
 
 ### Dynamic tools (`useMcpTool`)
 
-Tools registered from inside components via `useMcpTool` are reachable through `call` with the `_dynamic_` prefix:
+Tools registered from inside components via `useMcpTool` ship a `tool_register` WS message with `module: "__dynamic"`. The bridge inserts them into `client.dynamicTools` and emits `dynamicToolAdded`; the wrapper acquires a top-level MCP tool with full name `__dynamic____<toolName>` (the leading `__dynamic__` prefix from `DYNAMIC_PREFIX`, then the WS-formed full name keeps the `__` separator). Unmount fires `tool_unregister` → `dynamicToolRemoved` → `releaseTool` → SDK auto-emits `notifications/tools/list_changed`.
 
 ```ts
 useMcpTool('logout', () => ({
@@ -190,19 +198,21 @@ useMcpTool('logout', () => ({
   handler: () => { logout(); return { success: true }; },
 }), [logout]);
 
-// Agent: call(tool: "_dynamic_logout")
+// Agent invokes: __dynamic____logout (top-level tool, not via `call`)
 ```
 
-They appear in `list_tools` under a `(dynamic)` section.
+The catalog refresh on mount/unmount is automatic; some MCP clients cache tool lists across `list_changed` notifications, so newly registered tools may not appear until a session restart.
 
 ### Data flow
 
 1. `<McpProvider>` mounts → `McpClient.initialize()` opens a WebSocket to the bridge (port 8347 by default).
 2. Provider effects run → module registrations are batched into `RegistrationMessage` with module descriptors + their tool schemas.
-3. Agent calls `call` → server sends `ToolRequest` over WS → RN executes the handler → returns `ToolResponse`.
-4. `useMcpTool` sends `tool_register` / `tool_unregister` → server tracks dynamic tools → agent calls via `_dynamic_` prefix.
-5. Host-module tools bypass the WS entirely — they run in the Node process, shelling out to `xcrun simctl` / `adb` / `dist/bin/ios-hid`.
-6. Image results (`host__screenshot`) are detected by `formatResult` and returned as MCP image content blocks.
+3. `Bridge` receives `RegistrationMessage`, inserts a `ClientEntry`, emits `clientAdded` → `McpServerWrapper.acquireClientTools` registers each tool top-level via `mcp.registerTool` (or increments refcount when a matching tool already exists from another client). SDK auto-emits `notifications/tools/list_changed`.
+4. Agent invokes a tool by full name (e.g. `fiber_tree__query`) → handler runs `dispatchTool(fullName, args, clientId)` → `bridge.call` sends `ToolRequest` over WS → RN executes the handler → returns `ToolResponse`.
+5. `useMcpTool` sends `tool_register` / `tool_unregister` → bridge emits `dynamicToolAdded` / `dynamicToolRemoved` → wrapper acquires/releases a top-level tool under the dynamic full name.
+6. Host-module tools bypass the WS entirely — they run in the Node process, shelling out to `xcrun simctl` / `adb` / `dist/bin/ios-hid`.
+7. Image results (`host__screenshot`) are detected by `formatResult` and returned as MCP image content blocks.
+8. On client disconnect, bridge emits `clientRemoved` with snapshots of modules + dynamic tools, wrapper decrements refcounts, calls `.remove()` on the SDK handle when refcount hits 0.
 
 ### Babel plugins
 
@@ -231,7 +241,7 @@ interface ToolHandler {
 }
 ```
 
-Module `description` surfaces in `list_tools` output. Use markdown with examples for complex modules (see `fiberTree.ts` — its description walks callers through finding, interacting, coordinates, and selects).
+Module `description` surfaces in the agent's MCP catalog under each tool's metadata. Use markdown with examples for complex modules (see `fiberTree.ts` — its description walks callers through finding, interacting, coordinates, and selects).
 
 ### Built-in modules (11)
 
