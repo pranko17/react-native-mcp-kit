@@ -171,22 +171,49 @@ export const navigationModule = (navigation: NavigationRef): McpModule => {
     description: `React Navigation control + 100-entry transition history.
 
 SCREEN ENRICHMENT
-  get_current_route / get_current_route_state include a \`screen\` field
-  pointing at the React component rendering the focused route:
+  get_current_route includes a \`screen\` field pointing at the React
+  component rendering the focused route:
     screen: { componentName, mcpId?, filePath?, line? }
   componentName is the developer's component (RN Navigation wrappers are
   skipped). mcpId / filePath / line come from the first data-mcp-id inside
   the screen — the rendering site, ready for fiber_tree follow-ups.
 
-PROJECTION
-  get_state / get_history / get_current_route / get_current_route_state
-  accept path / depth / maxBytes — defaults: state ${STATE_DEFAULT_DEPTH}, history ${HISTORY_DEFAULT_DEPTH}, routes ${ROUTE_DEFAULT_DEPTH}.`,
+READS
+  get_current_route({ withState? }) — focused route + screen info; pass
+  withState:true to also include nested navigator state.
+  get_state — full navigation state tree.
+  get_history — last 100 transitions.
+  All reads accept path / depth / maxBytes — defaults: state ${STATE_DEFAULT_DEPTH},
+  history ${HISTORY_DEFAULT_DEPTH}, routes ${ROUTE_DEFAULT_DEPTH}.
+
+ACTIONS
+  navigate({ screen, params?, mode? }) — mode: "reuse" (default) | "push"
+  | "replace". reuse jumps to an existing screen, push always adds a new
+  stack entry, replace swaps the current screen.
+  pop({ to?, params? }) — \`to\` undefined → pop 1; number → pop N; screen
+  name → pop back to that name (use \`params\` to override); "top" → pop
+  to the first screen.
+  reset({ routes, index? }) — replace the entire navigator stack.
+  go_back — guarded \`navigation.goBack()\`; returns { success: false,
+  reason } when there's nothing to pop.`,
     name: 'navigation',
     tools: {
       get_current_route: {
         description:
-          'Focused route name, params, and a `screen` field for the rendering component.',
+          "Focused route info — name, params, and a `screen` field for the rendering component. Pass `withState: true` to also include the focused route's full state (`key`, nested navigator state under `focusedChild`); default `false` returns the lean route summary.",
         handler: (args) => {
+          const withState = args.withState === true;
+          if (withState) {
+            const rootState = navigation.getRootState() as NavigationState | undefined;
+            if (!rootState) return { error: 'No navigation state available' };
+            const focused = withScreenInfo(findFocusedRoute(rootState) as { key?: unknown } | null);
+            return applyProjection(
+              focused,
+              args as ProjectionArgs,
+              projectAsValue,
+              ROUTE_DEFAULT_DEPTH
+            );
+          }
           const route = withScreenInfo(navigation.getCurrentRoute() as { key?: unknown } | null);
           return applyProjection(
             route,
@@ -195,23 +222,14 @@ PROJECTION
             ROUTE_DEFAULT_DEPTH
           );
         },
-        inputSchema: ROUTE_SCHEMA,
-      },
-      get_current_route_state: {
-        description:
-          'Full state of the focused route — params, key, nested navigator state, and a `screen` field with rendering component info.',
-        handler: (args) => {
-          const rootState = navigation.getRootState() as NavigationState | undefined;
-          if (!rootState) return { error: 'No navigation state available' };
-          const focused = withScreenInfo(findFocusedRoute(rootState) as { key?: unknown } | null);
-          return applyProjection(
-            focused,
-            args as ProjectionArgs,
-            projectAsValue,
-            ROUTE_DEFAULT_DEPTH
-          );
+        inputSchema: {
+          ...ROUTE_SCHEMA,
+          withState: {
+            description:
+              "Include the focused route's full state (key, nested navigator state). Default false.",
+            type: 'boolean',
+          },
         },
-        inputSchema: ROUTE_SCHEMA,
       },
       get_history: {
         description:
@@ -251,92 +269,76 @@ PROJECTION
         },
       },
       navigate: {
-        description: 'Navigate to a screen — reuses it if already in the stack.',
+        description:
+          'Move to a screen. `mode` controls how the stack changes:\n  · "reuse" (default) — reuse the existing screen if it\'s already in the stack (`navigation.navigate`).\n  · "push" — always add a new stack entry, even for duplicates (`dispatch PUSH`).\n  · "replace" — replace the current screen with the new one (`dispatch REPLACE`).\nReturns the new currentRoute on success.',
         handler: (args) => {
-          navigation.navigate(args.screen as string, args.params as Record<string, unknown>);
+          const screen = args.screen as string;
+          const params = args.params as Record<string, unknown> | undefined;
+          const mode = (typeof args.mode === 'string' ? args.mode : 'reuse') as
+            | 'reuse'
+            | 'push'
+            | 'replace';
+          if (mode === 'reuse') {
+            navigation.navigate(screen, params);
+          } else if (mode === 'push') {
+            navigation.dispatch({ payload: { name: screen, params }, type: 'PUSH' });
+          } else if (mode === 'replace') {
+            navigation.dispatch({ payload: { name: screen, params }, type: 'REPLACE' });
+          } else {
+            return { error: `navigate.mode must be "reuse" / "push" / "replace", got ${mode}.` };
+          }
           return {
             currentRoute: withScreenInfo(navigation.getCurrentRoute() as { key?: unknown } | null),
+            mode,
             success: true,
           };
         },
         inputSchema: {
+          mode: {
+            description: 'How to enter the stack. Default "reuse".',
+            enum: ['reuse', 'push', 'replace'],
+            type: 'string',
+          },
           params: { description: 'Optional route params.', type: 'object' },
-          screen: { description: 'Screen name to navigate to.', type: 'string' },
+          screen: { description: 'Screen name to enter.', type: 'string' },
         },
       },
       pop: {
-        description: 'Pop one or more screens off the stack.',
+        description:
+          'Pop screens off the stack.\n  · `to` omitted — pop 1 screen.\n  · `to: <number>` — pop N screens.\n  · `to: "ScreenName"` — pop back to a specific screen by name (optional `params`).\n  · `to: "top"` — pop all the way to the first screen.',
         handler: (args) => {
-          const count = (args.count as number) || 1;
-          navigation.dispatch({ payload: { count }, type: 'POP' });
+          const to = args.to;
+          if (to === undefined || to === null) {
+            navigation.dispatch({ payload: { count: 1 }, type: 'POP' });
+          } else if (typeof to === 'number') {
+            navigation.dispatch({ payload: { count: to }, type: 'POP' });
+          } else if (typeof to === 'string') {
+            if (to === 'top') {
+              navigation.dispatch({ type: 'POP_TO_TOP' });
+            } else {
+              navigation.dispatch({
+                payload: { name: to, params: args.params },
+                type: 'POP_TO',
+              });
+            }
+          } else {
+            return { error: `pop.to must be a number, a screen name, or "top". got ${typeof to}.` };
+          }
           return {
             currentRoute: withScreenInfo(navigation.getCurrentRoute() as { key?: unknown } | null),
             success: true,
           };
         },
         inputSchema: {
-          count: { description: 'Screens to pop (default: 1).', type: 'number' },
-        },
-      },
-      pop_to: {
-        description: 'Pop back to a specific screen.',
-        handler: (args) => {
-          navigation.dispatch({
-            payload: { name: args.screen as string, params: args.params },
-            type: 'POP_TO',
-          });
-          return {
-            currentRoute: withScreenInfo(navigation.getCurrentRoute() as { key?: unknown } | null),
-            success: true,
-          };
-        },
-        inputSchema: {
-          params: { description: 'Optional route params.', type: 'object' },
-          screen: { description: 'Screen name to pop back to.', type: 'string' },
-        },
-      },
-      pop_to_top: {
-        description: 'Pop to the first screen in the stack.',
-        handler: () => {
-          navigation.dispatch({ type: 'POP_TO_TOP' });
-          return {
-            currentRoute: withScreenInfo(navigation.getCurrentRoute() as { key?: unknown } | null),
-            success: true,
-          };
-        },
-      },
-      push: {
-        description: 'Push a new screen — always adds a new stack entry, even for duplicates.',
-        handler: (args) => {
-          navigation.dispatch({
-            payload: { name: args.screen as string, params: args.params },
-            type: 'PUSH',
-          });
-          return {
-            currentRoute: withScreenInfo(navigation.getCurrentRoute() as { key?: unknown } | null),
-            success: true,
-          };
-        },
-        inputSchema: {
-          params: { description: 'Optional route params.', type: 'object' },
-          screen: { description: 'Screen name to push.', type: 'string' },
-        },
-      },
-      replace: {
-        description: 'Replace the current screen with a new one.',
-        handler: (args) => {
-          navigation.dispatch({
-            payload: { name: args.screen as string, params: args.params },
-            type: 'REPLACE',
-          });
-          return {
-            currentRoute: withScreenInfo(navigation.getCurrentRoute() as { key?: unknown } | null),
-            success: true,
-          };
-        },
-        inputSchema: {
-          params: { description: 'Optional route params.', type: 'object' },
-          screen: { description: 'Screen name to replace with.', type: 'string' },
+          params: {
+            description: 'Optional route params (only used when `to` is a screen name).',
+            type: 'object',
+          },
+          to: {
+            description:
+              'Number of screens to pop, OR a screen name to pop back to, OR "top" to pop to the first screen. Omit to pop one.',
+            examples: [1, 2, 'Home', 'top'],
+          },
         },
       },
       reset: {

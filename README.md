@@ -310,7 +310,7 @@ Control the React Native LogBox overlay: inspect current rows, dismiss or clear 
 
 ### navigation
 
-Drive React Navigation from outside — navigate, push, pop, replace, reset — and read the current route, nested state, and the last 100 transitions. Current-route responses include a `screen` field identifying the rendering component (`componentName`, `mcpId`, `filePath`, `line`). Listing tools (`get_state`, `get_history`, `get_current_route`, `get_current_route_state`) accept standard `path` / `depth` / `maxBytes` projection args — heavy nested state collapses to markers; drill via `path: 'routes[0].state'`. Needs a `createNavigationContainerRef()` passed to both `<NavigationContainer ref={…}>` and `<McpProvider navigationRef={…}>`.
+Drive React Navigation from outside and read the current route, nested state, and the last 100 transitions. Reads — `get_state`, `get_history`, `get_current_route({ withState? })` — accept standard `path` / `depth` / `maxBytes` projection args; current-route responses include a `screen` field identifying the rendering component (`componentName`, `mcpId`, `filePath`, `line`). Actions are collapsed by semantic verb: `navigate({ screen, params?, mode?: 'reuse' | 'push' | 'replace' })` for forward moves (default mode reuses existing screen); `pop({ to? })` accepts a number, a screen name, or `"top"` for the three pop variants; plus `reset({ routes, index? })` and `go_back`. Needs a `createNavigationContainerRef()` passed to both `<NavigationContainer ref={…}>` and `<McpProvider navigationRef={…}>`.
 
 ### network
 
