@@ -293,6 +293,7 @@ Pass `waitFor: { until: 'appear' | 'disappear', timeout?, interval?, stable? }` 
 - `select: [{ props: { path: "data[0:5]", depth: 2 } }]` — drill into props.data[0..5) with 2 levels of expansion.
 - `select: [{ hooks: { kinds: ["State"], names: ["isLoading"], withValues: true, depth: 2, path: "[0].value" } }]` — filter hooks by kind/name + project hook values.
 - `select: [{ children: 5 }]` — recursive light-only walker, dumps a tree of mcpId/name 5 levels deep from each match. At the bottom, sub-children appear as `{ "${arr}": N }` so you see there's more to drill. Heavy fields (`props`/`hooks`) are not allowed inside `select.children` — query a child's mcpId separately when you need them.
+- `select: ['mcpId', 'refMethods']` — list native-ref methods (focus, blur, measure, scrollTo, ...) available for `call_ref`. `null` when the fiber has no native instance.
 - `query({ steps: [{ scope: 'root' }], select: [{ children: 5 }] })` — the canonical "dump the whole tree" entry point.
 
 Heavy nested values render as compact `${kind}`-keyed markers — `{"${arr}":47}`, `{"${fun}":"onPress"}`, `{"${str}":{ "len":1247, "preview":"..." }}` for long strings, `{"${Date}":"iso"}`, `{"${Err}":{ name, msg }}`, `{"${cyc}":true}`, `{"${ref}":{ mcpId, name }}` for component refs. Wide objects/arrays (>30 keys / >50 items) get a `${truncated}` sentinel as the first entry.

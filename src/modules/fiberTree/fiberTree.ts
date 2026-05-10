@@ -1336,11 +1336,15 @@ STEP CRITERIA
   index — pick N-th match from this step; otherwise all matches fan out into the next step.
 
 SELECT (output fields)
-  Default ["mcpId", "name", "testID"] — props, bounds, hooks, children
-  are opt-in.
+  Default ["mcpId", "name", "testID"] — props, bounds, hooks,
+  refMethods, children are opt-in.
   bounds: { x, y, width, height, centerX, centerY } in PHYSICAL pixels,
   top-left origin. null when the fiber has no mounted host view. centerX/
   centerY feed straight into host__tap.
+  refMethods: list of native-ref method names (focus, blur, measure,
+  scrollTo, ...) available on the fiber's host instance. null when
+  there is no native instance (composite wrapper, unmounted,
+  virtualized). Feeds directly into fiber_tree__call_ref.
   props: per-field projection — \`{ props: { path?, depth?, maxBytes? } }\`.
   hooks: filtered + projected — \`{ hooks: { kinds?, names?, withValues?,
   expansionDepth?, format?, path?, depth?, maxBytes? } }\`. Each entry
@@ -1380,7 +1384,7 @@ TIPS
     tools: {
       call_ref: {
         description:
-          "Call a method on a component's native ref (focus, blur, measure, …). Use get_ref_methods first to see what's available.",
+          "Call a method on a component's native ref (focus, blur, measure, …). Use `query` with `select: ['refMethods']` first to see what's available on the target fiber.",
         handler: (args) => {
           const rootError = requireRoot();
           if (rootError) return rootError;
@@ -1432,27 +1436,6 @@ TIPS
             type: 'string',
           },
         },
-      },
-      get_ref_methods: {
-        description: "List available methods on a component's native ref.",
-        handler: (args) => {
-          const rootError = requireRoot();
-          if (rootError) return rootError;
-
-          const fiber = findComponent(args);
-          if (!fiber) return { error: 'Component not found' };
-
-          const instance = getNativeInstance(fiber);
-          if (!instance) {
-            return { error: `Component "${getComponentName(fiber)}" has no native instance` };
-          }
-
-          return {
-            component: getComponentName(fiber),
-            methods: getAvailableMethods(instance),
-          };
-        },
-        inputSchema: FIND_SCHEMA,
       },
       invoke: {
         description:
@@ -1597,6 +1580,15 @@ TIPS
                       path: propsOpts.path,
                     });
                   }
+                  if (fields.has('refMethods')) {
+                    // List of native-ref methods available on the fiber's
+                    // host instance (focus, blur, measure, scrollTo, ...).
+                    // null when the fiber has no native instance (composite
+                    // wrappers, unmounted, virtualized). Feeds directly into
+                    // `fiber_tree__call_ref`.
+                    const instance = getNativeInstance(fiber);
+                    result.refMethods = instance ? getAvailableMethods(instance) : null;
+                  }
                   if (fields.has('testID')) {
                     result.testID = fiber.memoizedProps?.testID;
                   }
@@ -1738,9 +1730,10 @@ TIPS
             type: 'boolean',
           },
           select: {
-            description: `Output fields: mcpId, name, testID, props, bounds, hooks, children. Default ${JSON.stringify(QUERY_DEFAULT_FIELDS)}. Each entry is either a string ("mcpId" — include with defaults) or an object whose keys are field names. Object values are \`true\` / \`false\` / per-field options.\n\nLight fields (mcpId, name, testID, bounds) — no options, just toggle.\n\nHeavy fields (props, hooks) — per-field projection via shared \`projectValue\` so nested heavy values become \`\${...}\`-keyed markers. Each takes its own \`path\` / \`depth\` / \`maxBytes\`.\n\nprops options: \`{ path?, depth?, maxBytes? }\`.\n\nhooks options: \`{ kinds?, names?, withValues?, expansionDepth?, format?, path?, depth?, maxBytes? }\`. \`kinds\`: State | Reducer | Memo | Callback | Ref | Effect | LayoutEffect | InsertionEffect | Context | Transition | DeferredValue | Id | SyncExternalStore | ImperativeHandle | Custom. \`names\`: exact or \`/regex/flags\`. \`withValues:true\` adds resolved values. \`expansionDepth\` caps custom-hook recursion (default Infinity). \`format:"tree"\` returns nested children instead of flat \`via\`.\n\nchildren — recursive light-only walker for tree-of-tree dumps.\n  Short form: \`{ children: 5 }\` → treeDepth=5, default fields ['mcpId','name'].\n  Object form: \`{ children: { treeDepth?, select?, itemsCap? } }\`.\n  treeDepth max 16; itemsCap default 50; overflow inserts \`\${truncated}\` as the first item.\n  select inside children may include only mcpId / name / testID / bounds / nested children. props/hooks throw at parse time — run a second query against a child's mcpId to inspect them.\n\nEach hook entry carries \`{ kind, name, hook?, via?, expanded? }\`.`,
+            description: `Output fields: mcpId, name, testID, props, bounds, hooks, refMethods, children. Default ${JSON.stringify(QUERY_DEFAULT_FIELDS)}. Each entry is either a string ("mcpId" — include with defaults) or an object whose keys are field names. Object values are \`true\` / \`false\` / per-field options.\n\nLight fields (mcpId, name, testID, bounds, refMethods) — no options, just toggle. refMethods is the list of native-ref methods (focus, blur, measure, scrollTo, ...) available on the fiber's host instance; null when the fiber has no native instance. Feeds directly into \`fiber_tree__call_ref\`.\n\nHeavy fields (props, hooks) — per-field projection via shared \`projectValue\` so nested heavy values become \`\${...}\`-keyed markers. Each takes its own \`path\` / \`depth\` / \`maxBytes\`.\n\nprops options: \`{ path?, depth?, maxBytes? }\`.\n\nhooks options: \`{ kinds?, names?, withValues?, expansionDepth?, format?, path?, depth?, maxBytes? }\`. \`kinds\`: State | Reducer | Memo | Callback | Ref | Effect | LayoutEffect | InsertionEffect | Context | Transition | DeferredValue | Id | SyncExternalStore | ImperativeHandle | Custom. \`names\`: exact or \`/regex/flags\`. \`withValues:true\` adds resolved values. \`expansionDepth\` caps custom-hook recursion (default Infinity). \`format:"tree"\` returns nested children instead of flat \`via\`.\n\nchildren — recursive light-only walker for tree-of-tree dumps.\n  Short form: \`{ children: 5 }\` → treeDepth=5, default fields ['mcpId','name'].\n  Object form: \`{ children: { treeDepth?, select?, itemsCap? } }\`.\n  treeDepth max 16; itemsCap default 50; overflow inserts \`\${truncated}\` as the first item.\n  select inside children may include only mcpId / name / testID / bounds / nested children. props/hooks throw at parse time — run a second query against a child's mcpId to inspect them.\n\nEach hook entry carries \`{ kind, name, hook?, via?, expanded? }\`.`,
             examples: [
               ['mcpId', 'name', 'bounds'],
+              ['mcpId', 'refMethods'],
               ['mcpId', { props: { path: 'style' } }],
               ['mcpId', { props: { depth: 3 } }],
               [{ hooks: { kinds: ['State'], withValues: true }, mcpId: true }],
