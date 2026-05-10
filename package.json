@@ -62,7 +62,7 @@
     "./server": "./dist/server/index.js"
   },
   "scripts": {
-    "build": "tsc && tsc-alias && ./scripts/build-ios-hid.sh",
+    "build": "rm -rf dist && tsc && tsc-alias && ./scripts/build-ios-hid.sh",
     "dev": "tsc --watch",
     "lint": "eslint --ext .ts --ext .tsx ./src",
     "lint:fix": "eslint --ext .ts --ext .tsx ./src --fix",
