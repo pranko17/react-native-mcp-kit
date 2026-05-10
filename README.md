@@ -329,7 +329,9 @@ React Query cache inspection: list cached queries, fetch cached data by key, get
 
 ### storage
 
-Reads and writes to one or more named key-value stores. Each store is a `{ name, adapter }` pair; the adapter can wrap MMKV, AsyncStorage, or any custom implementation that provides at least a `get`:
+Reads and writes to one or more named key-value stores. Values are JSON-parsed on read when possible. `get_item` and `get_all` accept standard `path` / `depth` / `maxBytes` projection args — heavy nested values collapse to `${obj}`/`${arr}` markers; drill via `path: 'session.user.email'` (for `get_all`) or `path: 'value.user.email'` (for `get_item`, since the response wraps as `{ key, value }`).
+
+Each store is a `{ name, adapter }` pair; the adapter can wrap MMKV, AsyncStorage, or any custom implementation that provides at least a `get`:
 
 ```ts
 interface StorageAdapter {
