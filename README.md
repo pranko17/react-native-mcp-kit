@@ -185,9 +185,9 @@ What you get:
 
 - **Real OS input** — `tap`, `long_press`, `swipe`, `drag`, `type_text`, `type_text_batch`, `press_key`. Goes through the real iOS/Android touch pipeline.
 - **`tap_fiber`** — one call to locate a component via fiber_tree and tap its center. No copy-paste of bounds between calls.
-- **Screenshots** — WebP, auto-diffing (`unchanged: true` on identical frames). Pass `region` in physical pixels to crop to a specific element and keep vision-token cost low. Works on iOS simulators, Android sims/emulators/devices, **and physical iOS 17+ devices** (over Apple's CoreDevice tunnel — no external tools or sudo required, the connected RN client's `isSimulator: false` flag picks the right path automatically).
+- **Screenshots** — WebP, auto-diffing. Every response carries a `hash` so callers can diff externally; `{ unchanged: true, lastMeta }` is returned when bytes match the previous capture (`lastMeta` mirrors the original meta — width / height / scale / hash — so polling loops don't need to re-query). Pass `region` in physical pixels to crop to a specific element and keep vision-token cost low. Works on iOS simulators, Android sims/emulators/devices, **and physical iOS 17+ devices** (over Apple's CoreDevice tunnel — no external tools or sudo required, the connected RN client's `isSimulator: false` flag picks the right path automatically).
 - **App lifecycle** — launch, terminate, restart.
-- **Device enumeration** — list sims / emulators / devices, annotated with active MCP clients.
+- **Device enumeration** — list sims / emulators / devices, annotated with active MCP clients. Pass `connected: true` to filter to just devices with a live MCP client attached.
 
 iOS input goes through a bundled `ios-hid` Swift binary that injects HID events directly into iOS Simulator via private frameworks — no external daemons to install or keep running. Real-device iOS input isn't supported yet (screenshots are); use a simulator or Android device for tap/swipe automation.
 
@@ -259,7 +259,7 @@ Show a native `Alert.alert` from the agent with any combination of `default` / `
 
 ### console
 
-Tails `console.log` / `warn` / `error` / `info` / `debug` into a ring buffer the agent can read or clear. Each entry carries a monotonic `id`. Args are stored raw and projected at query time — Errors, Dates, class instances, cyclic refs, functions, Symbols, Maps, Sets all collapse to compact `${kind}` markers. Listing tools accept standard `path` / `depth` / `maxBytes` projection args (default depth 3); drill via `path: '[-1:][0].args[1]'` to fetch one specific arg. Buffer size, captured levels, and whether stack traces are collected are all configurable.
+Tails `console.log` / `warn` / `error` / `info` / `debug` / `trace` / `group` / `groupCollapsed` / `groupEnd` into a ring buffer the agent can read or clear. `trace` (and error / warn by default) capture stacks. Each entry carries a monotonic `id`. Args are stored raw and projected at query time — Errors, Dates, class instances, cyclic refs, functions, Symbols, Maps, Sets all collapse to compact `${kind}` markers. Listing tools accept standard `path` / `depth` / `maxBytes` projection args (default depth 3); drill via `path: '[-1:][0].args[1]'` to fetch one specific arg. Buffer size, captured levels, and whether stack traces are collected are all configurable.
 
 ```ts
 consoleModule({
@@ -281,7 +281,7 @@ Captures unhandled JS errors (via `ErrorUtils.setGlobalHandler`) and unhandled p
 
 The heart of UI inspection. Search the component tree via a chained `query`: each step narrows the result by **criteria** within a given **scope**, with multiple matches fanning out into the next step.
 
-- **Criteria**: `name`, `testID`, `mcpId`, `text`, `hasProps`, `props` (equality + `contains`), `not`, `any`.
+- **Criteria**: `name`, `testID`, `mcpId`, `text`, `hasProps`, `props` (equality + `contains` / `regex`), `not`, `any`. `name` / `mcpId` / `testID` / `text` accept either an exact string or a `/pattern/flags` slash form (e.g. `name: "/^Pressable/"` matches Pressable / PressableView / …) — same syntax wherever string matching shows up in the tool.
 - **Scopes**: `descendants`, `children`, `parent`, `ancestors`, `siblings`, `self`, `root` (the React fiber root — useful as a first step to dump the whole tree), `screen` (focused screen fiber from React Navigation), `nearest_host` (closest host component).
 
 Wrapper cascades (`PressableView → Pressable → View → RCTView`) collapse to the topmost by default, so overlapping matches don't drown the result. `bounds` come back in physical pixels and pair directly with `host__tap` — or use `host__tap_fiber` for the locate-and-tap shortcut.
@@ -291,14 +291,14 @@ Pass `waitFor: { until: 'appear' | 'disappear', timeout?, interval?, stable? }` 
 **Per-field projection.** Heavy fields — `props` and `hooks` — are projected per-field via `select`, so the rest of the response (mcpId, name, total) stays raw and always visible. Each takes its own `path` / `depth` / `maxBytes` knobs:
 
 - `select: [{ props: { path: "data[0:5]", depth: 2 } }]` — drill into props.data[0..5) with 2 levels of expansion.
-- `select: [{ hooks: { kinds: ["State"], names: ["isLoading"], withValues: true, depth: 2, path: "[0].value" } }]` — filter hooks by kind/name + project hook values.
+- `select: [{ hooks: { kinds: ["State"], names: ["isLoading"], withValues: true, depth: 2, path: "[0].value" } }]` — filter hooks by kind/name + project hook values. `mcpIds: ['count:screens/HomeScreen/HomeScreen:50']` targets one specific call-site directly; `kinds` covers React 18/19 too (`Optimistic`, `ActionState`, `Use`, plus the classic State / Effect / Memo / …).
 - `select: [{ children: 5 }]` — recursive light-only walker, dumps a tree of mcpId/name 5 levels deep from each match. At the bottom, sub-children appear as `{ "${arr}": N }` so you see there's more to drill. Heavy fields (`props`/`hooks`) are not allowed inside `select.children` — query a child's mcpId separately when you need them.
 - `select: ['mcpId', 'refMethods']` — list native-ref methods (focus, blur, measure, scrollTo, ...) available for `call({ method })`. `null` when the fiber has no native instance.
 - `query({ steps: [{ scope: 'root' }], select: [{ children: 5 }] })` — the canonical "dump the whole tree" entry point.
 
 Heavy nested values render as compact `${kind}`-keyed markers — `{"${arr}":47}`, `{"${fun}":"onPress"}`, `{"${str}":{ "len":1247, "preview":"..." }}` for long strings, `{"${Date}":"iso"}`, `{"${Err}":{ name, msg }}`, `{"${cyc}":true}`, `{"${ref}":{ mcpId, name }}` for component refs. Wide objects/arrays (>30 keys / >50 items) get a `${truncated}` sentinel as the first entry.
 
-Hooks pull `useState` / `useMemo` / `useCallback` / `useRef` / `useEffect` / custom hooks with variable names recovered from source (via `__mcp_hooks` metadata from the test-id babel plugin). `withValues: true` adds resolved values; `expansionDepth` caps custom-hook recursion (`0` = top-level only); `format: "tree"` returns nested children instead of flat `via` chains. Sensitive names (password, token, jwt, secret, credential, apiKey, authorization, *Pin) are auto-redacted — override via `fiberTreeModule({ redactHookNames, additionalRedactHookNames })`. Works against any HOC chain (`memo`, `forwardRef`, custom HOCs, `as` casts) and library hooks from react-query, react-redux, reanimated, react-navigation.
+Hooks pull `useState` / `useMemo` / `useCallback` / `useRef` / `useEffect` / custom hooks with variable names recovered from source (via `__mcp_hooks` metadata from the test-id babel plugin). Every entry also carries an `mcpId` — `<name>:<shortFile>:<line>` in the same shape as JSX `data-mcp-id` — so you can drop it straight into `Read(file, line)` to jump to the call site without grepping. React 18 and 19 hooks are mapped to dedicated kinds (`Optimistic`, `ActionState`, `Use`, `SyncExternalStore`, `DeferredValue`, …) alongside the classics; `use(promise | context)` is detected too, with `<obj>.use(...)` calls (`database.use`, `app.use`) filtered out by a React-namespace guard so they don't show up as false-positive hooks. `withValues: true` adds resolved values; `expansionDepth` caps custom-hook recursion (`0` = top-level only); `format: "tree"` returns nested children instead of flat `via` chains. Sensitive names (password, token, jwt, secret, credential, apiKey, authorization, *Pin) are auto-redacted — override via `fiberTreeModule({ redactHookNames, additionalRedactHookNames })`. Works against any HOC chain (`memo`, `forwardRef`, custom HOCs, `as` casts) and library hooks from react-query, react-redux, reanimated, react-navigation.
 
 ### i18n
 
