@@ -21,13 +21,15 @@ const DTX_MESSAGE_HEADER_SIZE = 16;
 const DTX_MAX_FRAGMENT_BODY = 64 * 1024;
 const DTX_FLAG_EXPECTS_REPLY = 1 << 0;
 
-export enum DtxMessageType {
+enum DtxMessageType {
   Ok = 0,
   Data = 1,
   Dispatch = 2,
   Object = 3,
   Error = 4,
 }
+
+const DTX_MESSAGE_TYPE_MAX = DtxMessageType.Error;
 
 interface DtxFragmentHeader {
   bodySize: number;
@@ -91,15 +93,19 @@ const writeMessageHeader = (h: DtxMessageHeader): Buffer => {
 };
 
 const parseMessageHeader = (buf: Buffer): DtxMessageHeader => {
+  const rawMsgType = buf.readUInt8(0);
+  if (rawMsgType > DTX_MESSAGE_TYPE_MAX) {
+    throw new Error(`Unknown DTX msgType ${rawMsgType}`);
+  }
   return {
     auxSize: buf.readUInt32LE(4),
     flags: buf.readUInt32LE(12),
-    msgType: buf.readUInt8(0) as DtxMessageType,
+    msgType: rawMsgType as DtxMessageType,
     totalSize: buf.readUInt32LE(8),
   };
 };
 
-export interface DtxMessage {
+interface DtxMessage {
   aux: Buffer;
   channelCode: number;
   conversationIndex: number;
@@ -364,14 +370,16 @@ export const buildDtxAux = (args: ReadonlyArray<NskaValue | Primitive>): Buffer 
 // outgoing identifiers and pending replies, and dispatches incoming
 // messages to whoever's waiting.
 
-export interface DtxOpenOptions {
+interface DtxOpenOptions {
   /** Connect timeout in ms. Default 10s. */
   timeoutMs?: number;
 }
 
-export interface DtxInvokeOptions {
+interface DtxInvokeOptions {
   /** Connection-scoped monotonic identifier. Caller picks the next value. */
   identifier: number;
+  /** Per-call reply timeout in ms. Default 15s. Ignored when wantsReply=false. */
+  timeoutMs?: number;
   /**
    * When true (the default), invoke resolves with the reply DTX message.
    * When false, invoke resolves once the message is on the wire and
@@ -380,6 +388,8 @@ export interface DtxInvokeOptions {
   wantsReply?: boolean;
 }
 
+const DEFAULT_INVOKE_TIMEOUT_MS = 15_000;
+
 class DtxConnectionError extends Error {
   constructor(message: string) {
     super(message);
@@ -387,12 +397,15 @@ class DtxConnectionError extends Error {
   }
 }
 
+interface PendingReply {
+  reject: (err: Error) => void;
+  resolve: (msg: DtxMessage) => void;
+  timer: NodeJS.Timeout | null;
+}
+
 export class DtxConnection {
   private readonly reader = new DtxReader();
-  private readonly pendingReplies = new Map<
-    string,
-    { reject: (err: Error) => void; resolve: (msg: DtxMessage) => void }
-  >();
+  private readonly pendingReplies = new Map<number, PendingReply>();
   private closed = false;
   private socketError: Error | null = null;
 
@@ -425,7 +438,16 @@ export class DtxConnection {
       port,
     });
     await new Promise<void>((resolve, reject) => {
+      const onConnect = (): void => {
+        cleanup();
+        resolve();
+      };
+      const onError = (err: Error): void => {
+        cleanup();
+        reject(err);
+      };
       const timer = setTimeout(() => {
+        cleanup();
         socket.destroy();
         reject(
           new DtxConnectionError(
@@ -433,41 +455,68 @@ export class DtxConnection {
           )
         );
       }, timeoutMs);
-      socket.once('connect', () => {
+      const cleanup = (): void => {
         clearTimeout(timer);
-        resolve();
-      });
-      socket.once('error', (err) => {
-        clearTimeout(timer);
-        reject(err);
-      });
+        socket.off('connect', onConnect);
+        socket.off('error', onError);
+      };
+      socket.once('connect', onConnect);
+      socket.once('error', onError);
     });
     return new DtxConnection(socket);
   }
 
   /**
-   * Send a DISPATCH message and optionally await the reply. Replies are
-   * matched by identifier — connection-scoped, so the caller only has to
-   * keep them unique across all channels on this connection.
+   * Send a DISPATCH message and await the reply (default), or fire-and-forget
+   * when `wantsReply: false`. Replies are matched by identifier —
+   * connection-scoped, so the caller only has to keep identifiers unique
+   * across all channels on this connection.
    */
   invoke(
     channelCode: number,
     payload: Buffer,
     aux: Buffer,
+    options: DtxInvokeOptions & { wantsReply: false }
+  ): Promise<void>;
+  invoke(
+    channelCode: number,
+    payload: Buffer,
+    aux: Buffer,
     options: DtxInvokeOptions
-  ): Promise<DtxMessage | null> {
+  ): Promise<DtxMessage>;
+  invoke(
+    channelCode: number,
+    payload: Buffer,
+    aux: Buffer,
+    options: DtxInvokeOptions
+  ): Promise<DtxMessage | void> {
     if (this.closed) {
       return Promise.reject(new DtxConnectionError('DTX connection is closed'));
     }
     const wantsReply = options.wantsReply ?? true;
     const flags = wantsReply ? DTX_FLAG_EXPECTS_REPLY : 0;
-    const key = String(options.identifier);
 
-    const replyPromise = wantsReply
-      ? new Promise<DtxMessage>((resolve, reject) => {
-          this.pendingReplies.set(key, { reject, resolve });
-        })
-      : null;
+    let replyPromise: Promise<DtxMessage> | null = null;
+    if (wantsReply) {
+      if (this.pendingReplies.has(options.identifier)) {
+        return Promise.reject(
+          new DtxConnectionError(
+            `Duplicate DTX identifier ${options.identifier} — caller must keep ids unique on a connection`
+          )
+        );
+      }
+      const id = options.identifier;
+      const timeoutMs = options.timeoutMs ?? DEFAULT_INVOKE_TIMEOUT_MS;
+      replyPromise = new Promise<DtxMessage>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          const slot = this.pendingReplies.get(id);
+          if (!slot) return;
+          this.pendingReplies.delete(id);
+          reject(new DtxConnectionError(`DTX reply for id=${id} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+        this.pendingReplies.set(id, { reject, resolve, timer });
+      });
+    }
 
     this.socket.write(
       buildDtxMessage({
@@ -481,7 +530,7 @@ export class DtxConnection {
       })
     );
 
-    return wantsReply ? replyPromise! : Promise.resolve(null);
+    return wantsReply ? replyPromise! : Promise.resolve();
   }
 
   close(): void {
@@ -513,9 +562,10 @@ export class DtxConnection {
 
   private dispatch(msg: DtxMessage): void {
     if (msg.conversationIndex === 0) return; // peer-initiated, no waiter
-    const slot = this.pendingReplies.get(String(msg.identifier));
+    const slot = this.pendingReplies.get(msg.identifier);
     if (!slot) return;
-    this.pendingReplies.delete(String(msg.identifier));
+    this.pendingReplies.delete(msg.identifier);
+    if (slot.timer) clearTimeout(slot.timer);
     if (msg.msgType === DtxMessageType.Error) {
       slot.reject(new DtxConnectionError(`DTX peer returned error message (id=${msg.identifier})`));
     } else {
@@ -525,6 +575,7 @@ export class DtxConnection {
 
   private failAllPending(err: Error): void {
     for (const slot of this.pendingReplies.values()) {
+      if (slot.timer) clearTimeout(slot.timer);
       slot.reject(err);
     }
     this.pendingReplies.clear();

@@ -25,13 +25,28 @@ const FRAME_TYPE = {
   WINDOW_UPDATE: 0x08,
 } as const;
 
+// HTTP/2 SETTINGS identifiers (RFC 7540 §6.5.2). We only set these two —
+// the rest are at peer default.
 const SETTINGS = {
   INITIAL_WINDOW_SIZE: 4,
   MAX_CONCURRENT_STREAMS: 3,
 } as const;
 
+// Stream IDs used during the RSD handshake. Apple expects these specific
+// numbers: stream 1 carries the peer's `peer_info` reply, stream 3 carries
+// our INIT_HANDSHAKE marker. Hardcoded to mirror what `remotepairingd` does
+// on the device side.
 const ROOT_CHANNEL_STREAM = 1;
 const REPLY_CHANNEL_STREAM = 3;
+
+// HTTP/2 flow-control window values. `1 048 576` (1 MiB) is the per-stream
+// receive window — large enough that the device doesn't pause for credit
+// during the burst of XPC frames that follows. `983 041` (= 0xF0001 =
+// 1 MiB − 65 535) is the connection-level WINDOW_UPDATE the connection
+// preface needs to bring the default 65 535-byte window up to 1 MiB; both
+// values match what Apple's client sends.
+const STREAM_INITIAL_WINDOW = 1_048_576;
+const CONNECTION_WINDOW_INCREMENT = 983_041;
 
 const buildH2Frame = (type: number, flags: number, streamId: number, payload: Buffer): Buffer => {
   const header = Buffer.alloc(9);
@@ -50,7 +65,7 @@ const buildSettingsFrame = (): Buffer => {
   payload.writeUInt16BE(SETTINGS.MAX_CONCURRENT_STREAMS, 0);
   payload.writeUInt32BE(100, 2);
   payload.writeUInt16BE(SETTINGS.INITIAL_WINDOW_SIZE, 6);
-  payload.writeUInt32BE(1_048_576, 8);
+  payload.writeUInt32BE(STREAM_INITIAL_WINDOW, 8);
   return buildH2Frame(FRAME_TYPE.SETTINGS, 0x00, 0, payload);
 };
 
@@ -97,7 +112,7 @@ class H2FrameReader {
   }
 }
 
-export interface RsdServiceEntry {
+interface RsdServiceEntry {
   /** Port the service listens on inside the tunnel. RSD encodes this as a string; we parse to number. */
   port: number;
   /** Per-service metadata: `UsesRemoteXPC`, `EnableServiceSSL`, `Entitlement`, … */
@@ -118,29 +133,41 @@ class RsdHandshakeError extends Error {
   }
 }
 
-const findPeerInfoDict = (stream1Bytes: Buffer): Record<string, XpcValue> | null => {
-  let offset = 0;
-  while (offset + 16 <= stream1Bytes.length) {
-    let parsed;
-    try {
-      parsed = parseXpcWrapper(stream1Bytes, offset);
-    } catch {
-      return null;
+// Incremental XpcWrapper parser — tracks how far we've consumed so we don't
+// re-walk the prefix on every socket chunk. The peer_info reply can span
+// many DATA frames; without this we'd be O(N²) in total stream-1 bytes.
+class PeerInfoParser {
+  private buffer = Buffer.alloc(0);
+  private offset = 0;
+
+  push(chunk: Buffer): Record<string, XpcValue> | null {
+    this.buffer = this.buffer.length === 0 ? chunk : Buffer.concat([this.buffer, chunk]);
+    while (this.offset + 16 <= this.buffer.length) {
+      let parsed;
+      try {
+        parsed = parseXpcWrapper(this.buffer, this.offset);
+      } catch {
+        // Wrapper mid-stream; wait for more bytes.
+        return null;
+      }
+      if (parsed.totalSize <= 0 || this.offset + parsed.totalSize > this.buffer.length) {
+        return null;
+      }
+      this.offset += parsed.totalSize;
+      const payload = parsed.payload;
+      if (
+        payload !== null &&
+        typeof payload === 'object' &&
+        !Array.isArray(payload) &&
+        !Buffer.isBuffer(payload) &&
+        'Services' in payload
+      ) {
+        return payload as Record<string, XpcValue>;
+      }
     }
-    if (parsed.totalSize <= 0 || offset + parsed.totalSize > stream1Bytes.length) return null;
-    if (
-      parsed.payload !== null &&
-      typeof parsed.payload === 'object' &&
-      !Array.isArray(parsed.payload) &&
-      !Buffer.isBuffer(parsed.payload)
-    ) {
-      const dict = parsed.payload as Record<string, XpcValue>;
-      if ('Services' in dict) return dict;
-    }
-    offset += parsed.totalSize;
+    return null;
   }
-  return null;
-};
+}
 
 const asRecord = (value: XpcValue | undefined): Record<string, XpcValue> => {
   return value && typeof value === 'object' && !Array.isArray(value) && !Buffer.isBuffer(value)
@@ -165,7 +192,7 @@ const normalisePeerInfo = (dict: Record<string, XpcValue>): PeerInfo => {
   return { properties: asRecord(dict.Properties), services };
 };
 
-export interface FetchPeerInfoOptions {
+interface FetchPeerInfoOptions {
   /** Connect timeout. Default 10s. */
   timeoutMs?: number;
 }
@@ -194,7 +221,7 @@ export const fetchPeerInfo = async (
       return;
     }
 
-    const stream1Chunks: Buffer[] = [];
+    const peerParser = new PeerInfoParser();
     const reader = new H2FrameReader();
     let settled = false;
 
@@ -210,9 +237,12 @@ export const fetchPeerInfo = async (
       else if (value) resolve(value);
     };
 
-    const timer = setTimeout(() => {
-      cleanup(new RsdHandshakeError(`RSD handshake timed out after ${timeoutMs}ms`));
-    }, deadline - Date.now());
+    const timer = setTimeout(
+      () => {
+        cleanup(new RsdHandshakeError(`RSD handshake timed out after ${timeoutMs}ms`));
+      },
+      Math.max(0, deadline - Date.now())
+    );
 
     socket.on('connect', () => {
       // Apple's RSD accepts the whole handshake batch in one write; an
@@ -223,7 +253,7 @@ export const fetchPeerInfo = async (
         Buffer.concat([
           HTTP2_PREFACE,
           buildSettingsFrame(),
-          buildWindowUpdateFrame(0, 983041),
+          buildWindowUpdateFrame(0, CONNECTION_WINDOW_INCREMENT),
           buildEmptyHeadersFrame(ROOT_CHANNEL_STREAM),
           buildDataFrame(ROOT_CHANNEL_STREAM, buildXpcWrapper(XpcFlags.ALWAYS_SET, 0n, {})),
           buildEmptyHeadersFrame(REPLY_CHANNEL_STREAM),
@@ -237,10 +267,15 @@ export const fetchPeerInfo = async (
 
     socket.on('data', (chunk: Buffer) => {
       reader.push(chunk);
-      let frame;
+      let frame: H2Frame | null;
       while ((frame = reader.pop()) !== null) {
         if (frame.type === FRAME_TYPE.DATA && frame.streamId === ROOT_CHANNEL_STREAM) {
-          stream1Chunks.push(frame.payload);
+          const dict = peerParser.push(frame.payload);
+          if (dict) {
+            clearTimeout(timer);
+            cleanup(null, normalisePeerInfo(dict));
+            return;
+          }
         }
         if (frame.type === FRAME_TYPE.GOAWAY) {
           const lastStream =
@@ -251,11 +286,6 @@ export const fetchPeerInfo = async (
           );
           return;
         }
-      }
-      const dict = findPeerInfoDict(Buffer.concat(stream1Chunks));
-      if (dict) {
-        clearTimeout(timer);
-        cleanup(null, normalisePeerInfo(dict));
       }
     });
 

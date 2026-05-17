@@ -5,8 +5,13 @@ import { networkInterfaces } from 'node:os';
 const DEFAULT_STARTUP_TIMEOUT_MS = 30_000;
 const KEEPER_POLL_INTERVAL_MS = 750;
 const POLL_INTERVAL_MS = 250;
+// `log show` for a focused predicate over 60 seconds is normally tens of KB;
+// 4 MiB is a hard ceiling so a runaway logger can't OOM us. On overflow we
+// SIGKILL the child and parse what we got so far — we only need a single
+// "for server port" line.
+const LOG_SHOW_MAX_BYTES = 4 * 1024 * 1024;
 
-export interface TunnelInfo {
+interface TunnelInfo {
   /** Device's IPv6 address through the CoreDevice tunnel (the `fd…::1`-style ULA). */
   deviceAddress: string;
   /**
@@ -24,18 +29,18 @@ export interface TunnelInfo {
   rsdPort: number;
 }
 
-export interface TunnelHandle {
+interface TunnelHandle {
   /** Stops the tunnel keeper. The OS tears the tunnel down within a few seconds. */
   close: () => Promise<void>;
   info: TunnelInfo;
 }
 
-export interface StartTunnelOptions {
+interface StartTunnelOptions {
   /** Maximum time to wait for the tunnel to come up. Default 30s. */
   startupTimeoutMs?: number;
 }
 
-export class TunnelStartupError extends Error {
+class TunnelStartupError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'TunnelStartupError';
@@ -131,10 +136,12 @@ const resolveDeviceAddress = async (
   );
 };
 
-// Find the utun interface that the OS just brought up for this device. We
-// pick by MTU (16000 is unique to the CoreDevice tunnel) and require an
-// fd<…>::/64 (ULA) address. The `::2` end is ours; the `::1` end is the
-// device.
+// Find the utun interface the OS just brought up for this device. We match
+// by /64 ULA prefix: the device sits at `fd<…>::1`, the Mac end at
+// `fd<…>::2`. Multiple coexisting tunnels each get their own ULA, so prefix
+// match is unique. (CoreDevice's utun uses MTU 16000 — would be a nice extra
+// discriminator if Node's `os.networkInterfaces()` surfaced MTU, but it
+// doesn't.)
 const findTunnelInterface = async (
   deviceAddress: string,
   deadline: number
@@ -146,8 +153,6 @@ const findTunnelInterface = async (
       for (const addr of addrs) {
         if (addr.family !== 'IPv6') continue;
         if (!addr.address.startsWith('fd')) continue;
-        // Both sides of the tunnel live in the same /64 ULA. The device
-        // address ends in ::1; ours ends in ::2.
         const devPrefix = deviceAddress.replace(/::1$/, '::');
         const hostPrefix = addr.address.replace(/::2$/, '::');
         if (devPrefix === hostPrefix) {
@@ -162,28 +167,47 @@ const findTunnelInterface = async (
   );
 };
 
+// Stdout-capped subprocess runner — guards against a chatty `log show` filling
+// memory if our predicate ever stops being selective. On overflow we SIGKILL
+// the child and resolve with what we got; we only need the most recent "for
+// server port" line, which lands in the first KB.
 const runProcessCapture = (
   command: string,
   args: readonly string[],
-  timeoutMs: number
+  timeoutMs: number,
+  maxStdoutBytes = LOG_SHOW_MAX_BYTES
 ): Promise<{ stderr: string; stdout: string }> => {
   return new Promise((resolve, reject) => {
     const child = spawn(command, [...args], { stdio: ['ignore', 'pipe', 'pipe'] });
-    let stdout = '';
+    const stdoutChunks: Buffer[] = [];
+    let stdoutSize = 0;
+    let stdoutCapped = false;
     let stderr = '';
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
       reject(new Error(`${command} timed out after ${timeoutMs}ms`));
     }, timeoutMs);
     child.stdout?.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString('utf8');
+      if (stdoutCapped) return;
+      const remaining = maxStdoutBytes - stdoutSize;
+      if (chunk.length <= remaining) {
+        stdoutChunks.push(chunk);
+        stdoutSize += chunk.length;
+        return;
+      }
+      stdoutChunks.push(chunk.subarray(0, remaining));
+      stdoutSize = maxStdoutBytes;
+      stdoutCapped = true;
+      child.kill('SIGKILL');
     });
     child.stderr?.on('data', (chunk: Buffer) => {
+      // stderr is informational only; cap at the same budget for symmetry.
+      if (stderr.length >= maxStdoutBytes) return;
       stderr += chunk.toString('utf8');
     });
     child.on('close', () => {
       clearTimeout(timer);
-      resolve({ stderr, stdout });
+      resolve({ stderr, stdout: Buffer.concat(stdoutChunks, stdoutSize).toString('utf8') });
     });
     child.on('error', (err) => {
       clearTimeout(timer);

@@ -1,4 +1,4 @@
-import { DtxConnection, DtxMessageType, buildDtxAux, dtxInt32 } from './dtx';
+import { DtxConnection, buildDtxAux, dtxInt32 } from './dtx';
 import { type NskaValue, decodeNska, encodeNska } from './nska';
 import { fetchPeerInfo } from './rsd';
 import { startTunnel } from './tunnel';
@@ -18,6 +18,10 @@ import { startTunnel } from './tunnel';
 
 const DTSERVICEHUB_SERVICE = 'com.apple.instruments.dtservicehub';
 const SCREENSHOT_SERVICE = 'com.apple.instruments.server.services.screenshot';
+// Channel 0 is Apple's well-known control channel — `_notifyOfPublishedCapabilities:`
+// and `_requestChannelWithCode:identifier:` land here. `1` is arbitrary; we
+// pass it to `_requestChannelWithCode:` and Apple binds it to the screenshot
+// service for the remainder of the connection.
 const CONTROL_CHANNEL = 0;
 const SCREENSHOT_CHANNEL = 1;
 
@@ -26,15 +30,19 @@ const DEFAULT_CAPABILITIES: NskaValue = {
   'com.apple.private.DTXConnection': 1,
 };
 
-export class CaptureScreenshotError extends Error {
+class CaptureScreenshotError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'CaptureScreenshotError';
   }
 }
 
-export interface CaptureScreenshotOptions {
-  /** Total budget for the operation. Default 30s. */
+interface CaptureScreenshotOptions {
+  /**
+   * Total wall-clock budget for the operation. Spent across three phases —
+   * tunnel startup, RSD peer-info fetch, DTX dispatch — each given the
+   * remaining budget at the time it runs. Default 30s.
+   */
   timeoutMs?: number;
 }
 
@@ -42,15 +50,21 @@ export const captureScreenshot = async (
   coreDeviceIdentifier: string,
   options: CaptureScreenshotOptions = {}
 ): Promise<Buffer> => {
+  const totalBudgetMs = options.timeoutMs ?? 30_000;
+  const deadline = Date.now() + totalBudgetMs;
+  const remaining = (): number => {
+    return Math.max(1_000, deadline - Date.now());
+  };
+
   const tunnel = await startTunnel(coreDeviceIdentifier, {
-    startupTimeoutMs: options.timeoutMs,
+    startupTimeoutMs: remaining(),
   });
   try {
     const peer = await fetchPeerInfo(
       tunnel.info.deviceAddress,
       tunnel.info.hostAddress,
       tunnel.info.rsdPort,
-      { timeoutMs: options.timeoutMs }
+      { timeoutMs: remaining() }
     );
 
     const hubEntry = peer.services[DTSERVICEHUB_SERVICE];
@@ -62,7 +76,7 @@ export const captureScreenshot = async (
       tunnel.info.deviceAddress,
       tunnel.info.hostAddress,
       hubEntry.port,
-      { timeoutMs: options.timeoutMs }
+      { timeoutMs: remaining() }
     );
 
     try {
@@ -79,30 +93,22 @@ export const captureScreenshot = async (
         { identifier: nextId(), wantsReply: false }
       );
 
-      const channelReply = await dtx.invoke(
+      // Bind SCREENSHOT_CHANNEL → screenshot service. DtxConnection rejects
+      // with DtxConnectionError on an Error reply, so we don't need a
+      // separate branch here.
+      await dtx.invoke(
         CONTROL_CHANNEL,
         encodeNska('_requestChannelWithCode:identifier:'),
         buildDtxAux([dtxInt32(SCREENSHOT_CHANNEL), SCREENSHOT_SERVICE]),
-        { identifier: nextId() }
+        { identifier: nextId(), timeoutMs: remaining() }
       );
-      if (channelReply && channelReply.msgType === DtxMessageType.Error) {
-        throw new CaptureScreenshotError(
-          `Channel open for ${SCREENSHOT_SERVICE} failed (msgType=${channelReply.msgType})`
-        );
-      }
 
       const reply = await dtx.invoke(
         SCREENSHOT_CHANNEL,
         encodeNska('takeScreenshot'),
         Buffer.alloc(0),
-        { identifier: nextId() }
+        { identifier: nextId(), timeoutMs: remaining() }
       );
-      if (!reply) {
-        throw new CaptureScreenshotError('takeScreenshot returned no reply');
-      }
-      if (reply.msgType === DtxMessageType.Error) {
-        throw new CaptureScreenshotError('takeScreenshot returned an Error message');
-      }
 
       const decoded = decodeNska(reply.payload);
       if (!Buffer.isBuffer(decoded)) {

@@ -221,6 +221,20 @@ const classnameOf = (objects: unknown[], obj: ObjectWithClass): string | null =>
   return typeof name === 'string' ? name : null;
 };
 
+// One-time logger for NSKeyedArchive classes we don't have a dedicated
+// unwrap for. Helps surface gaps in the codec without spamming on every
+// reply during a long-running session.
+const warnedUnknownClasses = new Set<string>();
+const warnUnknownClassOnce = (name: string): void => {
+  if (warnedUnknownClasses.has(name)) return;
+  warnedUnknownClasses.add(name);
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[coredevice/nska] Unknown NSKA class "${name}" — falling back to raw dictionary shape. ` +
+      `Add a handler in resolveValue if this should decode to a specific structure.`
+  );
+};
+
 const resolveValue = (objects: unknown[], value: unknown): NskaValue => {
   if (value === null || value === undefined) return null;
   if (typeof value === 'string') {
@@ -279,7 +293,8 @@ const resolveValue = (objects: unknown[], value: unknown): NskaValue => {
       if (typeof n === 'number' || typeof n === 'bigint' || typeof n === 'boolean') return n;
       return null;
     }
-    // Unknown class — return the raw shape as a dictionary, sans $class.
+    // Unknown class — log once, return the raw shape as a dictionary, sans $class.
+    if (name) warnUnknownClassOnce(name);
     const out: Record<string, NskaValue> = {};
     for (const [k, v] of Object.entries(value)) {
       if (k === '$class') continue;

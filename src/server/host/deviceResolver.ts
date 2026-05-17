@@ -77,6 +77,21 @@ export const clearDeviceCache = (): void => {
   androidCache = null;
 };
 
+const XCRUN_MISSING_ERROR =
+  'xcrun not found. iOS host tools require Xcode command line tools (macOS only).';
+const ADB_MISSING_ERROR =
+  'adb not found. Android host tools require Android platform-tools on PATH.';
+
+// Map a thrown error to a user-facing DeviceResolution error. Handles the
+// common ProcessNotFoundError → "install the toolchain" message; everything
+// else gets wrapped as a context-prefixed message.
+const toDeviceError = (err: unknown, context: string, toolMissing: string): DeviceResolution => {
+  if (err instanceof ProcessNotFoundError) {
+    return { error: toolMissing, ok: false };
+  }
+  return { error: `${context}: ${(err as Error).message}`, ok: false };
+};
+
 export const listIosSimulators = async (runner: ProcessRunner): Promise<IosSimulator[]> => {
   if (iosCache && Date.now() - iosCache.timestamp < CACHE_TTL_MS) {
     return iosCache.result;
@@ -265,16 +280,7 @@ const resolveIosRealClient = async (
       ok: false,
     };
   } catch (err) {
-    if (err instanceof ProcessNotFoundError) {
-      return {
-        error: 'xcrun not found. iOS host tools require Xcode command line tools (macOS only).',
-        ok: false,
-      };
-    }
-    return {
-      error: `Failed to list iOS real devices: ${(err as Error).message}`,
-      ok: false,
-    };
+    return toDeviceError(err, 'Failed to list iOS real devices', XCRUN_MISSING_ERROR);
   }
 };
 
@@ -313,16 +319,7 @@ const resolveIosClient = async (
       ok: false,
     };
   } catch (err) {
-    if (err instanceof ProcessNotFoundError) {
-      return {
-        error: 'xcrun not found. iOS host tools require Xcode command line tools (macOS only).',
-        ok: false,
-      };
-    }
-    return {
-      error: `Failed to list iOS simulators: ${(err as Error).message}`,
-      ok: false,
-    };
+    return toDeviceError(err, 'Failed to list iOS simulators', XCRUN_MISSING_ERROR);
   }
 };
 
@@ -358,16 +355,7 @@ const resolveAndroidClient = async (
       ok: false,
     };
   } catch (err) {
-    if (err instanceof ProcessNotFoundError) {
-      return {
-        error: 'adb not found. Android host tools require Android platform-tools on PATH.',
-        ok: false,
-      };
-    }
-    return {
-      error: `Failed to list Android devices: ${(err as Error).message}`,
-      ok: false,
-    };
+    return toDeviceError(err, 'Failed to list Android devices', ADB_MISSING_ERROR);
   }
 };
 
@@ -422,16 +410,7 @@ const scanIosDevices = async (runner: ProcessRunner): Promise<DeviceResolution> 
       ok: false,
     };
   } catch (err) {
-    if (err instanceof ProcessNotFoundError) {
-      return {
-        error: 'xcrun not found. iOS host tools require Xcode command line tools (macOS only).',
-        ok: false,
-      };
-    }
-    return {
-      error: `Failed to list iOS simulators: ${(err as Error).message}`,
-      ok: false,
-    };
+    return toDeviceError(err, 'Failed to list iOS simulators', XCRUN_MISSING_ERROR);
   }
 };
 
@@ -469,16 +448,7 @@ const scanAndroidDevices = async (runner: ProcessRunner): Promise<DeviceResoluti
       ok: false,
     };
   } catch (err) {
-    if (err instanceof ProcessNotFoundError) {
-      return {
-        error: 'adb not found. Android host tools require Android platform-tools on PATH.',
-        ok: false,
-      };
-    }
-    return {
-      error: `Failed to list Android devices: ${(err as Error).message}`,
-      ok: false,
-    };
+    return toDeviceError(err, 'Failed to list Android devices', ADB_MISSING_ERROR);
   }
 };
 
@@ -516,16 +486,7 @@ const resolveIosByUdid = async (udid: string, runner: ProcessRunner): Promise<De
       ok: true,
     };
   } catch (err) {
-    if (err instanceof ProcessNotFoundError) {
-      return {
-        error: 'xcrun not found. iOS host tools require Xcode command line tools (macOS only).',
-        ok: false,
-      };
-    }
-    return {
-      error: `Failed to list iOS simulators: ${(err as Error).message}`,
-      ok: false,
-    };
+    return toDeviceError(err, 'Failed to list iOS simulators', XCRUN_MISSING_ERROR);
   }
 };
 
@@ -566,16 +527,7 @@ const resolveAndroidBySerial = async (
       ok: true,
     };
   } catch (err) {
-    if (err instanceof ProcessNotFoundError) {
-      return {
-        error: 'adb not found. Android host tools require Android platform-tools on PATH.',
-        ok: false,
-      };
-    }
-    return {
-      error: `Failed to list Android devices: ${(err as Error).message}`,
-      ok: false,
-    };
+    return toDeviceError(err, 'Failed to list Android devices', ADB_MISSING_ERROR);
   }
 };
 
