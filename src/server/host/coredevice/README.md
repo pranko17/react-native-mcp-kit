@@ -81,22 +81,12 @@ defers to a follow-up to avoid introducing more native code in the first cut.
 
 Once the keeper reports tunnel up, we need:
 
-- the device's IPv6 address on the tunnel interface
-- the RemoteServiceDiscovery (RSD) port
-
-The canonical source is `log stream`:
-
-```
-log stream --info --predicate 'eventMessage LIKE "*Tunnel established*"
-                              OR eventMessage LIKE "*for server port*"'
-```
-
-A "Tunnel established" message includes the IPv6, and an "RSDPort" message
-includes the port. go-ios's `--address` / `--rsd-port` flags consume exactly
-this pair.
-
-Fallback if logs don't surface: scrape `ifconfig utun*` for the newest interface
-and resolve `<udid>.coredevice.local` via mDNS.
+- the device's IPv6 address on the tunnel interface — **done**, via mDNS
+  resolution of `<udid-lowercased>.coredevice.local`.
+- the RemoteServiceDiscovery (RSD) port — **open**, see PROTOCOL.md for the
+  detailed write-up of dead ends and remaining options. tl;dr: pure piggy-back
+  isn't enough because the RSD port comes from an encrypted handshake on a
+  control channel the OS-managed tunnel doesn't re-export.
 
 ### Layer 3: RSD client (`rsd.ts`) — NOT YET IMPLEMENTED
 
@@ -138,6 +128,45 @@ State after: `tunnelState: connected`, `ddiServicesAvailable: True`,
 a new `utun<N>` interface up with MTU 16000 (the iPhone tunnel).
 
 State degrades to `disconnected` within seconds after the command exits.
+
+## Current status (2026-05-17)
+
+- **Layer 1** (tunnel keeper): working. `xcrun devicectl device info processes`
+  in a tight loop holds the tunnel up.
+- **Layer 2A** (device address): working. mDNS gives us
+  `<udid>.coredevice.local` → tunnel IPv6 once the link is up.
+- **Layer 2B** (RSD port): **open**. The original optimistic estimate that
+  this would fall out of mDNS or `log stream` did not hold. RSD lives behind
+  the device's encrypted control channel and the macOS-side tunnel keeps that
+  port to itself (`<private>` in logs, no mDNS republish on the tunnel
+  interface, plain HTTP/2 preface is rejected by the device's PSK-TLS).
+- **Layers 3–6**: not started, depend on Layer 2B.
+
+## Realistic scope of completing the stack
+
+Once Layer 2B is resolved, the rest of the stack still requires:
+
+- **RemoteXPC framing** (custom HTTP/2 + Apple's binary XPC dict format) —
+  500-800 LoC TS.
+- **DTServiceHub + DTX protocol** (NSKeyedArchiver-compat plists, channel
+  multiplexing, multi-fragment messages) — 1000-1500 LoC TS, including a
+  minimal NSKeyedArchiver encoder/decoder.
+- **DTScreenshotService client** + integration — 100-200 LoC TS.
+
+If Layer 2B requires reimplementing the full pairing handshake (TCP+TLS-PSK
+control channel against `_remotepairing._tcp` on Wi-Fi, plus X25519 ECDH,
+Ed25519 signatures, SRP-6a re-pair, AES-GCM, pair record extraction), add
+another 2000-3000 LoC and a full crypto stack.
+
+If Layer 2B can be resolved by XPC-talking to
+`com.apple.CoreDevice.CoreDeviceService` (the daemon that already holds the
+answer), the rest of the stack still applies, but we save the pairing client.
+The XPC interface is private Swift and undocumented — would need a Swift
+helper binary similar to `ios-hid`. Smaller (~500-1000 LoC Swift) but still
+significant.
+
+The honest estimate for a working end-to-end real-device screenshot via this
+stack is **2-4 weeks of focused work**, not the 1-2 weeks projected initially.
 
 ## Out of scope (for now)
 
