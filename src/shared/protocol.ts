@@ -65,6 +65,7 @@ export interface RegistrationMessage {
   bundleId?: string;
   devServer?: DevServerInfo;
   deviceId?: string;
+  isSimulator?: boolean;
   label?: string;
   platform?: string;
 }

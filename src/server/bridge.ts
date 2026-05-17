@@ -34,6 +34,7 @@ export interface ClientEntry {
   readonly bundleId?: string;
   readonly devServer?: DevServerInfo;
   readonly deviceId?: string;
+  readonly isSimulator?: boolean;
   readonly label?: string;
   readonly platform?: string;
 }
@@ -228,6 +229,7 @@ export class Bridge {
           deviceId: message.deviceId,
           dynamicTools: new Map(),
           id,
+          isSimulator: message.isSimulator,
           label: message.label,
           modules: message.modules,
           platform: message.platform,

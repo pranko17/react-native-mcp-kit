@@ -699,6 +699,7 @@ Useful after wait_until as a checkpoint — the pair reads "do action → wait �
             devServer: client.devServer,
             deviceId: client.deviceId,
             id: client.id,
+            isSimulator: client.isSimulator,
             label: client.label,
             platform: client.platform,
           };

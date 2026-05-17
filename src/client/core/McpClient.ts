@@ -59,6 +59,7 @@ interface ClientIdentity {
   bundleId?: string;
   devServer?: DevServerInfo;
   deviceId?: string;
+  isSimulator?: boolean;
   label?: string;
   platform?: string;
 }
@@ -128,6 +129,7 @@ const autoDetectIdentity = (): ClientIdentity => {
     const model = callDI<string>(DI.getModel);
     const manufacturer = callDI<string>(DI.getManufacturerSync) ?? callDI<string>(DI.getBrand);
     const deviceId = callDI<string>(DI.getUniqueIdSync);
+    const isSimulator = callDI<boolean>(DI.isEmulatorSync);
 
     if (typeof appName === 'string') out.appName = appName;
     if (typeof appVersion === 'string') out.appVersion = appVersion;
@@ -138,6 +140,7 @@ const autoDetectIdentity = (): ClientIdentity => {
       out.label = isUsefulString(manufacturer) ? `${manufacturer} ${model}` : model;
     }
     if (typeof deviceId === 'string') out.deviceId = deviceId;
+    if (typeof isSimulator === 'boolean') out.isSimulator = isSimulator;
   }
 
   return out;
@@ -250,6 +253,7 @@ export class McpClient {
       bundleId: options?.bundleId ?? auto.bundleId,
       devServer: options?.devServer ?? auto.devServer,
       deviceId: options?.deviceId ?? auto.deviceId,
+      isSimulator: auto.isSimulator,
       label: options?.label ?? auto.label,
       platform: options?.platform ?? auto.platform,
     };
@@ -346,6 +350,7 @@ export class McpClient {
       bundleId: this.identity.bundleId,
       devServer: this.identity.devServer,
       deviceId: this.identity.deviceId,
+      isSimulator: this.identity.isSimulator,
       label: this.identity.label,
       modules: descriptors,
       platform: this.identity.platform,
