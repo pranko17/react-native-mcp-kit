@@ -45,6 +45,13 @@ export interface HookMeta {
    * parse cleanly.
    */
   hook?: string;
+  /**
+   * Call-site identity in the same shape as JSX `data-mcp-id`:
+   * `<name>:<shortFile>:<line>`. Lets an agent jump straight to the source
+   * (e.g. `Read("hooks/useCart.ts", 42)`) without grepping. Absent on
+   * entries from bundles compiled before this field was added.
+   */
+  mcpId?: string;
 }
 
 // Flattened entry adds the resolved `via` chain plus an `expanded` flag.
@@ -65,6 +72,7 @@ export interface HooksOptions {
   expansionDepth: number;
   format: 'flat' | 'tree';
   kindsSet: Set<string> | null;
+  mcpIdMatchers: Array<(id: string) => boolean> | null;
   nameMatchers: Array<(n: string) => boolean> | null;
   withValues: boolean;
   // Projection of each hook value when withValues:true. depth/path/maxBytes
@@ -86,6 +94,13 @@ export interface HooksRawOptions {
   format?: 'flat' | 'tree';
   kinds?: string[];
   maxBytes?: number;
+  /**
+   * Filter by hook call-site `mcpId`. Same exact / `/regex/flags` syntax as
+   * `names`. Use the value emitted by the babel plugin
+   * (`<name>:<shortFile>:<line>`) to target one specific call without
+   * having to deal with name collisions or anonymous slots.
+   */
+  mcpIds?: string[];
   names?: string[];
   path?: string;
   withValues?: boolean;
@@ -398,6 +413,7 @@ export interface HookTreeNode {
   name: string;
   children?: HookTreeNode[];
   hook?: string;
+  mcpId?: string;
   value?: unknown;
 }
 
@@ -407,6 +423,7 @@ const flatHooksToTree = (
     name: string;
     expanded?: boolean;
     hook?: string;
+    mcpId?: string;
     value?: unknown;
     via?: string[];
   }>
@@ -420,6 +437,7 @@ const flatHooksToTree = (
     while (parents.length > depth) parents.pop();
     const node: HookTreeNode = { kind: entry.kind, name: entry.name };
     if (entry.hook !== undefined) node.hook = entry.hook;
+    if (entry.mcpId !== undefined) node.mcpId = entry.mcpId;
     if (entry.value !== undefined) node.value = entry.value;
     if (parents.length === 0) {
       root.push(node);
@@ -446,6 +464,7 @@ export type FlatHookEntry = {
   name: string;
   expanded?: boolean;
   hook?: string;
+  mcpId?: string;
   value?: unknown;
   via?: string[];
 };
@@ -513,19 +532,26 @@ export const extractHooks = (
   // advances by 1 in the walker, drifting all trailing entries off the end
   // of the chain.
   const emitEntry = (entry: FlattenedHook, rawValueSlot: unknown): void => {
-    const { hook, kind, name, via } = entry;
+    const { hook, kind, mcpId, name, via } = entry;
     const passesKind = !filter.kindsSet || filter.kindsSet.has(kind);
     const passesName =
       !filter.nameMatchers ||
       filter.nameMatchers.some((m) => {
         return m(name);
       });
-    if (!(passesKind && passesName)) return;
+    const passesMcpId =
+      !filter.mcpIdMatchers ||
+      (mcpId !== undefined &&
+        filter.mcpIdMatchers.some((m) => {
+          return m(mcpId);
+        }));
+    if (!(passesKind && passesName && passesMcpId)) return;
     const record: {
       kind: string;
       name: string;
       expanded?: boolean;
       hook?: string;
+      mcpId?: string;
       value?: unknown;
       via?: string[];
     } = { kind, name };
@@ -534,6 +560,7 @@ export const extractHooks = (
     const resolvedHook =
       hook ?? (typeof entry.fn === 'function' ? (entry.fn.name as string | undefined) : undefined);
     if (resolvedHook) record.hook = resolvedHook;
+    if (mcpId) record.mcpId = mcpId;
     if (filter.withValues && rawValueSlot !== undefined) {
       // Redaction guard: mask the value (but keep kind/name/hook visible)
       // when the entry's name OR any ancestor in `via` matches a redact
@@ -648,6 +675,7 @@ export const buildHooksOptions = (raw: HooksRawOptions | undefined): HooksOption
         : Infinity,
     format: raw?.format === 'tree' ? 'tree' : 'flat',
     kindsSet: Array.isArray(raw?.kinds) ? new Set(raw.kinds) : null,
+    mcpIdMatchers: Array.isArray(raw?.mcpIds) ? raw.mcpIds.map(parseNamePattern) : null,
     nameMatchers: Array.isArray(raw?.names) ? raw.names.map(parseNamePattern) : null,
     valueDepth: typeof raw?.depth === 'number' && raw.depth >= 0 ? raw.depth : undefined,
     valueMaxBytes:

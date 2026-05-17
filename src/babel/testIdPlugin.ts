@@ -103,6 +103,18 @@ const isCapitalized = (name: string | undefined): boolean => {
   );
 };
 
+// Strip the absolute path prefix (anything up to and including the project's
+// `/src/`) and drop the .ts/.tsx/.js/.jsx extension. Same shape components
+// use inside `data-mcp-id` so a hook's `mcpId` and a JSX element's
+// `data-mcp-id` look interchangeable to an agent reading them.
+const getShortFile = (filename: string | null | undefined): string => {
+  const file = filename ?? 'unknown';
+  const relative = file.includes('/src/')
+    ? (file.split('/src/').pop() ?? file)
+    : (file.split('/').pop() ?? file);
+  return relative.replace(/\.(tsx?|jsx?)$/, '');
+};
+
 interface CollectedHook {
   /** Source-level hook function name (`useState`, `useAnimatedStyle`, etc.).
    * Surfaced to the agent alongside `name` (the consuming binding) so it
@@ -119,6 +131,13 @@ interface CollectedHook {
    * multiple built-in slots. Built-in hooks (State/Memo/...) don't need this.
    */
   fnIdent?: string;
+  /**
+   * Call-site identity in the same shape as JSX `data-mcp-id`:
+   * `<name>:<shortFile>:<line>`. Lets an agent `Read(<file>, <line>)`
+   * straight from a hook entry without grepping for the variable name.
+   * Empty when source location isn't available (synthetic AST nodes).
+   */
+  mcpId?: string;
 }
 
 /**
@@ -132,7 +151,9 @@ interface CollectedHook {
  */
 const collectHooksInBody = (
   body: NodePath<BabelTypes.Node>,
-  t: typeof BabelTypes
+  t: typeof BabelTypes,
+  shortFile: string,
+  separator: string
 ): CollectedHook[] => {
   const hooks: CollectedHook[] = [];
   const anonCounters: Record<string, number> = {};
@@ -203,6 +224,10 @@ const collectHooksInBody = (
       }
 
       const entry: CollectedHook = { hook: hookIdent, kind, name: hookName };
+      const line = callPath.node.loc?.start.line;
+      if (line) {
+        entry.mcpId = `${hookName}${separator}${shortFile}${separator}${line}`;
+      }
       if (kind === 'Custom' && !isMemberCall) {
         // Only attach a function reference for direct-identifier calls where
         // we can verify the binding is module-scoped (import / top-level
@@ -241,6 +266,9 @@ const buildHooksArrayExpr = (
         t.objectProperty(t.identifier('kind'), t.stringLiteral(h.kind)),
         t.objectProperty(t.identifier('hook'), t.stringLiteral(h.hook)),
       ];
+      if (h.mcpId) {
+        props.push(t.objectProperty(t.identifier('mcpId'), t.stringLiteral(h.mcpId)));
+      }
       if (h.fnIdent) {
         // fn: useAuth   (runtime reads .__mcp_hooks off this identifier)
         props.push(t.objectProperty(t.identifier('fn'), t.identifier(h.fnIdent)));
@@ -515,6 +543,9 @@ export default function testIdPlugin({ types: t }: { types: typeof BabelTypes })
         if (!id) return;
         const bodyPath = path.get('body');
         const pluginState = state as PluginPassWithQueue;
+        const opts = (state.opts ?? {}) as PluginOptions;
+        const separator = opts.separator ?? ':';
+        const shortFile = getShortFile(state.filename);
 
         // Component: capitalized name + (JSX in body OR hook calls in body).
         // The hook-call branch covers components that legitimately return
@@ -523,14 +554,14 @@ export default function testIdPlugin({ types: t }: { types: typeof BabelTypes })
         // components and custom hooks may call hooks, so a capitalized
         // function that calls them is unambiguously a component.
         if (isCapitalized(id.name) && (bodyUsesJSX(bodyPath) || bodyCallsHook(bodyPath, t))) {
-          const hooks = collectHooksInBody(bodyPath, t);
+          const hooks = collectHooksInBody(bodyPath, t, shortFile, separator);
           queueHooksAssignment(pluginState, path, id.name, hooks);
           return;
         }
 
         // Custom hook: name matches use[A-Z] + body calls at least one hook.
         if (isCustomHookName(id.name) && bodyCallsHook(bodyPath, t)) {
-          const hooks = collectHooksInBody(bodyPath, t);
+          const hooks = collectHooksInBody(bodyPath, t, shortFile, separator);
           queueHooksAssignment(pluginState, path, id.name, hooks);
         }
       },
@@ -559,11 +590,7 @@ export default function testIdPlugin({ types: t }: { types: typeof BabelTypes })
         if (include && !include.includes(componentName)) return;
         if (exclude.includes(componentName)) return;
 
-        const filename = state.filename ?? 'unknown';
-        const relativePath = filename.includes('/src/')
-          ? (filename.split('/src/').pop() ?? filename)
-          : (filename.split('/').pop() ?? filename);
-        const shortFile = relativePath.replace(/\.(tsx?|jsx?)$/, '');
+        const shortFile = getShortFile(state.filename);
         const line = path.node.loc?.start.line ?? 0;
 
         const generatedId = `${componentName}${separator}${shortFile}${separator}${line}`;
@@ -681,12 +708,16 @@ export default function testIdPlugin({ types: t }: { types: typeof BabelTypes })
         }
         if (!bodyPath || !bodyPath.node) return;
 
+        const opts = (state.opts ?? {}) as PluginOptions;
+        const separator = opts.separator ?? ':';
+        const shortFile = getShortFile(state.filename);
+
         // Component: capitalized + (JSX in body OR hook calls). Same
         // rationale as FunctionDeclaration above — Rules of Hooks pin a
         // capitalized hook-calling function to "component", so JSX is
         // sufficient but not necessary (covers `return null` portals).
         if (isCapitalized(id.name) && (bodyUsesJSX(bodyPath) || bodyCallsHook(bodyPath, t))) {
-          const hooks = collectHooksInBody(bodyPath, t);
+          const hooks = collectHooksInBody(bodyPath, t, shortFile, separator);
           const statement = path.getStatementParent();
           if (!statement) return;
           queueHooksAssignment(pluginState, statement, id.name, hooks);
@@ -695,7 +726,7 @@ export default function testIdPlugin({ types: t }: { types: typeof BabelTypes })
 
         // Custom hook: use[A-Z] + body calls hooks.
         if (isCustomHookName(id.name) && bodyCallsHook(bodyPath, t)) {
-          const hooks = collectHooksInBody(bodyPath, t);
+          const hooks = collectHooksInBody(bodyPath, t, shortFile, separator);
           const statement = path.getStatementParent();
           if (!statement) return;
           queueHooksAssignment(pluginState, statement, id.name, hooks);
