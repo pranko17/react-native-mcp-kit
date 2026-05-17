@@ -135,12 +135,39 @@ State degrades to `disconnected` within seconds after the command exits.
   in a tight loop holds the tunnel up.
 - **Layer 2A** (device address): working. mDNS gives us
   `<udid>.coredevice.local` → tunnel IPv6 once the link is up.
-- **Layer 2B** (RSD port): **open**. The original optimistic estimate that
-  this would fall out of mDNS or `log stream` did not hold. RSD lives behind
-  the device's encrypted control channel and the macOS-side tunnel keeps that
-  port to itself (`<private>` in logs, no mDNS republish on the tunnel
-  interface, plain HTTP/2 preface is rejected by the device's PSK-TLS).
-- **Layers 3–6**: not started, depend on Layer 2B.
+- **Layer 2B** (RSD port): **working**. Parsed from
+  `log show --predicate 'eventMessage CONTAINS "for server port"'`. The
+  `Creating RSD backend client device for server port <N>` line is the only
+  one that doesn't get redacted as `<private>`. The port is dynamic per
+  tunnel session.
+- **Layer 3** (RSD client): **working in Python prototype** (`probe.py`). Key
+  insight: bind the source socket to the Mac end of the tunnel
+  (`fd<prefix>::2` from `ifconfig utun<N>`). Without that source bind, plain
+  TCP gets reset. WITH the bind, RSD speaks plain HTTP/2 over plain TCP —
+  no TLS-PSK needed because we're already inside the encrypted tunnel.
+  The handshake produces the full peer_info dict including a Services
+  mapping (74 entries on iOS 26.5).
+- **Layers 4–6**: not started.
+
+## Service discovery output (iOS 26.5, observed)
+
+The Services dict returned by RSD does NOT include
+`com.apple.mobile.screenshotr`. Apple removed it from RSD on the modern
+stack. Candidates for taking a screenshot through the discovered services:
+
+- `com.apple.instruments.dtservicehub` — DTServiceHub. Hosts a screenshot
+  channel internally (`com.apple.instruments.server.services.screenshot`).
+  Requires DTX protocol + a minimal NSKeyedArchiver
+  encoder/decoder for the payload.
+- `com.apple.mobile.lockdown.remote.trusted` — modern trusted-lockdownd shim.
+  If it speaks the legacy lockdownd plist protocol, `StartService(name:
+  "com.apple.mobile.screenshotr")` might still return a port for the
+  legacy DDI screenshotr (which is dormant but startable). Smaller protocol
+  surface; worth probing before committing to DTX.
+- `com.apple.dt.testmanagerd.remote` / `.remote.automation` — XCTest harness.
+  Heavy. WebDriverAgent-style. Out of scope for "just take a screenshot".
+
+The lockdownd path is the next thing to try in a follow-up session.
 
 ## Realistic scope of completing the stack
 

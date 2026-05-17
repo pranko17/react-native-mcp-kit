@@ -16,9 +16,24 @@ Upstream files to cross-reference if something doesn't line up:
 
 Apple-flavored HTTP/2-like protocol over TCP/IPv6.
 
-**On iOS 26 / CoreDevice tunnels the RSD port is dynamic, not 58783.** The
-pymobiledevice3 default of 58783 is the legacy port and is not reachable on
-modern devices.
+**Status: Layer 3 is solved.** End-to-end Python prototype connects to RSD on
+the macOS-managed tunnel and pulls the full peer_info Services dict (74
+entries on iOS 26.5). The breakthrough was binding the source socket to the
+Mac end of the tunnel (`fd<prefix>::2`, from `ifconfig utun<N>`). Without that
+bind, plain TCP gets reset — the device only accepts connections sourced
+from its tunnel peer.
+
+**RSD port is dynamic.** The pymobiledevice3 default of 58783 is the legacy
+port and is not reachable on modern devices. Discovery is via `log stream`:
+
+```
+log show --last 30s --info --debug \
+  --predicate 'eventMessage CONTAINS "for server port"'
+```
+
+The line `remotepairingd: ...: Creating RSD backend client device for server
+port <N>` exposes the port. (Many other log predicates redact it as
+`<private>`; this one slips through.)
 
 **Discovery is harder than expected — the port lives behind the encrypted
 control channel.** Concretely, in pymobiledevice3's `tunnel_service.py`
