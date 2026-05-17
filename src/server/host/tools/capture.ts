@@ -321,10 +321,21 @@ Use fiber_tree bounds for tap targeting; screenshots are for visual verification
         description:
           'Crop rectangle in original device pixels (top-left origin). Out-of-bounds values are clipped. Typical use: pass fiber_tree bounds ({ x, y, width, height }) to snapshot just one component. Omitted = full screen.',
         examples: [{ height: 128, width: 900, x: 60, y: 200 }],
+        properties: {
+          height: { exclusiveMinimum: 0, type: 'number' },
+          width: { exclusiveMinimum: 0, type: 'number' },
+          x: { minimum: 0, type: 'number' },
+          y: { minimum: 0, type: 'number' },
+        },
+        required: ['x', 'y', 'width', 'height'],
         type: 'object',
       },
       width: {
-        description: `Output width in image pixels (aspect ratio preserved, applied AFTER cropping). Default ${SCREENSHOT_DEFAULT_WIDTH}, clamped ${SCREENSHOT_MIN_WIDTH}..${SCREENSHOT_MAX_WIDTH}. Bump up only if you need to read small text.`,
+        default: SCREENSHOT_DEFAULT_WIDTH,
+        description:
+          'Output width in px (aspect preserved, applied AFTER cropping). Default reads normal UI at ~300 vision tokens; bump only to read small text.',
+        maximum: SCREENSHOT_MAX_WIDTH,
+        minimum: SCREENSHOT_MIN_WIDTH,
         type: 'number',
       },
       ...NATIVE_ID_SCHEMA,

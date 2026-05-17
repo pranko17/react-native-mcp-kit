@@ -44,12 +44,27 @@ export const alertModule = (): McpModule => {
         },
         inputSchema: {
           buttons: {
-            description: 'Buttons — string or { text, style? }. style: default|cancel|destructive.',
+            default: [{ text: 'OK' }],
+            description: 'Buttons — string or { text, style? }.',
             examples: [['OK'], ['Cancel', 'OK'], [{ style: 'destructive', text: 'Delete' }]],
+            items: {
+              oneOf: [
+                { type: 'string' },
+                {
+                  properties: {
+                    style: { enum: ['default', 'cancel', 'destructive'], type: 'string' },
+                    text: { type: 'string' },
+                  },
+                  required: ['text'],
+                  type: 'object',
+                },
+              ],
+            },
+            minItems: 1,
             type: 'array',
           },
-          message: { description: 'Alert body.', type: 'string' },
-          title: { description: 'Alert title.', type: 'string' },
+          message: { default: '', description: 'Alert body.', type: 'string' },
+          title: { default: 'Alert', description: 'Alert title.', type: 'string' },
         },
         timeout: ALERT_TIMEOUT,
       },

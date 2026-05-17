@@ -97,11 +97,13 @@ On unmounted: { error: "fiber has no measurable host view", mcpId?, name }.`,
       },
       index: {
         description: 'Pick the Nth match when the chain returns multiple (0-based).',
+        minimum: 0,
         type: 'number',
       },
       steps: {
         description: 'Same shape as fiber_tree__query steps — ordered criteria + optional scope.',
         examples: [[{ testID: 'searchBar' }], [{ name: 'HomeScreen' }, { testID: 'addToCartBtn' }]],
+        minItems: 1,
         type: 'array',
       },
     },

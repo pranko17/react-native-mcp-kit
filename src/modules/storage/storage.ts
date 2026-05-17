@@ -64,8 +64,11 @@ key→value object (default depth ${ALL_DEFAULT_DEPTH}). Both accept path / dept
           return { key: args.key, success: true };
         },
         inputSchema: {
-          key: { description: 'Key to delete.', type: 'string' },
-          storage: { description: 'Storage name (default: first).', type: 'string' },
+          key: { description: 'Key to delete.', minLength: 1, type: 'string' },
+          storage: {
+            description: 'Storage name. Defaults to the first registered storage.',
+            type: 'string',
+          },
         },
       },
       get_all: {
@@ -88,7 +91,10 @@ key→value object (default depth ${ALL_DEFAULT_DEPTH}). Both accept path / dept
         },
         inputSchema: {
           ...ALL_SCHEMA,
-          storage: { description: 'Storage name (default: first).', type: 'string' },
+          storage: {
+            description: 'Storage name. Defaults to the first registered storage.',
+            type: 'string',
+          },
         },
       },
       get_item: {
@@ -107,8 +113,11 @@ key→value object (default depth ${ALL_DEFAULT_DEPTH}). Both accept path / dept
         },
         inputSchema: {
           ...ITEM_SCHEMA,
-          key: { description: 'Key to read.', type: 'string' },
-          storage: { description: 'Storage name (default: first).', type: 'string' },
+          key: { description: 'Key to read.', minLength: 1, type: 'string' },
+          storage: {
+            description: 'Storage name. Defaults to the first registered storage.',
+            type: 'string',
+          },
         },
       },
       list_keys: {
@@ -120,7 +129,10 @@ key→value object (default depth ${ALL_DEFAULT_DEPTH}). Both accept path / dept
           return { keys: await storage.getAllKeys() };
         },
         inputSchema: {
-          storage: { description: 'Storage name (default: first).', type: 'string' },
+          storage: {
+            description: 'Storage name. Defaults to the first registered storage.',
+            type: 'string',
+          },
         },
       },
       list_storages: {
@@ -147,8 +159,11 @@ key→value object (default depth ${ALL_DEFAULT_DEPTH}). Both accept path / dept
           return { key: args.key, success: true };
         },
         inputSchema: {
-          key: { description: 'Key to set.', type: 'string' },
-          storage: { description: 'Storage name (default: first).', type: 'string' },
+          key: { description: 'Key to set.', minLength: 1, type: 'string' },
+          storage: {
+            description: 'Storage name. Defaults to the first registered storage.',
+            type: 'string',
+          },
           value: { description: 'Value (string or JSON-serializable).', type: 'string' },
         },
       },

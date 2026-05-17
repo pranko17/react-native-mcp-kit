@@ -203,15 +203,17 @@ errorsModule options.`,
           since: {
             description: 'ISO timestamp — only entries at or after this point.',
             examples: ['2026-04-19T22:00:00.000Z'],
+            format: 'date-time',
             type: 'string',
           },
           source: {
             description: 'Filter by source.',
-            examples: ['global', 'promise'],
+            enum: ['global', 'promise'],
             type: 'string',
           },
           until: {
             description: 'ISO timestamp — only entries at or before this point.',
+            format: 'date-time',
             type: 'string',
           },
         },

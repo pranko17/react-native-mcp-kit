@@ -117,9 +117,8 @@ LEVELS
         },
         inputSchema: {
           level: {
-            description:
-              'Optional level filter. Omit (or pass "all") to clear every row. Accepts "warn" / "error" / "syntax".',
-            examples: ['all', 'warn', 'error', 'syntax'],
+            description: 'Optional level filter. Omit (or pass "all") to clear every row.',
+            enum: ['all', 'warn', 'error', 'syntax'],
             type: 'string',
           },
         },
@@ -142,6 +141,7 @@ LEVELS
         inputSchema: {
           index: {
             description: '0-based row index from get_logs.',
+            minimum: 0,
             type: 'number',
           },
         },
@@ -170,7 +170,7 @@ LEVELS
           ...PROJECTION_SCHEMA,
           level: {
             description: 'Filter by level.',
-            examples: ['warn', 'error', 'fatal', 'syntax'],
+            enum: ['warn', 'error', 'fatal', 'syntax'],
             type: 'string',
           },
         },
@@ -195,6 +195,8 @@ LEVELS
               ['VirtualizedLists should never be nested'],
               ['/^Warning: /', '/useNativeDriver/i'],
             ],
+            items: { type: 'string' },
+            minItems: 1,
             type: 'array',
           },
         },
@@ -208,7 +210,8 @@ LEVELS
         },
         inputSchema: {
           value: {
-            description: 'true to mute all logs (default), false to unmute.',
+            default: true,
+            description: 'true to mute all logs, false to unmute.',
             type: 'boolean',
           },
         },

@@ -231,8 +231,10 @@ ACTIONS
         },
         inputSchema: {
           select: {
-            description: `Optional list of fields to return. Default = all. Known fields: ${INFO_FIELDS.join(' / ')}. identity / app / battery / memoryStorage require react-native-device-info; they return { unavailable: true, reason } when the package isn't installed.`,
+            description: `Optional list of fields to return. Omit for all. identity / app / battery / memoryStorage require react-native-device-info; they return { unavailable: true, reason } when the package isn't installed.`,
             examples: [['battery'], ['identity', 'app'], ['platform', 'dimensions']],
+            items: { enum: INFO_FIELDS, type: 'string' },
+            minItems: 1,
             type: 'array',
           },
         },
@@ -260,11 +262,17 @@ ACTIONS
         },
         inputSchema: {
           dryRun: {
+            default: false,
             description:
-              'When true, only check Linking.canOpenURL and return `{ canOpen, url }` without opening. Default false.',
+              'When true, only check Linking.canOpenURL and return `{ canOpen, url }` without opening.',
             type: 'boolean',
           },
-          url: { description: 'URL to open (or check, when dryRun:true).', type: 'string' },
+          url: {
+            description: 'URL to open (or check, when dryRun:true).',
+            examples: ['https://example.com', 'myapp://settings'],
+            minLength: 1,
+            type: 'string',
+          },
         },
       },
       reload: {
@@ -284,7 +292,12 @@ ACTIONS
           return { success: true };
         },
         inputSchema: {
-          duration: { description: 'Duration in ms (default: 400).', type: 'number' },
+          duration: {
+            default: 400,
+            description: 'Duration in ms.',
+            minimum: 0,
+            type: 'number',
+          },
         },
       },
     },

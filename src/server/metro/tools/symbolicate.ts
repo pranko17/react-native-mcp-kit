@@ -199,17 +199,21 @@ TOKEN-SAVING DEFAULTS
         type: 'array',
       },
       fullPaths: {
-        description:
-          'Return absolute file paths instead of ones relative to the MCP server cwd. Default false.',
+        default: false,
+        description: 'Return absolute file paths instead of ones relative to the MCP server cwd.',
         type: 'boolean',
       },
       includeFrameworkFrames: {
+        default: false,
         description:
-          'Keep node_modules / React Native internal frames (marked collapse: true by Metro). Default false — framework noise is dropped to save tokens.',
+          'Keep node_modules / React Native internal frames (marked collapse: true by Metro). Framework noise is dropped by default to save tokens.',
         type: 'boolean',
       },
       maxFrames: {
-        description: `Max frames to return after filtering (top-down). Default ${DEFAULT_MAX_FRAMES}, max ${MAX_FRAMES_CEILING}.`,
+        default: DEFAULT_MAX_FRAMES,
+        description: 'Max frames to return after filtering (top-down).',
+        maximum: MAX_FRAMES_CEILING,
+        minimum: 1,
         type: 'number',
       },
       metroUrl: {

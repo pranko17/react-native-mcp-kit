@@ -52,6 +52,7 @@ Each event: \`{ id, receivedAt, type, data }\`; \`data\` is the raw Metro payloa
       },
       since: {
         description: 'Only return events with `receivedAt >= since` (ms since epoch).',
+        minimum: 0,
         type: 'number',
       },
       type: {

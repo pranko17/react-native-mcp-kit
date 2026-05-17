@@ -136,7 +136,7 @@ consoleModule options.`,
           ...PROJECTION_SCHEMA,
           level: {
             description: 'Filter by level. Omit for all levels.',
-            examples: ['log', 'warn', 'error', 'info', 'debug'],
+            enum: ALL_LEVELS,
             type: 'string',
           },
         },

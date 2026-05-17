@@ -60,15 +60,30 @@ export interface ProjectResult {
 // to keep `describe_tool` payloads small.
 export const makeProjectionSchema = (
   defaultDepth: number = DEFAULT_DEPTH
-): Record<string, { description: string; type: string; examples?: unknown[] }> => {
+): Record<
+  string,
+  {
+    description: string;
+    type: string;
+    default?: unknown;
+    examples?: unknown[];
+    maximum?: number;
+    minimum?: number;
+  }
+> => {
   return {
     depth: {
-      description: `Expansion depth (default ${defaultDepth}, max ${MAX_DEPTH}). See server instructions § Path-based drill.`,
+      default: defaultDepth,
+      description: 'Expansion depth. See server instructions § Path-based drill.',
       examples: [1, 3, 8],
+      maximum: MAX_DEPTH,
+      minimum: 0,
       type: 'number',
     },
     maxBytes: {
-      description: `Soft byte cap (default ${DEFAULT_MAX_BYTES}). See server instructions § Path-based drill.`,
+      default: DEFAULT_MAX_BYTES,
+      description: 'Soft byte cap. See server instructions § Path-based drill.',
+      minimum: 1,
       type: 'number',
     },
     path: {

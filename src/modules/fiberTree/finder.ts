@@ -20,7 +20,9 @@ import { findAllByQuery, getFiberRoot } from './utils';
  */
 export const FIND_SCHEMA = {
   index: {
-    description: '0-based index when several components match (default: 0).',
+    default: 0,
+    description: '0-based index when several components match.',
+    minimum: 0,
     type: 'number',
   },
   mcpId: { description: 'Stable data-mcp-id to match.', type: 'string' },

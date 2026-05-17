@@ -225,8 +225,8 @@ ACTIONS
         inputSchema: {
           ...ROUTE_SCHEMA,
           withState: {
-            description:
-              "Include the focused route's full state (key, nested navigator state). Default false.",
+            default: false,
+            description: "Include the focused route's full state (key, nested navigator state).",
             type: 'boolean',
           },
         },
@@ -295,12 +295,13 @@ ACTIONS
         },
         inputSchema: {
           mode: {
-            description: 'How to enter the stack. Default "reuse".',
+            default: 'reuse',
+            description: 'How to enter the stack.',
             enum: ['reuse', 'push', 'replace'],
             type: 'string',
           },
           params: { description: 'Optional route params.', type: 'object' },
-          screen: { description: 'Screen name to enter.', type: 'string' },
+          screen: { description: 'Screen name to enter.', minLength: 1, type: 'string' },
         },
       },
       pop: {
@@ -361,10 +362,23 @@ ACTIONS
           };
         },
         inputSchema: {
-          index: { description: 'Active route index (default: last).', type: 'number' },
+          index: {
+            description: 'Active route index. Defaults to last route.',
+            minimum: 0,
+            type: 'number',
+          },
           routes: {
             description: 'Routes list.',
             examples: [[{ name: 'Home' }, { name: 'Profile', params: { id: 42 } }]],
+            items: {
+              properties: {
+                name: { type: 'string' },
+                params: { type: 'object' },
+              },
+              required: ['name'],
+              type: 'object',
+            },
+            minItems: 1,
             type: 'array',
           },
         },

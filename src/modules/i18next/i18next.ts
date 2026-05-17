@@ -43,6 +43,7 @@ flat.`,
           language: {
             description: 'Language code.',
             examples: ['en', 'de', 'fr'],
+            minLength: 1,
             type: 'string',
           },
         },
@@ -67,8 +68,14 @@ flat.`,
           return { keys: flattenKeys(resource), language: lng, namespace: ns };
         },
         inputSchema: {
-          language: { description: 'Language code (default: current).', type: 'string' },
-          namespace: { description: 'Namespace (default: first registered).', type: 'string' },
+          language: {
+            description: 'Language code. Defaults to the current language.',
+            type: 'string',
+          },
+          namespace: {
+            description: 'Namespace. Defaults to the first registered namespace.',
+            type: 'string',
+          },
         },
       },
       get_resource: {
@@ -81,8 +88,14 @@ flat.`,
           return { language: lng, namespace: ns, resource };
         },
         inputSchema: {
-          language: { description: 'Language code (default: current).', type: 'string' },
-          namespace: { description: 'Namespace (default: first registered).', type: 'string' },
+          language: {
+            description: 'Language code. Defaults to the current language.',
+            type: 'string',
+          },
+          namespace: {
+            description: 'Namespace. Defaults to the first registered namespace.',
+            type: 'string',
+          },
         },
       },
       search: {
@@ -106,8 +119,15 @@ flat.`,
           return results;
         },
         inputSchema: {
-          language: { description: 'Language code (default: current).', type: 'string' },
-          query: { description: 'Substring to match against keys and values.', type: 'string' },
+          language: {
+            description: 'Language code. Defaults to the current language.',
+            type: 'string',
+          },
+          query: {
+            description: 'Substring to match against keys and values.',
+            minLength: 1,
+            type: 'string',
+          },
         },
       },
       translate: {
@@ -128,6 +148,7 @@ flat.`,
           key: {
             description: 'Translation key.',
             examples: ['auth:login.title', 'common:ok'],
+            minLength: 1,
             type: 'string',
           },
           options: {

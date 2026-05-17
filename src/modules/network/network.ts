@@ -428,7 +428,7 @@ redaction lists are configurable via networkModule options.`,
           },
           status: {
             description: 'Status filter.',
-            examples: ['pending', 'success', 'error'],
+            enum: ['pending', 'success', 'error'],
             type: 'string',
           },
           url: { description: 'URL substring filter.', type: 'string' },

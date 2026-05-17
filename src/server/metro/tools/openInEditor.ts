@@ -64,17 +64,20 @@ Returns { ok: true, file, lineNumber, metroUrl } on success.`,
         type: 'string',
       },
       column: {
-        description: 'Column number (1-based). Optional.',
+        description: 'Column number (1-based).',
+        minimum: 1,
         type: 'number',
       },
       file: {
         description:
           'Absolute or repo-relative path to the source file. Paths from metro__symbolicate output plug in directly.',
         examples: ['src/screens/HomeScreen/HomeScreen.tsx', '/Users/me/project/src/Foo.tsx'],
+        minLength: 1,
         type: 'string',
       },
       lineNumber: {
         description: 'Line number (1-based).',
+        minimum: 1,
         type: 'number',
       },
       metroUrl: {

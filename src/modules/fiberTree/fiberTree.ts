@@ -429,20 +429,27 @@ TIPS
         },
         inputSchema: {
           cache: {
+            default: true,
             description:
-              'Reuse the match set when the React tree has not committed since the previous identical steps — detected via fiber root pointer equality. Default true; pass false to force a fresh traversal.',
+              'Reuse the match set when the React tree has not committed since the previous identical steps — detected via fiber root pointer equality. Pass false to force a fresh traversal.',
             type: 'boolean',
           },
           dedup: {
+            default: true,
             description:
-              'Drop wrapper cascades — a fiber is removed when any of its ancestors is also in the match set (PressableView → Pressable → View → RCTView collapses to the topmost). Independent siblings with overlapping bounds are kept. Default true; pass false to keep every match.',
+              'Drop wrapper cascades — a fiber is removed when any of its ancestors is also in the match set (PressableView → Pressable → View → RCTView collapses to the topmost). Independent siblings with overlapping bounds are kept. Pass false to keep every match.',
             type: 'boolean',
           },
           limit: {
-            description: `Max matches to return (default ${QUERY_LIMIT_DEFAULT}, max ${QUERY_LIMIT_MAX}). truncated: true is added when total exceeds limit.`,
+            default: QUERY_LIMIT_DEFAULT,
+            description:
+              'Max matches to return. truncated: true is added when total exceeds limit.',
+            maximum: QUERY_LIMIT_MAX,
+            minimum: 1,
             type: 'number',
           },
           onlyVisible: {
+            default: false,
             description:
               'Drop matches whose measured bounds do not intersect the current window rectangle (physical pixels). Also drops fibers with no measurable host view — usually virtualized or unmounted. Halves results on long lists.',
             type: 'boolean',
@@ -473,15 +480,44 @@ TIPS
               [{ testID: 'favorite-icon' }, { index: 0, name: 'ProductCard', scope: 'ancestors' }],
               [{ props: { placeholder: { contains: 'Search' } } }],
             ],
+            minItems: 1,
             type: 'array',
           },
           waitFor: {
-            description: `Poll the query until a predicate holds, instead of reading once. \`until\` selects the target state: "appear" waits for \`total >= 1\`, "disappear" waits for \`total === 0\`. \`timeout\` (default ${WAIT_TIMEOUT_DEFAULT}ms, max ${WAIT_TIMEOUT_MAX}ms) caps the wait. \`interval\` (default ${WAIT_INTERVAL_DEFAULT}ms, min ${WAIT_INTERVAL_MIN}ms) is the gap between polls. \`stable\` (default 0) requires the predicate to hold continuously for this many ms before returning — useful to ignore transient matches during screen transitions. Cache is always bypassed while polling. On success the response carries the usual query fields plus \`{ waited: true, until, attempts, elapsedMs, timedOut: false, stableFor? }\`; on timeout \`timedOut: true\` with the last observed matches.`,
+            description: `Poll the query until a predicate holds, instead of reading once. \`until\` selects the target state: "appear" waits for \`total >= 1\`, "disappear" waits for \`total === 0\`. \`timeout\` caps the wait. \`interval\` is the gap between polls. \`stable\` requires the predicate to hold continuously for this many ms before returning — useful to ignore transient matches during screen transitions. Cache is always bypassed while polling. On success the response carries the usual query fields plus \`{ waited: true, until, attempts, elapsedMs, timedOut: false, stableFor? }\`; on timeout \`timedOut: true\` with the last observed matches.`,
             examples: [
               { until: 'appear' },
               { timeout: 5000, until: 'disappear' },
               { interval: 200, stable: 500, until: 'appear' },
             ],
+            properties: {
+              interval: {
+                default: WAIT_INTERVAL_DEFAULT,
+                description: 'Gap between polls in milliseconds.',
+                minimum: WAIT_INTERVAL_MIN,
+                type: 'number',
+              },
+              stable: {
+                default: 0,
+                description:
+                  'Require the predicate to hold continuously for this many ms before returning.',
+                minimum: 0,
+                type: 'number',
+              },
+              timeout: {
+                default: WAIT_TIMEOUT_DEFAULT,
+                description: 'Max wait in milliseconds.',
+                maximum: WAIT_TIMEOUT_MAX,
+                minimum: 1,
+                type: 'number',
+              },
+              until: {
+                description: 'Target state to wait for.',
+                enum: ['appear', 'disappear'],
+                type: 'string',
+              },
+            },
+            required: ['until'],
             type: 'object',
           },
         },
