@@ -2,20 +2,18 @@ import { type Socket, createConnection } from 'node:net';
 
 import { XpcFlags, type XpcValue, buildXpcWrapper, parseXpcWrapper } from './xpc';
 
-// Minimal HTTP/2 client tailored to Apple's RemoteServiceDiscoveryProxy.
+// HTTP/2-framed client for Apple's RemoteServiceDiscoveryProxy.
 //
-// RSD uses HTTP/2 framing but not HTTP/2 semantics:
-// - no HEADERS payload (`flags: END_HEADERS`, no header blocks)
-// - DATA frames carry XPC wrappers, not HTTP message bodies
+// RSD uses HTTP/2 framing but not HTTP/2 semantics — HEADERS frames are
+// empty (`END_HEADERS` flag, no header block), DATA frames carry
+// XpcWrapper payloads. Node's built-in `http2` enforces HTTP semantics
+// so we frame the bytes ourselves.
 //
-// Node's built-in `http2` module enforces HTTP semantics, so we frame the
-// bytes ourselves. The handshake we send mirrors what we observed on the
-// wire from `xcrun devicectl` and `pymobiledevice3`.
-//
-// We're inside the encrypted CoreDevice tunnel — no TLS-PSK wrapper is
-// needed. The catch: the source socket address must be the Mac end of the
-// tunnel (`fd<…>::2`). Default routing picks the wrong utun on hosts with
-// multiple tunnels (Tailscale, WireGuard, …).
+// We're inside the encrypted CoreDevice tunnel, so no TLS wrapper is
+// needed. The catch: sockets MUST source-bind to the Mac end of the
+// tunnel (`fd<...>::2`, from `ifconfig utun<N>`) or kernel routing on
+// hosts with multiple tunnels (Tailscale, WireGuard, …) picks the wrong
+// utun and the device resets the connection.
 
 const HTTP2_PREFACE = Buffer.from('PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n');
 
@@ -38,7 +36,6 @@ const REPLY_CHANNEL_STREAM = 3;
 const buildH2Frame = (type: number, flags: number, streamId: number, payload: Buffer): Buffer => {
   const header = Buffer.alloc(9);
   const length = payload.length;
-  // 24-bit length, big-endian
   header[0] = (length >>> 16) & 0xff;
   header[1] = (length >>> 8) & 0xff;
   header[2] = length & 0xff;
@@ -78,8 +75,6 @@ interface H2Frame {
   type: number;
 }
 
-// Stream-style H2 frame parser. Holds onto a buffer of bytes; pop complete
-// frames off the front as they arrive.
 class H2FrameReader {
   private buffer = Buffer.alloc(0);
 
@@ -103,31 +98,26 @@ class H2FrameReader {
 }
 
 export interface RsdServiceEntry {
-  /**
-   * The port the service listens on inside the tunnel. RSD encodes this as
-   * a string for historical reasons; we parse to number.
-   */
+  /** Port the service listens on inside the tunnel. RSD encodes this as a string; we parse to number. */
   port: number;
-  /** Optional metadata Apple ships per-service. Includes UsesRemoteXPC, EnableServiceSSL, Entitlement, etc. */
+  /** Per-service metadata: `UsesRemoteXPC`, `EnableServiceSSL`, `Entitlement`, … */
   properties: Record<string, XpcValue>;
 }
 
 export interface PeerInfo {
   /** Device-level properties (OS version, build, ECID, …). */
   properties: Record<string, XpcValue>;
-  /** Service-name → entry. */
+  /** Service name → entry. */
   services: Record<string, RsdServiceEntry>;
 }
 
-export class RsdHandshakeError extends Error {
+class RsdHandshakeError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'RsdHandshakeError';
   }
 }
 
-// Walks the concatenated XpcWrapper bytes from a stream's DATA frames and
-// returns the first one that contains a payload dict with a `Services` key.
 const findPeerInfoDict = (stream1Bytes: Buffer): Record<string, XpcValue> | null => {
   let offset = 0;
   while (offset + 16 <= stream1Bytes.length) {
@@ -152,46 +142,27 @@ const findPeerInfoDict = (stream1Bytes: Buffer): Record<string, XpcValue> | null
   return null;
 };
 
+const asRecord = (value: XpcValue | undefined): Record<string, XpcValue> => {
+  return value && typeof value === 'object' && !Array.isArray(value) && !Buffer.isBuffer(value)
+    ? (value as Record<string, XpcValue>)
+    : {};
+};
+
 const normalisePeerInfo = (dict: Record<string, XpcValue>): PeerInfo => {
   const services: Record<string, RsdServiceEntry> = {};
-  const rawServices = dict.Services;
-  if (
-    rawServices &&
-    typeof rawServices === 'object' &&
-    !Array.isArray(rawServices) &&
-    !Buffer.isBuffer(rawServices)
-  ) {
-    for (const [name, raw] of Object.entries(rawServices as Record<string, XpcValue>)) {
-      if (!raw || typeof raw !== 'object' || Array.isArray(raw) || Buffer.isBuffer(raw)) continue;
-      const entry = raw as Record<string, XpcValue>;
-      const portRaw = entry.Port;
-      const port =
-        typeof portRaw === 'string'
+  for (const [name, raw] of Object.entries(asRecord(dict.Services))) {
+    const entry = asRecord(raw);
+    const portRaw = entry.Port;
+    const port =
+      typeof portRaw === 'string'
+        ? Number(portRaw)
+        : typeof portRaw === 'bigint'
           ? Number(portRaw)
-          : typeof portRaw === 'bigint'
-            ? Number(portRaw)
-            : NaN;
-      if (!Number.isFinite(port)) continue;
-      const propsRaw = entry.Properties;
-      const properties =
-        propsRaw &&
-        typeof propsRaw === 'object' &&
-        !Array.isArray(propsRaw) &&
-        !Buffer.isBuffer(propsRaw)
-          ? (propsRaw as Record<string, XpcValue>)
-          : {};
-      services[name] = { port, properties };
-    }
+          : NaN;
+    if (!Number.isFinite(port)) continue;
+    services[name] = { port, properties: asRecord(entry.Properties) };
   }
-  const rawProps = dict.Properties;
-  const properties =
-    rawProps &&
-    typeof rawProps === 'object' &&
-    !Array.isArray(rawProps) &&
-    !Buffer.isBuffer(rawProps)
-      ? (rawProps as Record<string, XpcValue>)
-      : {};
-  return { properties, services };
+  return { properties: asRecord(dict.Properties), services };
 };
 
 export interface FetchPeerInfoOptions {
@@ -199,9 +170,9 @@ export interface FetchPeerInfoOptions {
   timeoutMs?: number;
 }
 
-// One-shot: open a TCP connection to RSD, run the handshake, parse the
-// peer_info dict, close. For long-lived RSD usage we'd factor an
-// `RsdConnection` class out of this; not needed yet.
+// Open a TCP connection to the RSD port, run the HTTP/2 + RemoteXPC
+// handshake, parse the `peer_info` dict the device sends back on stream
+// 1, close.
 export const fetchPeerInfo = async (
   deviceAddress: string,
   hostAddress: string,
@@ -214,20 +185,15 @@ export const fetchPeerInfo = async (
   return new Promise<PeerInfo>((resolve, reject) => {
     let socket: Socket;
     try {
-      // No `family: 6` here — the IPv6 literal in `host` is enough, and
-      // specifying it explicitly has been observed to cause the device to
-      // close the connection prematurely (got SETTINGS only, then RST).
-      socket = createConnection({
-        host: deviceAddress,
-        localAddress: hostAddress,
-        port: rsdPort,
-      });
+      // Don't pass `family: 6` here — the IPv6 literal in `host` is
+      // sufficient, and specifying it explicitly causes the device to
+      // send SETTINGS once and then RST the connection.
+      socket = createConnection({ host: deviceAddress, localAddress: hostAddress, port: rsdPort });
     } catch (err) {
       reject(err);
       return;
     }
 
-    const stream1 = Buffer.alloc(0);
     const stream1Chunks: Buffer[] = [];
     const reader = new H2FrameReader();
     let settled = false;
@@ -249,29 +215,24 @@ export const fetchPeerInfo = async (
     }, deadline - Date.now());
 
     socket.on('connect', () => {
-      // Send the full handshake in one batch. We don't wait for the server's
-      // SETTINGS first because Apple's RSD doesn't strictly require it and
-      // doing it inline saves a round-trip.
-      const handshake = Buffer.concat([
-        HTTP2_PREFACE,
-        buildSettingsFrame(),
-        buildWindowUpdateFrame(0, 983041),
-        buildEmptyHeadersFrame(ROOT_CHANNEL_STREAM),
-        buildDataFrame(
-          ROOT_CHANNEL_STREAM,
-          // Send an empty XPC dict to invite the peer to publish its
-          // Services list back to us. Apple's convention is to set
-          // DATA_PRESENT only when the dict has keys; an empty dict ships
-          // with ALWAYS_SET alone.
-          buildXpcWrapper(XpcFlags.ALWAYS_SET, 0n, {})
-        ),
-        buildEmptyHeadersFrame(REPLY_CHANNEL_STREAM),
-        buildDataFrame(
-          REPLY_CHANNEL_STREAM,
-          buildXpcWrapper(XpcFlags.ALWAYS_SET | XpcFlags.INIT_HANDSHAKE, 0n, null)
-        ),
-      ]);
-      socket.write(handshake);
+      // Apple's RSD accepts the whole handshake batch in one write; an
+      // empty dict in the first DATA frame invites the peer to publish
+      // its Services list back to us. DATA_PRESENT is set only when the
+      // dict has keys; an empty dict ships with ALWAYS_SET alone.
+      socket.write(
+        Buffer.concat([
+          HTTP2_PREFACE,
+          buildSettingsFrame(),
+          buildWindowUpdateFrame(0, 983041),
+          buildEmptyHeadersFrame(ROOT_CHANNEL_STREAM),
+          buildDataFrame(ROOT_CHANNEL_STREAM, buildXpcWrapper(XpcFlags.ALWAYS_SET, 0n, {})),
+          buildEmptyHeadersFrame(REPLY_CHANNEL_STREAM),
+          buildDataFrame(
+            REPLY_CHANNEL_STREAM,
+            buildXpcWrapper(XpcFlags.ALWAYS_SET | XpcFlags.INIT_HANDSHAKE, 0n, null)
+          ),
+        ])
+      );
     });
 
     socket.on('data', (chunk: Buffer) => {
@@ -291,8 +252,7 @@ export const fetchPeerInfo = async (
           return;
         }
       }
-      const combined = Buffer.concat([stream1, ...stream1Chunks]);
-      const dict = findPeerInfoDict(combined);
+      const dict = findPeerInfoDict(Buffer.concat(stream1Chunks));
       if (dict) {
         clearTimeout(timer);
         cleanup(null, normalisePeerInfo(dict));

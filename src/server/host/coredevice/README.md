@@ -1,219 +1,89 @@
 # CoreDevice client
 
-A TypeScript reimplementation of just enough of Apple's CoreDevice / RemoteXPC /
-DTX stack to take screenshots from a real iOS 17+ device over Wi-Fi without
-needing `sudo`, USB cable, or a brew install of libimobiledevice.
+TypeScript client that talks to a real iOS 17+ device over Apple's
+CoreDevice tunnel and returns a PNG screenshot. Used by `host__screenshot`
+when the connected RN client reports `isSimulator: false` on the handshake.
 
-## Why this exists
+No `sudo`, no USB cable, no native binaries beyond what comes with Xcode.
 
-Legacy paths don't work for the current Apple stack:
-
-- `xcrun simctl io <udid> screenshot` — simulator only.
-- `xcrun devicectl device screenshot` — does not exist. devicectl ships subcommands
-  for `copy / info / install / notification / orientation / process / reboot /
-  sysdiagnose / uninstall`, but no screenshot path. devicectl version 518.31
-  (Xcode 26).
-- `idevicescreenshot` (libimobiledevice) — works only with devices that
-  usbmuxd knows about. On macOS 14+/Xcode 26, devices paired through the new
-  CoreDevice flow are NOT registered with the legacy usbmuxd, so libimobiledevice
-  can't see them. Xcode 26 also removed the "Connect via network" checkbox that
-  used to opt a device into Wi-Fi sync.
-- AVFoundation (`AVCaptureDevice.devices(for: .muxed)`) — exposes the device
-  screen as a muxed video source, but only when the device is USB-connected.
-  Over Wi-Fi the device appears only as a Continuity Camera (camera feed, not
-  screen).
-- Xcode private frameworks (`DVTDeviceScreenshotClient` in `DVTFoundation.framework`)
-  — usable in theory but iOS device locators refuse to register outside Xcode's
-  bundle context (`DVTPlugInHostRequirements` gates loading). Bundle-spoofing
-  would be needed.
-- `go-ios screenshot` — works, but needs `sudo ios tunnel start` running
-  persistently for iOS 17+ devices. We don't want to ship anything that prompts
-  for sudo.
-
-What does work: when `xcrun devicectl` runs an operation against a real device,
-macOS's existing CoreDevice infrastructure brings up the tunnel for the duration
-of that operation. We piggy-back on that — keep a devicectl operation alive as
-a tunnel keeper, then speak the protocol stack ourselves to take a screenshot.
-
-## Stack overview
+## Stack
 
 ```
-  +----------------------------------------+
-  |  DTScreenshotService (this file's job) |   Layer 6
-  +----------------------------------------+
-  |  DTServiceHub + DTX protocol           |   Layer 5
-  +----------------------------------------+
-  |  RemoteXPC framing                     |   Layer 4
-  +----------------------------------------+
-  |  RemoteServiceDiscoveryProxy (RSD)     |   Layer 3
-  +----------------------------------------+
-  |  Tunnel address discovery              |   Layer 2
-  +----------------------------------------+
-  |  Tunnel keeper (devicectl background)  |   Layer 1
-  +----------------------------------------+
-  |  CoreDevice tunnel (provided by macOS) |
-  +----------------------------------------+
+  ┌────────────────────────────────────────────────────────┐
+  │ captureScreenshot(coreDeviceIdentifier)   screenshot.ts │
+  └────────────────────────────────────────────────────────┘
+       │
+       │  bring up tunnel, enumerate services, speak DTX
+       ▼
+  ┌─────────────────────┐  ┌──────────────────┐  ┌──────────┐
+  │ DTServiceHub channel │  │ NSKeyedArchiver  │  │ DTX wire │
+  │   `_request…` +      │  │ encode/decode    │  │ framing  │
+  │   `takeScreenshot`   │  │   nska.ts        │  │   dtx.ts │
+  │      screenshot.ts   │  │                  │  │          │
+  └─────────────────────┘  └──────────────────┘  └──────────┘
+       ▲                                              ▲
+       │                                              │
+  ┌─────────────────────────────────────────────────────┐
+  │ RSD peer_info enumerate (HTTP/2 + RemoteXPC)        │
+  │   rsd.ts ────────► xpc.ts (XpcWrapper + XpcObject)  │
+  └─────────────────────────────────────────────────────┘
+       ▲
+       │
+  ┌──────────────────────────────────────────────────────┐
+  │ Tunnel keeper + mDNS device address +                 │
+  │ system-log RSD port + utun source-bind                │
+  │   tunnel.ts                                           │
+  └──────────────────────────────────────────────────────┘
+       ▲
+       │
+  ┌──────────────────────────────────────────────────────┐
+  │ macOS-managed CoreDevice tunnel                       │
+  │ (held up by a backgrounded `devicectl` op)            │
+  └──────────────────────────────────────────────────────┘
 ```
 
-Each layer is implemented as a focused TS module under this directory.
+## Modules
 
-### Layer 1: Tunnel keeper (`tunnel.ts`)
+| File            | What it does                                                                                                                                                                                                                                                                                                                                              |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tunnel.ts`     | Spawns `xcrun devicectl device info processes` in a loop as the tunnel keeper. Resolves the device's tunnel IPv6 via mDNS (`<udid>.coredevice.local`). Finds the matching `utun<N>` interface for the source bind. Parses the RSD port out of `log show` (the `eventMessage CONTAINS "for server port"` predicate is the only one the OS doesn't redact). |
+| `xpc.ts`        | Encode/decode for the binary XpcObject format and its `XpcWrapper` framing.                                                                                                                                                                                                                                                                               |
+| `rsd.ts`        | HTTP/2-framed client for `RemoteServiceDiscoveryProxy`. Connects to the tunnel's RSD port, runs the handshake on streams 1 and 3, returns the device's peer-info dict with all available services and their tunnel-side ports.                                                                                                                            |
+| `nska.ts`       | Minimal `NSKeyedArchiver` codec over `bplist-creator` / `bplist-parser`. Enough to encode method names, argument arrays, and decode `NSData` / `NSDictionary` / `NSError` replies.                                                                                                                                                                        |
+| `dtx.ts`        | DTX wire framing (32-byte fragment header, multi-fragment reassembly), DTX aux primitives, and a `DtxConnection` class that owns a TCP socket and matches replies by identifier.                                                                                                                                                                          |
+| `screenshot.ts` | Composes the layers above: brings up the tunnel, enumerates services, opens DTX to `dtservicehub`, does the capability handshake, binds a channel to the screenshot service, calls `takeScreenshot`, returns the PNG.                                                                                                                                     |
 
-Spawns `xcrun devicectl device info ddiServices --device <id>` (or equivalent)
-in the background. While that process runs:
+## Wire formats
 
-- `tunnelState` flips to `connected`
-- `ddiServicesAvailable` flips to `true`
-- A new `utun<N>` interface appears on the Mac
-- `com.apple.dt.DTScreenshotService` and friends become reachable through the
-  tunnel
+See [PROTOCOL.md](./PROTOCOL.md) for the bytewise reference (XpcWrapper /
+RemoteXPC handshake / DTX fragment header / aux primitives / NSKeyedArchiver
+shape).
 
-When the keeper process exits, macOS tears the tunnel down within seconds.
-The keeper restarts the underlying devicectl op as needed so the tunnel stays
-up for the lifetime of the keeper handle.
-
-A long-term alternative is a small Swift CLI that calls
-`CoreDevice.CapabilityStaticMember.acquireUsageAssertion` directly (we saw this
-symbol in `CoreDevice.framework`) — cleaner than shelling out to devicectl, but
-defers to a follow-up to avoid introducing more native code in the first cut.
-
-### Layer 2: Address discovery (`tunnel.ts`, same module)
-
-Once the keeper reports tunnel up, we need:
-
-- the device's IPv6 address on the tunnel interface — **done**, via mDNS
-  resolution of `<udid-lowercased>.coredevice.local`.
-- the RemoteServiceDiscovery (RSD) port — **open**, see PROTOCOL.md for the
-  detailed write-up of dead ends and remaining options. tl;dr: pure piggy-back
-  isn't enough because the RSD port comes from an encrypted handshake on a
-  control channel the OS-managed tunnel doesn't re-export.
-
-### Layer 3: RSD client (`rsd.ts`) — NOT YET IMPLEMENTED
-
-RemoteServiceDiscoveryProxy speaks an Apple-flavored HTTP/2-like protocol over
-TCP/IPv6. Reference: `pymobiledevice3/remote/remote_service_discovery.py` and
-`pymobiledevice3/remote/remotexpc.py`.
-
-Once connected, we exchange a Handshake plist and receive back a dict mapping
-service names → ports. The service we care about is
-`com.apple.instruments.dtservicehub` (the modern entry point that fronts
-DTScreenshotService and other DT services).
-
-### Layer 4: RemoteXPC framing (`remotexpc.ts`) — NOT YET IMPLEMENTED
-
-Apple's binary serialization of `xpc_dictionary_t`. Reference:
-`pymobiledevice3/remote/xpc_message.py`. Magic header, type tags, dict and
-array encoding.
-
-### Layer 5: DTServiceHub + DTX (`dtx.ts`) — NOT YET IMPLEMENTED
-
-DTX is the binary RPC protocol that Xcode's instruments stack speaks over a
-service-hub connection. Frame header: total bytes, conversation_index,
-channel_code, expects_reply, message_type, length. Payload is an NSKeyedArchiver
-plist holding selector + arguments. Reference: `pymobiledevice3/services/remote/`.
-
-### Layer 6: DTScreenshotService (`screenshot.ts`) — NOT YET IMPLEMENTED
-
-Open a channel for `com.apple.instruments.server.services.screenshot` via the
-service hub, invoke `takeScreenshot`, receive PNG bytes in the reply.
-
-## Activating the tunnel by hand (for testing)
+## Bringing up the tunnel by hand
 
 ```bash
-DEV=63307A37-70BC-58CC-AA50-DC9432B15B19   # CoreDevice UUID from devicectl
-xcrun devicectl device info ddiServices --device "$DEV"   # tunnel + DDI mount
+DEV=63307A37-70BC-58CC-AA50-DC9432B15B19   # CoreDevice identifier from devicectl
+xcrun devicectl device info ddiServices --device "$DEV"
 ```
 
-State after: `tunnelState: connected`, `ddiServicesAvailable: True`,
-a new `utun<N>` interface up with MTU 16000 (the iPhone tunnel).
+After this `tunnelState` is `connected`, `ddiServicesAvailable` is `true`,
+and a new `utun<N>` interface with MTU 16000 is up on the Mac. The OS
+tears the tunnel down a few seconds after the last devicectl op exits;
+`tunnel.ts` keeps a keeper in flight for the lifetime of a screenshot
+call.
 
-State degrades to `disconnected` within seconds after the command exits.
+## Requirements
 
-## Current status (2026-05-17)
+- macOS with Xcode 26+ command-line tools (`xcrun devicectl`, `xcrun simctl`).
+- iOS 17+ device paired with the Mac (paired automatically when you open
+  Xcode → Window → Devices and Simulators with the device connected once).
+- Developer Mode enabled on the device (Settings → Privacy & Security →
+  Developer Mode).
 
-**End-to-end real-device screenshot is working.** Run
-`./screenshot.sh <core-device-uuid> /tmp/shot.png` and you get a 1320×2868
-PNG off the iPhone over Wi-Fi, no sudo, no USB cable. The shim composes:
+## Out of scope
 
-- our Layer 1 + 2A + 2B work (tunnel keeper, mDNS resolution, log-parsed
-  RSD port)
-- `pymobiledevice3 developer dvt screenshot --rsd <addr> <port>` for the
-  DTX-layer work (Layers 4–6 below)
-
-That confirms the approach works against iOS 26.5 today and gives us a
-reference implementation we can port to native TypeScript.
-
-Per-layer status:
-
-- **Layer 1** (tunnel keeper): working in TS (`tunnel.ts`).
-- **Layer 2A** (device address): working in TS (`tunnel.ts`).
-- **Layer 2B** (RSD port): working in `probe.py` and `screenshot.sh`,
-  not yet in TS. Parsed from `log show --predicate 'eventMessage CONTAINS
-  "for server port"'` — the only predicate that doesn't get redacted as
-  `<private>`. Port is dynamic per tunnel session.
-- **Layer 3** (RSD client + RemoteXPC): working in `probe.py`. Two
-  non-obvious requirements:
-  1. Bind the source socket to the Mac end of the tunnel
-     (`fd<prefix>::2` from `ifconfig utun<N>`). Default routing picks the
-     wrong utun on hosts with multiple tunnels (Tailscale, WireGuard, …).
-  2. No TLS. Inside the macOS-managed tunnel, RSD speaks plain HTTP/2.
-     The pair-record / PSK-TLS infrastructure that pymobiledevice3 needs
-     for its OWN sudo-tunnel is not required here.
-- **Layers 4–6** (DTX framing, DTServiceHub channel handshake,
-  DTScreenshotService): currently offloaded to pymobiledevice3 in
-  `screenshot.sh`. Porting to native TS is the next milestone — see
-  PROTOCOL.md for the wire-format reference.
-
-## Service discovery output (iOS 26.5, observed)
-
-The Services dict returned by RSD does NOT include
-`com.apple.mobile.screenshotr`. Apple removed it from RSD on the modern
-stack. Candidates for taking a screenshot through the discovered services:
-
-- `com.apple.instruments.dtservicehub` — DTServiceHub. Hosts a screenshot
-  channel internally (`com.apple.instruments.server.services.screenshot`).
-  Requires DTX protocol + a minimal NSKeyedArchiver
-  encoder/decoder for the payload.
-- `com.apple.mobile.lockdown.remote.trusted` — modern trusted-lockdownd shim.
-  If it speaks the legacy lockdownd plist protocol, `StartService(name:
-  "com.apple.mobile.screenshotr")` might still return a port for the
-  legacy DDI screenshotr (which is dormant but startable). Smaller protocol
-  surface; worth probing before committing to DTX.
-- `com.apple.dt.testmanagerd.remote` / `.remote.automation` — XCTest harness.
-  Heavy. WebDriverAgent-style. Out of scope for "just take a screenshot".
-
-The lockdownd path is the next thing to try in a follow-up session.
-
-## Realistic scope of completing the stack
-
-Once Layer 2B is resolved, the rest of the stack still requires:
-
-- **RemoteXPC framing** (custom HTTP/2 + Apple's binary XPC dict format) —
-  500-800 LoC TS.
-- **DTServiceHub + DTX protocol** (NSKeyedArchiver-compat plists, channel
-  multiplexing, multi-fragment messages) — 1000-1500 LoC TS, including a
-  minimal NSKeyedArchiver encoder/decoder.
-- **DTScreenshotService client** + integration — 100-200 LoC TS.
-
-If Layer 2B requires reimplementing the full pairing handshake (TCP+TLS-PSK
-control channel against `_remotepairing._tcp` on Wi-Fi, plus X25519 ECDH,
-Ed25519 signatures, SRP-6a re-pair, AES-GCM, pair record extraction), add
-another 2000-3000 LoC and a full crypto stack.
-
-If Layer 2B can be resolved by XPC-talking to
-`com.apple.CoreDevice.CoreDeviceService` (the daemon that already holds the
-answer), the rest of the stack still applies, but we save the pairing client.
-The XPC interface is private Swift and undocumented — would need a Swift
-helper binary similar to `ios-hid`. Smaller (~500-1000 LoC Swift) but still
-significant.
-
-The honest estimate for a working end-to-end real-device screenshot via this
-stack is **2-4 weeks of focused work**, not the 1-2 weeks projected initially.
-
-## Out of scope (for now)
-
-- Input injection (tap / swipe / type) on real device. Apple's
-  `com.apple.dt.testmanagerd` / WebDriverAgent path is much heavier.
-- Wired USB devices not paired through CoreDevice. Those are still in
-  libimobiledevice territory.
-- iOS 16 and earlier. Different transport stack entirely.
+- Simulator screenshots — those still go through `xcrun simctl io …`
+  in `tools/capture.ts` and don't touch this directory.
+- Input injection (tap / swipe / type) on real devices — that needs a
+  different DTX service or WebDriverAgent; not started.
+- iOS 16 and earlier — different transport stack.

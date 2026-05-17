@@ -16,12 +16,13 @@ No test suite is configured.
 
 ## Architecture
 
-`react-native-mcp-kit` is a bidirectional MCP bridge connecting React Native apps to AI agents. The Node server is a proxy for in-app business logic, plus it hosts a *host module* that shells out to `adb` / `xcrun simctl` / a bundled Swift HID injector to drive the device at OS level.
+`react-native-mcp-kit` is a bidirectional MCP bridge connecting React Native apps to AI agents. The Node server is a proxy for in-app business logic, plus it hosts a *host module* that shells out to `adb` / `xcrun simctl` / `xcrun devicectl` / a bundled Swift HID injector to drive the device at OS level. Real iOS 17+ devices are reached via a native TS client speaking RemoteXPC + DTX over Apple's CoreDevice tunnel.
 
 ```
 AI Agent  --stdio/MCP-->  MCP Server (Node.js)  --WebSocket-->  RN App (device)
                                │
-                               └─ host module (adb / xcrun simctl / ios-hid binary) --> device
+                               ├─ host module (adb / xcrun simctl / ios-hid binary) --> sim / emulator / android
+                               └─ coredevice client (RemoteXPC + DTX over CoreDevice tunnel) --> real iOS 17+ device
 ```
 
 ### MCP server tools
@@ -45,7 +46,7 @@ Exposed when `hostModule` is passed to `createServer` (the default in `cli.ts`).
 
 - **Input** (`host/tools/input.ts`): `host__tap`, `host__long_press`, `host__swipe`, `host__drag`, `host__type_text`, `host__type_text_batch`, `host__press_key`. All coordinates are **PHYSICAL PIXELS** and match the `bounds` returned by `fiber_tree` — feed `bounds.centerX` / `bounds.centerY` straight into `host__tap`. `long_press` is a zero-distance swipe with default 700ms hold (above RN Pressable's ~500ms threshold). `drag` = swipe with `holdMs + durationMs` total. `type_text_batch` takes `fields: [{ x, y, text, submit? }]` + optional `focusDelayMs` (default 200, bump to 700-800 for navigation-triggering taps). `type_text` on Android is **ASCII-only** (preflight check) because `adb shell input text` routes through a KeyCharacterMap that lacks non-ASCII entries; use `fiber_tree__call({ prop })` on `onChangeText` for Cyrillic/CJK/emoji on Android.
 - **Cross-layer** (`host/tools/tapFiber.ts`): `host__tap_fiber({ steps, index?, clientId? })` — chains `fiber_tree__query` → host__tap in one call. On ambiguous match, returns candidate list with bounds so the agent can pick `index` or narrow `steps`. Uses `HostContext.dispatch` internally.
-- **Capture** (`host/tools/capture.ts`): `host__screenshot` — WebP, auto-resized (default width 280), diff-cached via SHA-256 per device (returns `unchanged: true` when identical to last capture). Accepts `region: { x, y, width, height }` in original device pixels — crops BEFORE resize; pair with fiber bounds to snapshot one element for ~20-60 vision tokens. Response is `[image, metadataText]` where metadata JSON includes `{ width, height, originalWidth, originalHeight, scale, bytes, region? }`.
+- **Capture** (`host/tools/capture.ts`): `host__screenshot` — WebP, auto-resized (default width 280), diff-cached via SHA-256 per device (returns `unchanged: true` when identical to last capture). Accepts `region: { x, y, width, height }` in original device pixels — crops BEFORE resize; pair with fiber bounds to snapshot one element for ~20-60 vision tokens. Response is `[image, metadataText]` where metadata JSON includes `{ width, height, originalWidth, originalHeight, scale, bytes, region? }`. Routes per `resolved.device.kind`: iOS simulators → `xcrun simctl io screenshot`, Android → `adb exec-out screencap`, real iOS 17+ devices → `captureScreenshot` in `host/coredevice/` (CoreDevice tunnel + DTX `takeScreenshot`).
 - **Lifecycle** (`host/tools/lifecycle.ts`): `host__launch_app`, `host__terminate_app`, `host__restart_app`. `appId` optional when a connected client registered its `bundleId`.
 - **Devices** (`host/tools/devices.ts`): `host__list_devices` — annotates each device with `connected: true` / `clientId` when it matches a live client.
 
@@ -103,11 +104,19 @@ src/
     host/                   — Host module (OS-level tools that shell out)
       hostModule.ts
       iosInput.ts           — Wraps dist/bin/ios-hid
-      deviceResolver.ts     — Resolve target device from clientId / udid / serial / platform
+      deviceResolver.ts     — Resolve target device from clientId / udid / serial / platform; reports kind: 'simulator' | 'real-device'. Real iOS routed via xcrun devicectl + client.isSimulator flag.
       processRunner.ts      — Abstracted child_process runner (mockable)
+      coredevice/           — Pure-TS client for real iOS 17+ devices (RemoteXPC + DTX over Apple's CoreDevice tunnel). No sudo, no pymobiledevice3, no native binaries beyond Xcode CLT.
+        tunnel.ts           — Backgrounded `xcrun devicectl device info processes` keeps the tunnel up; resolves device IPv6 via mDNS; finds utun<N> for source-bind; parses RSD port from `log show`.
+        rsd.ts              — HTTP/2-framed RemoteServiceDiscoveryProxy client; runs the handshake, returns peer_info with Services dict.
+        xpc.ts              — Binary XpcObject + XpcWrapper codec.
+        dtx.ts              — DTX wire framing (32-byte fragment header, multi-fragment reassembly), aux primitives, DtxConnection class. Match replies by identifier (not channelCode).
+        nska.ts             — Minimal NSKeyedArchiver codec over bplist-creator/parser.
+        screenshot.ts       — captureScreenshot(coreDeviceIdentifier) — composes the layers: tunnel → RSD → DTX → _notifyOfPublishedCapabilities → _requestChannelWithCode → takeScreenshot → PNG bytes.
+        PROTOCOL.md         — Bytewise wire-format reference (RSD / XpcWrapper / DTX framing / DTX aux / NSKeyedArchiver). Update in lockstep with codecs.
       tools/
-        input.ts            — tap / long_press / swipe / drag / type_text / type_text_batch / press_key
-        capture.ts          — screenshot (WebP, default width 280, diff cache, region crop)
+        input.ts            — tap / long_press / swipe / drag / type_text / type_text_batch / press_key (simulator + Android only; real-iOS input not yet supported)
+        capture.ts          — screenshot (WebP, default width 280, diff cache, region crop); routes per device kind — sims via xcrun simctl, Android via adb, real iOS 17+ via coredevice
         lifecycle.ts        — launch / terminate / restart
         devices.ts          — list_devices
         tapFiber.ts         — fiber_tree__query + host__tap one-shot (uses HostContext.dispatch)
@@ -200,11 +209,13 @@ They appear in `list_tools` under a `(dynamic)` section.
 ### Data flow
 
 1. `<McpProvider>` mounts → `McpClient.initialize()` opens a WebSocket to the bridge (port 8347 by default).
-2. Provider effects run → module registrations are batched into `RegistrationMessage` with module descriptors + their tool schemas.
+2. Provider effects run → module registrations are batched into `RegistrationMessage` with module descriptors + their tool schemas. The registration also carries `isSimulator` (auto-detected via `react-native-device-info`'s `isEmulatorSync()`) so the host can route iOS clients to either the simulator path or the CoreDevice tunnel.
 3. Agent calls `call` → server sends `ToolRequest` over WS → RN executes the handler → returns `ToolResponse`.
 4. `useMcpTool` sends `tool_register` / `tool_unregister` → server tracks dynamic tools → agent calls via `_dynamic_` prefix.
-5. Host-module tools bypass the WS entirely — they run in the Node process, shelling out to `xcrun simctl` / `adb` / `dist/bin/ios-hid`.
+5. Host-module tools bypass the WS entirely — they run in the Node process, shelling out to `xcrun simctl` / `adb` / `dist/bin/ios-hid`, or (for real iOS devices) speaking RemoteXPC + DTX over the CoreDevice tunnel from `src/server/host/coredevice/`.
 6. Image results (`host__screenshot`) are detected by `formatResult` and returned as MCP image content blocks.
+
+The handshake also carries a `PROTOCOL_VERSION` (currently `2`, see `src/shared/protocol.ts`) — the server rejects mismatched clients with a `version_mismatch` message + WS close code `4010`. Bump on any breaking change to the wire format.
 
 ### Babel plugins
 

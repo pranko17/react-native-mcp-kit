@@ -1,39 +1,23 @@
-// Minimal NSKeyedArchiver encoder/decoder for the shapes DTX messages
-// exchange with com.apple.instruments.dtservicehub services.
+// NSKeyedArchiver encoder/decoder for the shapes DTX messages exchange
+// with `com.apple.instruments.dtservicehub` services.
 //
-// NSKeyedArchiver wraps a value graph in a bplist00 with this top-level
-// structure:
+// NSKeyedArchiver wraps a value graph in a bplist00 with this shape:
 //
 //   {
 //     "$archiver": "NSKeyedArchiver",
-//     "$version": 100000,
-//     "$top": { "root": UID(N) },        // entry-point object
-//     "$objects": [
-//       "$null",                          // always first
-//       <object 1>,
-//       <object 2>,
-//       ...
-//     ]
+//     "$version":  100000,
+//     "$top":      { "root": UID(N) },
+//     "$objects":  ["$null", <object 1>, <object 2>, ...]
 //   }
 //
-// Each "complex" object lives in $objects and references its class metadata
-// (also in $objects) via a `$class: UID(M)` field. References between
-// objects are encoded as UID values, which bplist00 supports natively.
+// Each complex object lives in `$objects` and references its class
+// metadata (also an entry in `$objects`) via a `$class: UID(M)` field.
+// Cross-references between objects are encoded as bplist UID values.
 //
-// We support a deliberately small subset — only what's needed to call
-// `takeScreenshot` and decode the PNG it returns, plus the channel-open
-// dance through DTServiceHub:
-//
-//   - NSString (encoded as a primitive in $objects)
-//   - NSNumber (int via bigint, float via JS number)
-//   - NSArray / NSMutableArray
-//   - NSDictionary / NSMutableDictionary
-//   - NSData / NSMutableData
-//   - NSError (decode only — we don't construct them)
-//
-// We don't aim for byte-for-byte compatibility with Apple's encoder
-// (Apple dedupes string values; we generally don't). The semantic graph
-// is equivalent, and that's what Apple's decoder cares about.
+// Supported shapes: NSString, NSNumber, NSArray, NSDictionary, NSData
+// (encode + decode), NSError + NSDate (decode only). The semantic graph
+// is round-trip-equivalent with Apple's encoder; we don't dedupe leaf
+// strings the way Apple does.
 
 // eslint-disable-next-line import/no-extraneous-dependencies
 import bplistCreate from 'bplist-creator';
@@ -62,12 +46,6 @@ interface BplistUID {
 const makeUid = (index: number): BplistUID => {
   return { UID: index };
 };
-
-// Object IDs are always positive integers; primitive values are also
-// objects in NSKeyedArchiver's view. Class metadata is shared across
-// instances of the same type. We dedupe class metadata aggressively and
-// leave per-instance values alone — easy to extend if a service shows
-// up that needs string dedup.
 
 interface ClassDescriptor {
   classes: string[];
@@ -139,10 +117,8 @@ const encodeValue = (value: NskaValue, builder: ObjectsBuilder): number => {
     return builder.add(value);
   }
   if (typeof value === 'bigint') {
-    // bplist-creator doesn't handle bigint cleanly (it falls back to
-    // stringifying). For our DTX-call payloads we only deal with small
-    // integers (channel codes, message ids, etc.), so we downcast when
-    // it's safe.
+    // bplist-creator stringifies bigints; downcast to JS number when
+    // it's safe (channel codes and message ids fit comfortably).
     if (value > BigInt(Number.MAX_SAFE_INTEGER) || value < BigInt(Number.MIN_SAFE_INTEGER)) {
       throw new Error(`bigint ${value} exceeds safe integer range for NSKA encode`);
     }

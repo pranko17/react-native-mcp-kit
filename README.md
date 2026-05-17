@@ -179,17 +179,17 @@ The Node server exposes a small set of entry-point tools agents use directly —
 
 ## Host tools (device-level control)
 
-When the `host` module is enabled (the default), the server exposes tools that operate **on the host machine** — they run `adb` / `xcrun simctl` / a bundled `ios-hid` binary. These work even when the RN app is frozen, not launched yet, or between reloads.
+When the `host` module is enabled (the default), the server exposes tools that operate **on the host machine** — they run `adb` / `xcrun simctl` / `xcrun devicectl` / a bundled `ios-hid` binary. These work even when the RN app is frozen, not launched yet, or between reloads.
 
 What you get:
 
 - **Real OS input** — `tap`, `long_press`, `swipe`, `drag`, `type_text`, `type_text_batch`, `press_key`. Goes through the real iOS/Android touch pipeline.
 - **`tap_fiber`** — one call to locate a component via fiber_tree and tap its center. No copy-paste of bounds between calls.
-- **Screenshots** — WebP, auto-diffing (`unchanged: true` on identical frames). Pass `region` in physical pixels to crop to a specific element and keep vision-token cost low.
+- **Screenshots** — WebP, auto-diffing (`unchanged: true` on identical frames). Pass `region` in physical pixels to crop to a specific element and keep vision-token cost low. Works on iOS simulators, Android sims/emulators/devices, **and physical iOS 17+ devices** (over Apple's CoreDevice tunnel — no external tools or sudo required, the connected RN client's `isSimulator: false` flag picks the right path automatically).
 - **App lifecycle** — launch, terminate, restart.
 - **Device enumeration** — list sims / emulators / devices, annotated with active MCP clients.
 
-iOS input goes through a bundled `ios-hid` Swift binary that injects HID events directly into iOS Simulator via private frameworks — no external daemons to install or keep running.
+iOS input goes through a bundled `ios-hid` Swift binary that injects HID events directly into iOS Simulator via private frameworks — no external daemons to install or keep running. Real-device iOS input isn't supported yet (screenshots are); use a simulator or Android device for tap/swipe automation.
 
 ## Metro tools (dev-server control plane)
 

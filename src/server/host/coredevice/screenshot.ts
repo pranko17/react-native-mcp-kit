@@ -1,27 +1,20 @@
 import { DtxConnection, DtxMessageType, buildDtxAux, dtxInt32 } from './dtx';
 import { type NskaValue, decodeNska, encodeNska } from './nska';
 import { fetchPeerInfo } from './rsd';
-import { type TunnelInfo, startTunnel } from './tunnel';
+import { startTunnel } from './tunnel';
 
-// Layer 6 of the real-device screenshot stack — talks DTX to
-// `com.apple.instruments.dtservicehub` and asks the
-// `com.apple.instruments.server.services.screenshot` channel for a PNG.
+// Public entry point for taking a screenshot of a real iOS device via
+// the CoreDevice tunnel.
 //
-// The dance:
-//
-//  1. RSD enumerate (rsd.ts) — find the dtservicehub port.
-//  2. TCP-connect to dtservicehub from the Mac end of the tunnel.
-//  3. Send `_notifyOfPublishedCapabilities:` on channel 0 with the
-//     capability dict {DTXBlockCompression:0, DTXConnection:1}.
-//     This is the DTX handshake; the peer replies in kind.
-//  4. Send `_requestChannelWithCode:identifier:` on channel 0 with
-//     args [channel_code, "com.apple.instruments.server.services.screenshot"].
-//     The reply confirms our chosen channel code is now bound to the
-//     screenshot service.
-//  5. Send `takeScreenshot` on the new channel. Reply payload is an
-//     NSKeyedArchive holding an NSData with the PNG bytes.
-//
-// All wire formats are documented in PROTOCOL.md.
+// Flow:
+//   1. `startTunnel` brings up the CoreDevice tunnel.
+//   2. `fetchPeerInfo` enumerates services via RSD.
+//   3. Open a DTX connection to `com.apple.instruments.dtservicehub`.
+//   4. `_notifyOfPublishedCapabilities:` on channel 0 — DTX handshake.
+//   5. `_requestChannelWithCode:identifier:` on channel 0 — binds our
+//      chosen channel code to the screenshot service.
+//   6. `takeScreenshot` on the new channel. The reply payload is an
+//      NSKeyedArchive of an NSData holding the PNG bytes.
 
 const DTSERVICEHUB_SERVICE = 'com.apple.instruments.dtservicehub';
 const SCREENSHOT_SERVICE = 'com.apple.instruments.server.services.screenshot';
@@ -45,7 +38,6 @@ export interface CaptureScreenshotOptions {
   timeoutMs?: number;
 }
 
-// Top-level: bring up a fresh tunnel, do the whole stack, close.
 export const captureScreenshot = async (
   coreDeviceIdentifier: string,
   options: CaptureScreenshotOptions = {}
@@ -54,87 +46,77 @@ export const captureScreenshot = async (
     startupTimeoutMs: options.timeoutMs,
   });
   try {
-    return await captureScreenshotWithTunnel(tunnel.info, options);
+    const peer = await fetchPeerInfo(
+      tunnel.info.deviceAddress,
+      tunnel.info.hostAddress,
+      tunnel.info.rsdPort,
+      { timeoutMs: options.timeoutMs }
+    );
+
+    const hubEntry = peer.services[DTSERVICEHUB_SERVICE];
+    if (!hubEntry) {
+      throw new CaptureScreenshotError(`${DTSERVICEHUB_SERVICE} not in peer Services dict`);
+    }
+
+    const dtx = await DtxConnection.open(
+      tunnel.info.deviceAddress,
+      tunnel.info.hostAddress,
+      hubEntry.port,
+      { timeoutMs: options.timeoutMs }
+    );
+
+    try {
+      let messageId = 0;
+      const nextId = (): number => {
+        messageId += 1;
+        return messageId;
+      };
+
+      await dtx.invoke(
+        CONTROL_CHANNEL,
+        encodeNska('_notifyOfPublishedCapabilities:'),
+        buildDtxAux([DEFAULT_CAPABILITIES]),
+        { identifier: nextId(), wantsReply: false }
+      );
+
+      const channelReply = await dtx.invoke(
+        CONTROL_CHANNEL,
+        encodeNska('_requestChannelWithCode:identifier:'),
+        buildDtxAux([dtxInt32(SCREENSHOT_CHANNEL), SCREENSHOT_SERVICE]),
+        { identifier: nextId() }
+      );
+      if (channelReply && channelReply.msgType === DtxMessageType.Error) {
+        throw new CaptureScreenshotError(
+          `Channel open for ${SCREENSHOT_SERVICE} failed (msgType=${channelReply.msgType})`
+        );
+      }
+
+      const reply = await dtx.invoke(
+        SCREENSHOT_CHANNEL,
+        encodeNska('takeScreenshot'),
+        Buffer.alloc(0),
+        { identifier: nextId() }
+      );
+      if (!reply) {
+        throw new CaptureScreenshotError('takeScreenshot returned no reply');
+      }
+      if (reply.msgType === DtxMessageType.Error) {
+        throw new CaptureScreenshotError('takeScreenshot returned an Error message');
+      }
+
+      const decoded = decodeNska(reply.payload);
+      if (!Buffer.isBuffer(decoded)) {
+        const desc =
+          decoded && typeof decoded === 'object' && !Array.isArray(decoded)
+            ? `object with keys [${Object.keys(decoded).join(', ')}]`
+            : typeof decoded;
+        throw new CaptureScreenshotError(`takeScreenshot reply was ${desc}, expected NSData`);
+      }
+      return decoded;
+    } finally {
+      dtx.close();
+    }
   } finally {
     await tunnel.close();
-  }
-};
-
-// Same as above but reuses an already-up tunnel. Useful when the caller
-// is going to take multiple screenshots and wants to amortise the
-// 5-second tunnel-up cost.
-export const captureScreenshotWithTunnel = async (
-  tunnel: TunnelInfo,
-  options: CaptureScreenshotOptions = {}
-): Promise<Buffer> => {
-  const peer = await fetchPeerInfo(tunnel.deviceAddress, tunnel.hostAddress, tunnel.rsdPort, {
-    timeoutMs: options.timeoutMs,
-  });
-
-  const hubEntry = peer.services[DTSERVICEHUB_SERVICE];
-  if (!hubEntry) {
-    throw new CaptureScreenshotError(`${DTSERVICEHUB_SERVICE} not in peer Services dict`);
-  }
-
-  const dtx = await DtxConnection.open(tunnel.deviceAddress, tunnel.hostAddress, hubEntry.port, {
-    timeoutMs: options.timeoutMs,
-  });
-
-  try {
-    let messageId = 0;
-    const nextId = (): number => {
-      messageId += 1;
-      return messageId;
-    };
-
-    // Handshake: announce our capabilities to the peer.
-    await dtx.invoke(
-      CONTROL_CHANNEL,
-      encodeNska('_notifyOfPublishedCapabilities:'),
-      buildDtxAux([DEFAULT_CAPABILITIES]),
-      { identifier: nextId(), wantsReply: false }
-    );
-
-    // Open the screenshot service on a private channel code. The reply
-    // (which we wait for) confirms the bind.
-    const channelReply = await dtx.invoke(
-      CONTROL_CHANNEL,
-      encodeNska('_requestChannelWithCode:identifier:'),
-      buildDtxAux([dtxInt32(SCREENSHOT_CHANNEL), SCREENSHOT_SERVICE]),
-      { identifier: nextId() }
-    );
-    if (channelReply && channelReply.msgType === DtxMessageType.Error) {
-      throw new CaptureScreenshotError(
-        `Channel open for ${SCREENSHOT_SERVICE} failed (msgType=${channelReply.msgType})`
-      );
-    }
-
-    // Take the screenshot.
-    const reply = await dtx.invoke(
-      SCREENSHOT_CHANNEL,
-      encodeNska('takeScreenshot'),
-      Buffer.alloc(0),
-      { identifier: nextId() }
-    );
-    if (!reply) {
-      throw new CaptureScreenshotError('takeScreenshot returned no reply');
-    }
-    if (reply.msgType === DtxMessageType.Error) {
-      throw new CaptureScreenshotError('takeScreenshot returned an Error message');
-    }
-
-    const decoded = decodeNska(reply.payload);
-    if (!Buffer.isBuffer(decoded)) {
-      // Sometimes the reply is wrapped in a different shape — surface
-      // enough detail to debug without leaking the whole graph.
-      const desc =
-        decoded && typeof decoded === 'object' && !Array.isArray(decoded)
-          ? `object with keys [${Object.keys(decoded).join(', ')}]`
-          : typeof decoded;
-      throw new CaptureScreenshotError(`takeScreenshot reply was ${desc}, expected NSData`);
-    }
-    return decoded;
-  } finally {
-    dtx.close();
   }
 };
