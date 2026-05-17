@@ -127,8 +127,11 @@ SCOPES (query steps)
       which requires a host instance.
 
 STEP CRITERIA
-  name / mcpId / testID — strict equality.
-  text — substring match in RENDERED text only (not prop values).
+  name / mcpId / testID — exact string OR \`/regex/flags\` slash form
+    (e.g. \`name: "/^Pressable/"\` matches Pressable / PressableView / …).
+    Malformed regex falls back to exact match.
+  text — substring match in RENDERED text only (not prop values). Also
+    accepts \`/regex/flags\`.
   hasProps — array of prop names that must exist.
   props — map of prop → matcher:
     · primitive → strict equality.

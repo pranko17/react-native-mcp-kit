@@ -417,14 +417,57 @@ const matchPropValue = (actual: unknown, matcher: PropMatcher): boolean => {
   return actual === matcher;
 };
 
+// Match a string criterion against an actual value with `/regex/flags`-aware
+// semantics. Matches step-level `name` / `mcpId` / `testID` against
+// strict equality OR a slash-delimited regex; `text` against substring OR
+// regex. Mirrors the syntax used by `select.hooks.names` / `mcpIds` so the
+// agent has one consistent rule across the tool.
+const matchStringCriterion = (
+  actual: string | undefined,
+  pattern: string,
+  mode: 'equals' | 'includes'
+): boolean => {
+  if (actual === undefined) return false;
+  const re = pattern.match(/^\/(.+)\/([gimsuy]*)$/);
+  if (re && re[1] !== undefined) {
+    try {
+      return new RegExp(re[1], re[2] ?? '').test(actual);
+    } catch {
+      // Malformed regex — fall through to literal comparison so users get
+      // exact-equality semantics rather than silent no-match.
+    }
+  }
+  return mode === 'equals' ? actual === pattern : actual.includes(pattern);
+};
+
 export const matchesQuery = (fiber: Fiber, query: ComponentQuery): boolean => {
   try {
-    if (query.mcpId && fiber.memoizedProps?.['data-mcp-id'] !== query.mcpId) return false;
-    if (query.testID && fiber.memoizedProps?.testID !== query.testID) return false;
-    if (query.name && getComponentName(fiber) !== query.name) return false;
+    if (
+      query.mcpId &&
+      !matchStringCriterion(
+        fiber.memoizedProps?.['data-mcp-id'] as string | undefined,
+        query.mcpId,
+        'equals'
+      )
+    ) {
+      return false;
+    }
+    if (
+      query.testID &&
+      !matchStringCriterion(
+        fiber.memoizedProps?.testID as string | undefined,
+        query.testID,
+        'equals'
+      )
+    ) {
+      return false;
+    }
+    if (query.name && !matchStringCriterion(getComponentName(fiber), query.name, 'equals')) {
+      return false;
+    }
     if (query.text) {
       const content = getTextContent(fiber);
-      if (!content || !content.includes(query.text)) return false;
+      if (!matchStringCriterion(content ?? undefined, query.text, 'includes')) return false;
     }
     if (query.hasProps && Array.isArray(query.hasProps)) {
       const props = fiber.memoizedProps;
