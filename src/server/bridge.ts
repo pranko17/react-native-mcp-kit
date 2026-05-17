@@ -18,9 +18,12 @@ import {
 const REQUEST_TIMEOUT = 10_000;
 // When a client's WebSocket drops, we keep its ID slot reserved for this long
 // so a reconnect from the same `(deviceId, bundleId, platform)` triple lands
-// back on the same id (e.g. `ios-1`). 60s comfortably covers Metro
-// fast-refresh reload bounces and brief network blips.
-const RECONNECT_GRACE_MS = 60_000;
+// back on the same id (e.g. `ios-1`). 10 minutes covers the long tail —
+// Metro fast-refresh bounces, app backgrounded during a coffee break,
+// Xcode rebuild + relaunch, brief network blips, longer pauses while the
+// agent thinks. Stale entries are still cheap (just a ClientEntry copy
+// holding a dead socket reference), so a longer window costs little.
+const RECONNECT_GRACE_MS = 10 * 60_000;
 
 export interface DynamicToolEntry {
   description: string;
