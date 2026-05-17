@@ -16,6 +16,11 @@ import {
 } from '@/shared/protocol';
 
 const REQUEST_TIMEOUT = 10_000;
+// When a client's WebSocket drops, we keep its ID slot reserved for this long
+// so a reconnect from the same `(deviceId, bundleId, platform)` triple lands
+// back on the same id (e.g. `ios-1`). 60s comfortably covers Metro
+// fast-refresh reload bounces and brief network blips.
+const RECONNECT_GRACE_MS = 60_000;
 
 export interface DynamicToolEntry {
   description: string;
@@ -48,9 +53,19 @@ interface PendingRequest {
   timer: ReturnType<typeof setTimeout>;
 }
 
+// Identity facts we use to recognise the same physical client on reconnect.
+// platform + deviceId + bundleId is unique enough in practice — two apps on
+// one phone differ by bundleId, two phones differ by deviceId. label /
+// appVersion / devServer can drift between sessions and aren't used to match.
+interface DisconnectedClient {
+  entry: ClientEntry;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 export class Bridge {
   private wss: WebSocketServer | null = null;
   private clients = new Map<string, ClientEntry>();
+  private disconnectedClients = new Map<string, DisconnectedClient>();
   private socketToClientId = new WeakMap<WebSocket, string>();
   private platformSequences = new Map<string, number>();
   private pendingRequests = new Map<string, PendingRequest>();
@@ -81,10 +96,23 @@ export class Bridge {
 
         ws.on('close', () => {
           const clientId = this.socketToClientId.get(ws);
-          if (clientId) {
-            this.clients.delete(clientId);
-            this.socketToClientId.delete(ws);
-            this.rejectPendingForClient(clientId, `Client '${clientId}' disconnected`);
+          if (!clientId) return;
+          const entry = this.clients.get(clientId);
+          this.clients.delete(clientId);
+          this.socketToClientId.delete(ws);
+          this.rejectPendingForClient(clientId, `Client '${clientId}' disconnected`);
+          if (entry) {
+            // Reserve the ID for a reconnect from the same identity. While the
+            // ghost lives, the client is invisible to `listClients` /
+            // `getClient` (so tools fail with "not connected"), but a
+            // re-registering app matching this entry's `(platform, deviceId,
+            // bundleId)` will pick the slot back up.
+            const timer = setTimeout(() => {
+              this.disconnectedClients.delete(clientId);
+            }, RECONNECT_GRACE_MS);
+            // Don't keep the event loop alive solely for ghost expiry.
+            timer.unref?.();
+            this.disconnectedClients.set(clientId, { entry, timer });
           }
         });
       });
@@ -97,6 +125,10 @@ export class Bridge {
 
   async stop(): Promise<void> {
     this.rejectAllPending('Server stopping');
+    for (const ghost of this.disconnectedClients.values()) {
+      clearTimeout(ghost.timer);
+    }
+    this.disconnectedClients.clear();
     return new Promise((resolve) => {
       if (this.wss) {
         this.wss.close(() => {
@@ -219,7 +251,19 @@ export class Bridge {
           break;
         }
 
-        const id = this.nextClientId(message.platform);
+        // If a recently-disconnected client matches this registration's
+        // identity triple, reuse its ID instead of allocating a fresh one —
+        // keeps `ios-1` stable across Fast Refresh reloads / WS blips.
+        const stickyId = this.findGhostMatch(message);
+        let id: string;
+        if (stickyId) {
+          const ghost = this.disconnectedClients.get(stickyId)!;
+          clearTimeout(ghost.timer);
+          this.disconnectedClients.delete(stickyId);
+          id = stickyId;
+        } else {
+          id = this.nextClientId(message.platform);
+        }
         const entry: ClientEntry = {
           appName: message.appName,
           appVersion: message.appVersion,
@@ -288,6 +332,28 @@ export class Bridge {
     const next = (this.platformSequences.get(prefix) ?? 0) + 1;
     this.platformSequences.set(prefix, next);
     return `${prefix}-${next}`;
+  }
+
+  // Look for a ghost ClientEntry whose identity triple (platform, deviceId,
+  // bundleId) matches this incoming registration. All three must be present
+  // and identical — partial matches are too risky (two apps on the same
+  // device, two devices of the same model with no deviceId set, …).
+  private findGhostMatch(message: {
+    bundleId?: string;
+    deviceId?: string;
+    platform?: string;
+  }): string | null {
+    if (!message.deviceId || !message.bundleId || !message.platform) return null;
+    for (const [id, ghost] of this.disconnectedClients) {
+      if (
+        ghost.entry.platform === message.platform &&
+        ghost.entry.deviceId === message.deviceId &&
+        ghost.entry.bundleId === message.bundleId
+      ) {
+        return id;
+      }
+    }
+    return null;
   }
 
   private rejectPendingForClient(clientId: string, reason: string): void {
