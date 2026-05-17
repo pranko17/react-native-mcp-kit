@@ -18,17 +18,56 @@ Apple-flavored HTTP/2-like protocol over TCP/IPv6.
 
 **On iOS 26 / CoreDevice tunnels the RSD port is dynamic, not 58783.** The
 pymobiledevice3 default of 58783 is the legacy port and is not reachable on
-modern devices. Per-tunnel observation: device opens 3-5 dynamic ports in the
-49152-60000 range. Which one is RSD has to be discovered — open questions
-worth following up:
+modern devices.
 
-- `log stream` predicate scoped to remotepairingd/CoreDeviceService for an
-  explicit `RSDPort` log line on tunnel establish.
-- Browse `_remoted._tcp` / `_rsd._tcp` over Bonjour scoped to the tunnel
-  interface. (We saw `_remotepairing._tcp` advertise the pairing identity on
-  the Wi-Fi interface but didn't get RSD on the tunnel.)
-- Brute-force connect to each open port and look for an HTTP/2 SETTINGS frame
-  in reply to the preface — the speaker of HTTP/2 is RSD.
+**Discovery is harder than expected — the port lives behind the encrypted
+control channel.** Concretely, in pymobiledevice3's `tunnel_service.py`
+(`RemotePairingProtocol.start_tcp_tunnel`):
+
+1. Pair-verify against the device's `_remotepairing._tcp` Bonjour service on
+   Wi-Fi (port advertised via mDNS, e.g. 50989). Requires pair record keys.
+2. Derive PSK from the verified pairing.
+3. Open a PSK-TLS connection through the control channel.
+4. Send `createListener { transportProtocolType: "tcp" }` request, encrypted.
+5. Device replies with a port — that listener is what becomes the tunnel
+   endpoint.
+6. Connect TCP to `<host>:<port>`, complete tunnel-establish handshake.
+7. The handshake response includes `serverAddress` and `serverRSDPort`.
+   That's where RSD finally lives.
+
+When devicectl runs an operation on macOS, it does all of this through
+CoreDeviceService.xpc. By the time the OS tunnel is "up" from our perspective
+(utun interface, mDNS resolution, established TCP from CoreDeviceService),
+the RSD port is already known — to CoreDeviceService — but it is NOT shared
+out-of-band that we can observe (logs replace it with `<private>`, mDNS over
+the tunnel doesn't republish it).
+
+What this means: pure piggy-backing on macOS's tunnel is **not enough** to
+talk to RSD. We have two viable routes:
+
+- **(a)** Full remote-pairing client of our own. Substantial: X25519 ECDH,
+  Ed25519 signing, SRP-6a re-pair, AES-GCM, PSK-TLS, plus reading the pair
+  record from `/var/db/lockdown/` (root-protected on modern macOS, but
+  usbmuxd exposes it via XPC, and there is a user-level fallback under
+  `~/Library/Application Support/com.libimobiledevice.lockdownd/` for tools
+  that wrote their own).
+- **(b)** XPC-talk to `com.apple.CoreDevice.CoreDeviceService` (the already-
+  running daemon) and ask it directly for an active tunnel's RSD info or to
+  proxy a connection. Apple-private NSXPCInterface, undocumented, but it's
+  what devicectl itself does. May be gated by codesign entitlement checks.
+
+Option (b) is the smaller-code path if the XPC interface turns out to be
+addressable. Worth a focused investigation before committing to (a).
+
+Failed approaches we tried first:
+- `log stream` predicate scoped to remotepairingd/CoreDeviceService — RSD
+  port logged but redacted as `<private>`.
+- Browse `_remoted._tcp` / `_rsd._tcp` over Bonjour on the tunnel interface
+  — nothing advertised through the tunnel (only `_remotepairing._tcp` on
+  the Wi-Fi side pre-tunnel).
+- Connect to each port CoreDeviceService is using on the device + send HTTP/2
+  preface — connection reset because those ports run PSK-TLS, not plain
+  HTTP/2.
 
 Initial preface (24 bytes, ASCII):
 
