@@ -59,6 +59,44 @@ talk to RSD. We have two viable routes:
 Option (b) is the smaller-code path if the XPC interface turns out to be
 addressable. Worth a focused investigation before committing to (a).
 
+### Probing notes for option (b)
+
+`com.apple.CoreDevice.CoreDeviceService` is a mach-service we CAN connect to
+as a regular unsandboxed user. A minimal `xpc_connection_create_mach_service`
++ `xpc_connection_send_message_with_reply` gets past the bootstrap; the
+daemon then cancels the connection because the message format is wrong, not
+because of an entitlement check. (`Reply ERROR: Connection interrupted` then
+`XPC ERROR: Connection invalid`.)
+
+That means: if we get the message format right, we can ask the running
+daemon directly. No entitlement, no codesign requirement.
+
+The data we want is in `CoreDeviceProtocols.DeviceInfo`. Symbols on
+`CoreDevice.framework` show the relevant fields:
+
+- `tunnelIPAddress: Network.IPv6Address?`
+- `tunnelIPAddressString: String?`
+- `tunnelTransportProtocol: TunnelTransportProtocol?`
+- `rsdServices: [RSDServiceDescriptor]?` — **service name → port mapping**
+- `remoteServicesVersion: String?`
+- `areDeveloperDiskImageServicesAvailable: Bool`
+
+`devicectl list devices --json-output` returns a filtered subset; `rsdServices`
+is stripped out. But CoreDeviceService.xpc has it in memory once the tunnel
+is up.
+
+Open task: figure out the XPC message shape that returns the full
+`DeviceInfo`. The daemon uses Apple's "Mercury" RPC layer on top of XPC
+(visible in symbols, e.g. `RemotePairing.XPCControlChannelTransport(xpcConnection:to:)`
+takes a `Mercury.XPCPeerConnection`). Mercury is also undocumented; either
+we reverse-engineer it from CoreDeviceService's binary or write a Swift
+helper that dlopens CoreDevice.framework and calls the right Swift function
+to fetch DeviceInfo (Swift API access requires either reverse-engineering
+the mangled symbols + calling conventions, or finding a `.swiftinterface`
+file).
+
+Both subpaths inside (b) are several days of work each.
+
 Failed approaches we tried first:
 - `log stream` predicate scoped to remotepairingd/CoreDeviceService — RSD
   port logged but redacted as `<private>`.
