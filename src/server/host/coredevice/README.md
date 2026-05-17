@@ -131,23 +131,38 @@ State degrades to `disconnected` within seconds after the command exits.
 
 ## Current status (2026-05-17)
 
-- **Layer 1** (tunnel keeper): working. `xcrun devicectl device info processes`
-  in a tight loop holds the tunnel up.
-- **Layer 2A** (device address): working. mDNS gives us
-  `<udid>.coredevice.local` → tunnel IPv6 once the link is up.
-- **Layer 2B** (RSD port): **working**. Parsed from
-  `log show --predicate 'eventMessage CONTAINS "for server port"'`. The
-  `Creating RSD backend client device for server port <N>` line is the only
-  one that doesn't get redacted as `<private>`. The port is dynamic per
-  tunnel session.
-- **Layer 3** (RSD client): **working in Python prototype** (`probe.py`). Key
-  insight: bind the source socket to the Mac end of the tunnel
-  (`fd<prefix>::2` from `ifconfig utun<N>`). Without that source bind, plain
-  TCP gets reset. WITH the bind, RSD speaks plain HTTP/2 over plain TCP —
-  no TLS-PSK needed because we're already inside the encrypted tunnel.
-  The handshake produces the full peer_info dict including a Services
-  mapping (74 entries on iOS 26.5).
-- **Layers 4–6**: not started.
+**End-to-end real-device screenshot is working.** Run
+`./screenshot.sh <core-device-uuid> /tmp/shot.png` and you get a 1320×2868
+PNG off the iPhone over Wi-Fi, no sudo, no USB cable. The shim composes:
+
+- our Layer 1 + 2A + 2B work (tunnel keeper, mDNS resolution, log-parsed
+  RSD port)
+- `pymobiledevice3 developer dvt screenshot --rsd <addr> <port>` for the
+  DTX-layer work (Layers 4–6 below)
+
+That confirms the approach works against iOS 26.5 today and gives us a
+reference implementation we can port to native TypeScript.
+
+Per-layer status:
+
+- **Layer 1** (tunnel keeper): working in TS (`tunnel.ts`).
+- **Layer 2A** (device address): working in TS (`tunnel.ts`).
+- **Layer 2B** (RSD port): working in `probe.py` and `screenshot.sh`,
+  not yet in TS. Parsed from `log show --predicate 'eventMessage CONTAINS
+  "for server port"'` — the only predicate that doesn't get redacted as
+  `<private>`. Port is dynamic per tunnel session.
+- **Layer 3** (RSD client + RemoteXPC): working in `probe.py`. Two
+  non-obvious requirements:
+  1. Bind the source socket to the Mac end of the tunnel
+     (`fd<prefix>::2` from `ifconfig utun<N>`). Default routing picks the
+     wrong utun on hosts with multiple tunnels (Tailscale, WireGuard, …).
+  2. No TLS. Inside the macOS-managed tunnel, RSD speaks plain HTTP/2.
+     The pair-record / PSK-TLS infrastructure that pymobiledevice3 needs
+     for its OWN sudo-tunnel is not required here.
+- **Layers 4–6** (DTX framing, DTServiceHub channel handshake,
+  DTScreenshotService): currently offloaded to pymobiledevice3 in
+  `screenshot.sh`. Porting to native TS is the next milestone — see
+  PROTOCOL.md for the wire-format reference.
 
 ## Service discovery output (iOS 26.5, observed)
 
