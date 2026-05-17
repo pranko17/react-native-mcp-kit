@@ -206,10 +206,14 @@ const shapeMatchesKind = (raw: unknown, kind: string): boolean => {
     case 'State':
     case 'Reducer':
     case 'Context':
+    case 'Optimistic': // useOptimistic — state-like slot, internally a useReducer variant.
+    case 'ActionState': // useActionState — [state, dispatch, isPending]; slot is state-like.
+    case 'Use': // use(promise | context) — thenable-state or context-read slot, both state-like.
     case 'Custom':
       // Permissive but not blind — drop obvious effect-node and ref-shape
       // slots so State/Custom metadata doesn't swallow internals of
-      // preceding custom hooks.
+      // preceding custom hooks. React 19 hooks fall into this bucket
+      // because their slot shape is state-like (not Effect/Memo/Ref).
       return !looksLikeEffectRecord(raw) && !looksLikeRefShape(raw);
     default:
       return true;
@@ -278,7 +282,11 @@ const serializeHookValue = (raw: unknown, kind: string): unknown => {
 // Cached per-function via WeakMap so cost is paid once per hook fn per
 // session.
 const HOOK_SLOTS_CACHE = new WeakMap<object, number>();
-const HOOK_NAME_RE = /\buse[A-Z]\w*\s*\(/g;
+// Counts hook-call occurrences inside a function's source text. Matches
+// `useXxx(` (classic) and bare `use(` (React 19's `use`). Negative
+// lookbehind on the bare-`use` arm filters out `.use(` method calls so
+// `database.use(middleware)` / `app.use(...)` don't inflate the count.
+const HOOK_NAME_RE = /\b(?<!\.)use(?:[A-Z]\w*)?\s*\(/g;
 const STRING_LITERAL_RE = /(['"`])(?:\\.|(?!\1).)*\1/g;
 const BLOCK_COMMENT_RE = /\/\*[\s\S]*?\*\//g;
 const LINE_COMMENT_RE = /\/\/[^\n]*/g;
