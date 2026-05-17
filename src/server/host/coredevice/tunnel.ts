@@ -1,13 +1,27 @@
-import { type ChildProcess, spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { promises as dns } from 'node:dns';
+import { networkInterfaces } from 'node:os';
 
 const DEFAULT_STARTUP_TIMEOUT_MS = 30_000;
 const KEEPER_POLL_INTERVAL_MS = 750;
-const HOSTNAME_RESOLVE_INTERVAL_MS = 250;
+const POLL_INTERVAL_MS = 250;
 
 export interface TunnelInfo {
-  /** Device's IPv6 address through the CoreDevice tunnel (the `fd45:…::1`-style ULA). */
+  /** Device's IPv6 address through the CoreDevice tunnel (the `fd…::1`-style ULA). */
   deviceAddress: string;
+  /**
+   * Mac-side IPv6 of the same tunnel (`fd…::2`). Sockets MUST bind to this
+   * address before connecting to the device; default routing picks the wrong
+   * utun on hosts with multiple tunnels (Tailscale, WireGuard, …).
+   */
+  hostAddress: string;
+  /** Tunnel interface name on the Mac, e.g. `utun6`. */
+  interfaceName: string;
+  /**
+   * Port the device's RemoteServiceDiscovery listens on inside the tunnel.
+   * Dynamic per session; we lift it from the system log.
+   */
+  rsdPort: number;
 }
 
 export interface TunnelHandle {
@@ -40,11 +54,6 @@ const sleep = (ms: number): Promise<void> => {
 // tunnel down within a few seconds. We piggy-back on this by running a cheap
 // `devicectl device info processes` command repeatedly. As long as a keeper
 // op is in-flight, the tunnel stays up.
-//
-// A cleaner alternative would be a Swift CLI that calls
-// `CoreDevice.CapabilityStaticMember.acquireUsageAssertion` directly. The
-// symbol is exposed in CoreDevice.framework. Left for a follow-up — the loop
-// approach is good enough for an MVP and has zero native code.
 class TunnelKeeper {
   private active = true;
   private currentChild: ChildProcess | null = null;
@@ -59,8 +68,6 @@ class TunnelKeeper {
     while (this.active) {
       await this.runOneIteration();
       if (!this.active) break;
-      // Brief breath between iterations. Apple's usage assertion grace period
-      // is several seconds, so the tunnel doesn't actually drop here.
       await sleep(KEEPER_POLL_INTERVAL_MS);
     }
   }
@@ -106,8 +113,6 @@ const resolveDeviceAddress = async (
   coreDeviceIdentifier: string,
   deadline: number
 ): Promise<string> => {
-  // mDNS publishes `<udid-lowercased>.coredevice.local` → device's tunnel IPv6.
-  // The hostname becomes resolvable as soon as the tunnel link comes up.
   const hostname = `${coreDeviceIdentifier.toLowerCase()}.coredevice.local`;
   let lastError: Error | null = null;
   while (Date.now() < deadline) {
@@ -119,10 +124,108 @@ const resolveDeviceAddress = async (
     } catch (err) {
       lastError = err as Error;
     }
-    await sleep(HOSTNAME_RESOLVE_INTERVAL_MS);
+    await sleep(POLL_INTERVAL_MS);
   }
   throw new TunnelStartupError(
-    `Could not resolve ${hostname} to an IPv6 address within deadline (last error: ${lastError?.message ?? 'unknown'})`
+    `Could not resolve ${hostname} to an IPv6 address (last error: ${lastError?.message ?? 'unknown'})`
+  );
+};
+
+// Find the utun interface that the OS just brought up for this device. We
+// pick by MTU (16000 is unique to the CoreDevice tunnel) and require an
+// fd<…>::/64 (ULA) address. The `::2` end is ours; the `::1` end is the
+// device.
+const findTunnelInterface = async (
+  deviceAddress: string,
+  deadline: number
+): Promise<{ hostAddress: string; interfaceName: string }> => {
+  while (Date.now() < deadline) {
+    const interfaces = networkInterfaces();
+    for (const [name, addrs] of Object.entries(interfaces)) {
+      if (!name.startsWith('utun') || !addrs) continue;
+      for (const addr of addrs) {
+        if (addr.family !== 'IPv6') continue;
+        if (!addr.address.startsWith('fd')) continue;
+        // Both sides of the tunnel live in the same /64 ULA. The device
+        // address ends in ::1; ours ends in ::2.
+        const devPrefix = deviceAddress.replace(/::1$/, '::');
+        const hostPrefix = addr.address.replace(/::2$/, '::');
+        if (devPrefix === hostPrefix) {
+          return { hostAddress: addr.address, interfaceName: name };
+        }
+      }
+    }
+    await sleep(POLL_INTERVAL_MS);
+  }
+  throw new TunnelStartupError(
+    `Could not find utun interface matching device ${deviceAddress}. Is the tunnel up?`
+  );
+};
+
+const runProcessCapture = (
+  command: string,
+  args: readonly string[],
+  timeoutMs: number
+): Promise<{ stderr: string; stdout: string }> => {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, [...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      reject(new Error(`${command} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    child.stdout?.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString('utf8');
+    });
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString('utf8');
+    });
+    child.on('close', () => {
+      clearTimeout(timer);
+      resolve({ stderr, stdout });
+    });
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+  });
+};
+
+const RSD_PORT_PATTERN = /for server port (\d+)/g;
+
+// The RSD port the device is listening on is logged by remotepairingd at
+// tunnel establish time. Most predicates redact it as `<private>`; the
+// "for server port" line slips through. We scan the last minute of log
+// output; the tunnel was brought up within the last few seconds.
+const findRsdPort = async (deadline: number): Promise<number> => {
+  while (Date.now() < deadline) {
+    const result = await runProcessCapture(
+      'log',
+      [
+        'show',
+        '--last',
+        '60s',
+        '--info',
+        '--debug',
+        '--predicate',
+        'eventMessage CONTAINS "for server port"',
+        '--style',
+        'compact',
+      ],
+      5_000
+    );
+    let lastPort: number | undefined;
+    let match;
+    while ((match = RSD_PORT_PATTERN.exec(result.stdout)) !== null) {
+      lastPort = Number(match[1]);
+    }
+    RSD_PORT_PATTERN.lastIndex = 0;
+    if (lastPort) return lastPort;
+    await sleep(POLL_INTERVAL_MS);
+  }
+  throw new TunnelStartupError(
+    'RSD port not found in system log. Is the tunnel up and is `log` available?'
   );
 };
 
@@ -137,11 +240,13 @@ export const startTunnel = async (
 
   try {
     const deviceAddress = await resolveDeviceAddress(coreDeviceIdentifier, deadline);
+    const { hostAddress, interfaceName } = await findTunnelInterface(deviceAddress, deadline);
+    const rsdPort = await findRsdPort(deadline);
     return {
       close: () => {
         return keeper.stop();
       },
-      info: { deviceAddress },
+      info: { deviceAddress, hostAddress, interfaceName, rsdPort },
     };
   } catch (err) {
     await keeper.stop();
