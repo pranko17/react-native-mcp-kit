@@ -1,8 +1,8 @@
 /**
  * JS-style path parser/resolver. Path examples:
  *   foo.bar          — object key access
- *   foo[3]           — array index
- *   foo[1:5]         — array/object slice (Python-style)
+ *   foo[3]           — array index, object Nth key, or single character of a string
+ *   foo[1:5]         — array/object/string slice (Python-style)
  *   foo[3:]          — slice from 3 to end
  *   foo[:5]          — slice from start to 5
  *   foo["key.with.dots"]   — bracket-quoted object key
@@ -14,6 +14,11 @@
  *   - array slice + `[N]`  → pick Nth element of the window
  *   - object slice + `.key` → take key from sub-object (no map)
  *   - object slice + `[N]` → Nth key in window (insertion order)
+ *   - string slice + anything → terminal; further access errors
+ *
+ * String slicing bypasses `previewCap` — `projectValue` returns the
+ * resolved substring raw (only the soft `maxBytes` cap still applies).
+ * Useful for dumping a specific window of a long log message or stack.
  */
 
 export type PathSegment =
@@ -22,7 +27,17 @@ export type PathSegment =
   | { kind: 'slice'; end?: number; start?: number };
 
 export type PathResult =
-  | { ok: true; value: unknown }
+  | {
+      /**
+       * True when the path's final segment is a slice (`[a:b]`). Callers use
+       * this to distinguish "agent asked to truncate" (raw substring is fine,
+       * skip preview-cap) from "agent navigated to a leaf" (still subject to
+       * preview-cap).
+       */
+      endsInSlice: boolean;
+      ok: true;
+      value: unknown;
+    }
   | { actual: unknown; error: string; ok: false; validUpTo: string };
 
 export const parsePath = (path: string): PathSegment[] => {
@@ -142,7 +157,8 @@ export const resolvePath = (root: unknown, path: string): PathResult => {
         ? segmentToString(seg)
         : `${validPath}${segmentSeparator(seg)}${segmentToString(seg)}`;
   }
-  return { ok: true, value: current };
+  const endsInSlice = segments.length > 0 && segments[segments.length - 1]!.kind === 'slice';
+  return { endsInSlice, ok: true, value: current };
 };
 
 const segmentSeparator = (seg: PathSegment): string => {
@@ -201,6 +217,17 @@ const stepIndex = (current: unknown, index: number): StepOk | StepFail => {
     }
     return { ok: true, value: current[real] };
   }
+  if (typeof current === 'string') {
+    // string indexing — Nth character. Negative indexes count from the end.
+    const real = index < 0 ? current.length + index : index;
+    if (real < 0 || real >= current.length) {
+      return {
+        error: `String index ${index} out of bounds (length ${current.length})`,
+        ok: false,
+      };
+    }
+    return { ok: true, value: current[real] };
+  }
   if (current && typeof current === 'object') {
     // object indexing — Nth key in insertion order
     const keys = Object.keys(current as object);
@@ -216,6 +243,11 @@ const stepIndex = (current: unknown, index: number): StepOk | StepFail => {
 const stepSlice = (current: unknown, seg: PathSegment & { kind: 'slice' }): StepOk | StepFail => {
   const { end, start } = seg;
   if (Array.isArray(current)) {
+    return { ok: true, value: current.slice(start, end) };
+  }
+  if (typeof current === 'string') {
+    // String slice returns the substring. `projectValue` recognises a
+    // path-resolved string and skips previewCap so the slice lands raw.
     return { ok: true, value: current.slice(start, end) };
   }
   if (current && typeof current === 'object') {

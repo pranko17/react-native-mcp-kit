@@ -80,10 +80,10 @@ All listing tools that return heavy JSON (console / network / errors / storage /
 
 Path syntax (JS-style):
   \`.key\` or \`["key.with.dots"]\` — object key access
-  \`[N]\` — index (numeric for arrays, positional for object keys in insertion order)
-  \`[start:end]\` / \`[start:]\` / \`[:end]\` — slice (Python/jq-style; negative indices count from end). After array slice, chained \`.key\` maps over each element; \`[N]\` picks one.
+  \`[N]\` — index (numeric for arrays, Nth char for strings, Nth key in insertion order for objects)
+  \`[start:end]\` / \`[start:]\` / \`[:end]\` — slice (Python/jq-style; negative indices count from end). Works on arrays, strings, and objects (key slice). After array slice, chained \`.key\` maps over each element; \`[N]\` picks one.
 
-Path drilling to a string scalar returns the raw string (not wrapped in a \`\${str}\` preview marker) — caller asked for the leaf, gets the leaf.
+Path drilling to a string scalar applies \`previewCap\` as usual — long leaves still wrap in a \`\${str}\` marker. To get a raw substring, end the path with a slice: \`stack[0:500]\` returns the first 500 chars verbatim (slice = explicit truncation request, previewCap bypassed). Default \`previewCap\` is 250; override per call via \`previewCap: <N>\`.
 
 \`depth\` (default per tool, max 8) controls how many container levels are walked before collapsing to a marker. Bump \`depth\` for an exploratory survey, use \`path\` for a targeted drill. \`maxBytes\` (default 50KB) caps the total response size — overflow is replaced with a single \`\${str}\` marker carrying the original byte count + a preview.
 
@@ -95,7 +95,7 @@ For \`fiber_tree__query\`, heavy fields (\`props\`, \`hooks\`) take projection k
 
 Hook filters: \`kinds\` (State/Effect/Memo/Ref/Custom/...), \`names\` (exact or \`/regex/flags\`), \`withValues\` (adds resolved values), \`expansionDepth\` (caps custom-hook recursion), \`format: "tree"\` (nested children vs flat \`via\` chains). Each hook entry carries \`{ kind, name, hook?, via?, expanded? }\`. Sensitive names (password, token, jwt, secret, credential, apiKey, authorization, Pin suffix) are auto-redacted; configure via \`fiberTreeModule({ redactHookNames, additionalRedactHookNames })\`.
 
-Marker format: \`{ "\${obj}": N }\` for collapsed objects (N keys), \`{ "\${arr}": N }\` for arrays (N items), \`{ "\${fun}": "name" }\` for functions, \`{ "\${str}": { len, preview } }\` for long strings (>100 chars), \`{ "\${Date}": "iso" }\` for Date, \`{ "\${Err}": { name, msg } }\` for Error, \`{ "\${RegExp}": "/.../i" }\` for RegExp, \`{ "\${map}": N }\` / \`{ "\${set}": N }\` for Map/Set sizes, \`{ "\${cyc}": true }\` for cycles, \`{ "\${ref}": { mcpId, name } }\` for fiber/native refs, \`{ "\${cls}": { name, len } }\` for class instances, \`{ "\${truncated}": { total, slice } }\` first key/item when a container is wider than the cap (30 keys for objects, 50 items for arrays).
+Marker format: \`{ "\${obj}": N }\` for collapsed objects (N keys), \`{ "\${arr}": N }\` for arrays (N items), \`{ "\${fun}": "name" }\` for functions, \`{ "\${str}": { len, preview } }\` for long strings (>\`previewCap\`, default 250), \`{ "\${Date}": "iso" }\` for Date, \`{ "\${Err}": { name, msg } }\` for Error, \`{ "\${RegExp}": "/.../i" }\` for RegExp, \`{ "\${map}": N }\` / \`{ "\${set}": N }\` for Map/Set sizes, \`{ "\${cyc}": true }\` for cycles, \`{ "\${ref}": { mcpId, name } }\` for fiber/native refs, \`{ "\${cls}": { name, len } }\` for class instances, \`{ "\${truncated}": { total, slice } }\` first key/item when a container is wider than the cap (30 keys for objects, 50 items for arrays).
 `;
 
 type TextContent = { text: string; type: 'text' };

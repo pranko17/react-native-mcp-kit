@@ -88,8 +88,8 @@ export const makeProjectionSchema = (
     },
     path: {
       description:
-        'Path drill into response (`.key`, `[N]`, `[a:b]`). See server instructions § Path-based drill for full syntax.',
-      examples: ['items[0].body', 'items[0:3].id', 'data.user.email'],
+        'Path drill into response (`.key`, `[N]`, `[a:b]`). `[N]` / `[a:b]` work on arrays, objects (Nth key / key slice) and strings (Nth char / substring). End the path with a slice on a string (`stack[0:500]`) to bypass previewCap — slice = explicit truncation request. See server instructions § Path-based drill for full syntax.',
+      examples: ['items[0].body', 'items[0:3].id', 'errors[-1].stack[0:500]'],
       type: 'string',
     },
     previewCap: {
@@ -319,6 +319,7 @@ export const projectValue = (input: unknown, options?: ProjectOptions): ProjectR
   // resolve path first (if any) — applies to the input tree, not the projection
   let target: unknown = input;
   let pathResolved = false;
+  let pathEndsInSlice = false;
   if (opts.path) {
     const res = resolvePath(input, opts.path);
     if (!res.ok) {
@@ -330,17 +331,20 @@ export const projectValue = (input: unknown, options?: ProjectOptions): ProjectR
     }
     target = res.value;
     pathResolved = true;
+    pathEndsInSlice = res.endsInSlice;
   }
 
-  // When path explicitly resolves to a string scalar, return the raw string
-  // (truncated only if it would blow the maxBytes cap). The user navigated
-  // to a leaf — they asked for the content, not a preview marker.
-  if (pathResolved && typeof target === 'string') {
+  // When the path ends in a slice and lands on a string, treat it as the
+  // agent explicitly asking for a substring window — return raw, only the
+  // maxBytes cap applies. Other paths that land on a string still go
+  // through previewCap (consistent with how strings would render anywhere
+  // else in the response).
+  if (pathResolved && pathEndsInSlice && typeof target === 'string') {
     if (target.length > maxBytes) {
       return {
         bytes: target.length,
         truncated: true,
-        value: { ['${str}']: { len: target.length, preview: target.slice(0, 200) } },
+        value: { ['${str}']: { len: target.length, preview: target.slice(0, previewCap) } },
       };
     }
     return { bytes: target.length, truncated: false, value: target };
