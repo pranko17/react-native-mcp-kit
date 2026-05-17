@@ -16,18 +16,38 @@ interface ResolvedFrame extends StackFrame {
   collapse?: boolean;
 }
 
+// Strip a leading "ErrorName: message" line if present. V8 and Hermes both
+// prepend this on `Error.stack`; some formats omit it. Anything that doesn't
+// look like a frame on the first line gets dropped so the regex matchers
+// below see a clean stack.
+const stripErrorHeader = (stack: string): string => {
+  const newline = stack.indexOf('\n');
+  if (newline === -1) return stack;
+  const firstLine = stack.slice(0, newline);
+  if (/^\s*[A-Z][A-Za-z]*Error:?(\s|$)/.test(firstLine) && !/@|^\s*at\s/.test(firstLine)) {
+    return stack.slice(newline + 1);
+  }
+  return stack;
+};
+
 /**
- * Parses a raw Error.stack string into structured frames. Supports both the
- * V8 `    at method (file:line:col)` format and the Hermes / JSC
- * `method@file:line:col` form used by React Native. Returns an empty array if
- * nothing matches so the caller can fall back gracefully.
+ * Parses a raw Error.stack string into structured frames. Supports:
+ *   • V8 `    at method (file:line:col)` (Node / Chrome)
+ *   • V8 `    at file:line:col` (anonymous)
+ *   • Hermes / JSC `method@file:line:col`
+ *   • Hermes anonymous `@file:line:col` and `anonymous@file:line:col`
+ *   • Hermes packager-rooted `?anon_0_/abs/path.tsx:line:col`
+ * Drops a leading `<Error>: <message>` header line. Returns an empty array
+ * if nothing matches so the caller can fall back gracefully.
  */
 const parseStackString = (stack: string): StackFrame[] => {
+  const body = stripErrorHeader(stack);
   const frames: StackFrame[] = [];
 
+  // V8 — handles both `at method (file:L:C)` and bare `at file:L:C` (anon).
   const v8Regex = /^\s*at\s+(?:(.+?)\s+\()?(.+?):(\d+):(\d+)\)?\s*$/gm;
   let match: RegExpExecArray | null;
-  while ((match = v8Regex.exec(stack)) !== null) {
+  while ((match = v8Regex.exec(body)) !== null) {
     frames.push({
       column: Number.parseInt(match[4]!, 10),
       file: match[2]!,
@@ -37,13 +57,19 @@ const parseStackString = (stack: string): StackFrame[] => {
   }
   if (frames.length > 0) return frames;
 
-  const hermesRegex = /^(.*?)@(.+?):(\d+):(\d+)$/gm;
-  while ((match = hermesRegex.exec(stack)) !== null) {
+  // Hermes / JSC — `[method]@[?anon_X_]<file>:L:C`. Method side can be empty
+  // (purely `@file:L:C`) or the literal "anonymous". `?anon_N_/abs/path` is
+  // Hermes' compiled-bundle marker for anonymous functions and passes
+  // through to Metro's /symbolicate as-is.
+  const hermesRegex = /^(.*?)@(\??[^:\n]+?):(\d+):(\d+)$/gm;
+  while ((match = hermesRegex.exec(body)) !== null) {
+    const methodName = match[1]?.trim();
     frames.push({
       column: Number.parseInt(match[4]!, 10),
       file: match[2]!,
       lineNumber: Number.parseInt(match[3]!, 10),
-      methodName: match[1]?.trim() || undefined,
+      methodName:
+        methodName && methodName.length > 0 && methodName !== 'anonymous' ? methodName : undefined,
     });
   }
   return frames;

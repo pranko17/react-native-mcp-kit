@@ -8,9 +8,21 @@ import {
 
 import { type ConsoleModuleOptions, type LogEntry, type LogLevel } from './types';
 
-const ALL_LEVELS: LogLevel[] = ['debug', 'error', 'info', 'log', 'warn'];
+const ALL_LEVELS: LogLevel[] = [
+  'debug',
+  'error',
+  'group',
+  'groupCollapsed',
+  'groupEnd',
+  'info',
+  'log',
+  'trace',
+  'warn',
+];
 const DEFAULT_MAX_ENTRIES = 100;
-const DEFAULT_STACK_LEVELS: LogLevel[] = ['error', 'warn'];
+// `trace` always carries a stack — that's the point of trace. Errors/warns
+// get one too by default so noisy assertions are debuggable.
+const DEFAULT_STACK_LEVELS: LogLevel[] = ['error', 'trace', 'warn'];
 
 // Default depth 3 — top level is array of entries, level 2 expands each
 // entry (id/level/timestamp inline, args/stack still markers), level 3
@@ -69,10 +81,20 @@ const installPatches = (): void => {
   patchesInstalled = true;
   for (const level of ALL_LEVELS) {
     const original = console[level];
-    console[level] = (...args: unknown[]) => {
-      addEntry(level, args);
-      original.apply(console, args);
-    };
+    // trace / group / groupCollapsed / groupEnd may be missing on the RN
+    // console (depends on RN version / debugger). Patch only when present;
+    // otherwise we install our own implementation that just records the
+    // call so the agent still sees the structure.
+    if (typeof original === 'function') {
+      console[level] = (...args: unknown[]) => {
+        addEntry(level, args);
+        original.apply(console, args);
+      };
+    } else {
+      console[level] = (...args: unknown[]) => {
+        addEntry(level, args);
+      };
+    }
   }
 };
 
@@ -108,14 +130,17 @@ export const consoleModule = (options?: ConsoleModuleOptions): McpModule => {
   }
 
   return {
-    description: `Ring buffer of console.log/warn/error/info/debug.
+    description: `Ring buffer of console.{log,warn,error,info,debug,trace,group,groupCollapsed,groupEnd}.
 
 Each entry carries a monotonic numeric \`id\`. Args are stored raw; the
 shared projection runs at query time. Stack traces captured per level
-(default error+warn). Listing tools accept path / depth / maxBytes
-(default depth ${CONSOLE_DEFAULT_DEPTH}). Capture starts at module-import time so cold-start
-logs are not lost. Buffer size and captured levels are configurable via
-consoleModule options.`,
+(default error+warn+trace). \`trace\` always carries a stack; \`group\` /
+\`groupCollapsed\` / \`groupEnd\` are recorded structurally so the agent
+sees nesting context (RN console may not surface these natively — they
+still land in the buffer). Listing tools accept path / depth / maxBytes
+(default depth ${CONSOLE_DEFAULT_DEPTH}). Capture starts at module-import time
+so cold-start logs are not lost. Buffer size and captured levels are
+configurable via consoleModule options.`,
     name: 'console',
     tools: {
       clear_logs: {

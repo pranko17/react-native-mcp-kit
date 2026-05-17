@@ -113,9 +113,6 @@ const hashBuffer = (buf: Buffer): string => {
   return createHash('sha256').update(buf).digest('hex');
 };
 
-// Per-device cache for screenshot diff
-const lastScreenshotHash = new Map<string, string>();
-
 interface ScreenshotImage {
   data: string;
   mimeType: 'image/webp';
@@ -133,15 +130,11 @@ interface ScreenshotError {
   error: string;
 }
 
-interface ScreenshotUnchanged {
-  message: string;
-  unchanged: true;
-}
-
 interface ScreenshotMeta {
   bytes: number;
   height: number;
   width: number;
+  hash?: string;
   originalHeight?: number;
   originalWidth?: number;
   /**
@@ -153,13 +146,24 @@ interface ScreenshotMeta {
   scale?: number;
 }
 
-const buildResponse = (resized: ResizedScreenshot): ScreenshotResponse => {
-  // `scale` = image-to-source ratio. When a region was cropped it's the
-  // image/region ratio; otherwise it's image/full-screen. Agents use it for
-  // pixel-back-to-device math.
+interface ScreenshotUnchanged {
+  /** Meta of the previously-returned image — same shape as a normal capture. */
+  lastMeta: ScreenshotMeta;
+  message: string;
+  unchanged: true;
+}
+
+// Per-device cache for screenshot diff. Holds the meta of the last actually
+// returned response so the `unchanged: true` reply can tell the agent what
+// the still-on-the-wire image looked like (size, region, hash) without
+// re-shipping the bytes.
+const lastScreenshot = new Map<string, ScreenshotMeta>();
+
+const buildMeta = (resized: ResizedScreenshot, hash: string): ScreenshotMeta => {
   const sourceWidth = resized.region?.width ?? resized.originalWidth;
-  const meta: ScreenshotMeta = {
+  return {
     bytes: resized.buffer.length,
+    hash,
     height: resized.height,
     originalHeight: resized.originalHeight,
     originalWidth: resized.originalWidth,
@@ -167,6 +171,13 @@ const buildResponse = (resized: ResizedScreenshot): ScreenshotResponse => {
     scale: sourceWidth ? Number((resized.width / sourceWidth).toFixed(3)) : undefined,
     width: resized.width,
   };
+};
+
+const buildResponse = (resized: ResizedScreenshot, hash: string): ScreenshotResponse => {
+  // `scale` = image-to-source ratio. When a region was cropped it's the
+  // image/region ratio; otherwise it's image/full-screen. Agents use it for
+  // pixel-back-to-device math.
+  const meta = buildMeta(resized, hash);
   return [
     {
       data: resized.buffer.toString('base64'),
@@ -178,6 +189,14 @@ const buildResponse = (resized: ResizedScreenshot): ScreenshotResponse => {
       type: 'text',
     },
   ];
+};
+
+const unchangedResponse = (lastMeta: ScreenshotMeta): ScreenshotUnchanged => {
+  return {
+    lastMeta,
+    message: 'Screenshot unchanged since last capture.',
+    unchanged: true,
+  };
 };
 
 const captureIos = async (
@@ -202,11 +221,13 @@ const captureIos = async (
     const raw = await readFile(tmpPath);
     const resized = await resizeScreenshot(raw, width, region);
     const hash = hashBuffer(resized.buffer);
-    if (lastScreenshotHash.get(udid) === hash) {
-      return { message: 'Screenshot unchanged since last capture.', unchanged: true };
+    const last = lastScreenshot.get(udid);
+    if (last && last.hash === hash) {
+      return unchangedResponse(last);
     }
-    lastScreenshotHash.set(udid, hash);
-    return buildResponse(resized);
+    const meta = buildMeta(resized, hash);
+    lastScreenshot.set(udid, meta);
+    return buildResponse(resized, hash);
   } catch (err) {
     if (err instanceof ProcessNotFoundError) {
       return {
@@ -235,11 +256,13 @@ const captureIosRealDevice = async (
     });
     const resized = await resizeScreenshot(raw, width, region);
     const hash = hashBuffer(resized.buffer);
-    if (lastScreenshotHash.get(coreDeviceIdentifier) === hash) {
-      return { message: 'Screenshot unchanged since last capture.', unchanged: true };
+    const last = lastScreenshot.get(coreDeviceIdentifier);
+    if (last && last.hash === hash) {
+      return unchangedResponse(last);
     }
-    lastScreenshotHash.set(coreDeviceIdentifier, hash);
-    return buildResponse(resized);
+    const meta = buildMeta(resized, hash);
+    lastScreenshot.set(coreDeviceIdentifier, meta);
+    return buildResponse(resized, hash);
   } catch (err) {
     return {
       error: `Failed to capture real-device screenshot: ${(err as Error).message}`,
@@ -270,11 +293,13 @@ const captureAndroid = async (
     }
     const resized = await resizeScreenshot(proc.stdout, width, region);
     const hash = hashBuffer(resized.buffer);
-    if (lastScreenshotHash.get(serial) === hash) {
-      return { message: 'Screenshot unchanged since last capture.', unchanged: true };
+    const last = lastScreenshot.get(serial);
+    if (last && last.hash === hash) {
+      return unchangedResponse(last);
     }
-    lastScreenshotHash.set(serial, hash);
-    return buildResponse(resized);
+    const meta = buildMeta(resized, hash);
+    lastScreenshot.set(serial, meta);
+    return buildResponse(resized, hash);
   } catch (err) {
     if (err instanceof ProcessNotFoundError) {
       return {
@@ -289,12 +314,12 @@ const captureAndroid = async (
 
 export const screenshotTool = (runner: ProcessRunner): HostToolHandler => {
   return {
-    description: `WebP screenshot, resized to save vision tokens. Response is [image, metadata] where metadata is JSON with { width, height, originalWidth, originalHeight, scale, bytes, region? }.
+    description: `WebP screenshot, resized to save vision tokens. Response is [image, metadata] where metadata is JSON with { width, height, originalWidth, originalHeight, scale, bytes, hash, region? }.
 
 TOKEN BUDGETING
   • Vision tokens are driven by image area. Default width ${SCREENSHOT_DEFAULT_WIDTH} gives a readable full-screen view at ~300 tokens. Bump only to read small text.
   • Pass \`region: { x, y, width, height }\` (physical device pixels) to crop to a single element — typical tap-target shrinks to ~20-60 vision tokens. Grab the rect from fiber_tree__query bounds.
-  • { unchanged: true } is returned when the resized bytes are identical to the previous capture — cheap polling.
+  • \`{ unchanged: true, lastMeta }\` is returned when the resized bytes are identical to the previous capture — cheap polling. \`lastMeta\` is the meta of the previously-returned image (same shape, including \`hash\`) so you don't need to re-query.
 
 Use fiber_tree bounds for tap targeting; screenshots are for visual verification of what the UI looks like right now.`,
     handler: async (args, ctx) => {

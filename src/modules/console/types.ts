@@ -1,4 +1,13 @@
-export type LogLevel = 'debug' | 'error' | 'info' | 'log' | 'warn';
+export type LogLevel =
+  | 'debug'
+  | 'error'
+  | 'group'
+  | 'groupCollapsed'
+  | 'groupEnd'
+  | 'info'
+  | 'log'
+  | 'trace'
+  | 'warn';
 
 export interface LogEntry {
   args: unknown[];

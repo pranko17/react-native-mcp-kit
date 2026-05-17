@@ -33,9 +33,11 @@ export const DEFAULT_MAX_BYTES = 50_000;
 export type CollapseRule = (value: unknown) => Record<string, unknown> | undefined;
 
 export interface ProjectOptions {
+  arrayCap?: number;
   collapse?: ReadonlyArray<CollapseRule>;
   depth?: number;
   maxBytes?: number;
+  objectCap?: number;
   path?: string;
   previewCap?: number;
   redact?: RedactPatterns;
@@ -72,6 +74,12 @@ export const makeProjectionSchema = (
   }
 > => {
   return {
+    arrayCap: {
+      default: DEFAULT_ARRAY_CAP,
+      description: `Width cap for arrays inside the response. Arrays wider than this get a \`\${truncated}\` sentinel as their first item with the original \`total\` and the kept \`slice\`. Bump for wide fiber children / route stacks; lower for noisy logs.`,
+      minimum: 1,
+      type: 'number',
+    },
     depth: {
       default: defaultDepth,
       description: 'Expansion depth. See server instructions § Path-based drill.',
@@ -83,6 +91,12 @@ export const makeProjectionSchema = (
     maxBytes: {
       default: DEFAULT_MAX_BYTES,
       description: 'Soft byte cap. See server instructions § Path-based drill.',
+      minimum: 1,
+      type: 'number',
+    },
+    objectCap: {
+      default: DEFAULT_OBJECT_CAP,
+      description: `Width cap for plain objects inside the response. Objects with more keys get a \`\${truncated}\` sentinel; the rest of the keys collapse. Bump for wide prop bags / state objects.`,
       minimum: 1,
       type: 'number',
     },
@@ -105,8 +119,10 @@ export const makeProjectionSchema = (
 export const PROJECTION_SCHEMA = makeProjectionSchema();
 
 export interface ProjectionArgs {
+  arrayCap?: number;
   depth?: number;
   maxBytes?: number;
+  objectCap?: number;
   path?: string;
   previewCap?: number;
 }
@@ -141,8 +157,10 @@ export const applyProjection = (
   defaultDepth: number = DEFAULT_DEPTH
 ): unknown => {
   return projector(result, {
+    arrayCap: args.arrayCap,
     depth: args.depth ?? defaultDepth,
     maxBytes: args.maxBytes,
+    objectCap: args.objectCap,
     path: args.path,
     previewCap: args.previewCap,
   });
@@ -303,8 +321,8 @@ const walk = (v: unknown, remainingDepth: number, ctx: WalkCtx, seen: WeakSet<ob
 export const projectValue = (input: unknown, options?: ProjectOptions): ProjectResult => {
   const opts = options ?? {};
   const depth = clampDepth(opts.depth ?? DEFAULT_DEPTH);
-  const objectCap = DEFAULT_OBJECT_CAP;
-  const arrayCap = DEFAULT_ARRAY_CAP;
+  const objectCap = opts.objectCap ?? DEFAULT_OBJECT_CAP;
+  const arrayCap = opts.arrayCap ?? DEFAULT_ARRAY_CAP;
   const previewCap = opts.previewCap ?? DEFAULT_PREVIEW_CAP;
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
   const collapse = opts.collapse ?? [];
