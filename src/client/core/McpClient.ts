@@ -231,10 +231,19 @@ export class McpClient {
       return McpClient.instance;
     }
 
-    const host = options?.host ?? 'localhost';
+    const auto = autoDetectIdentity();
+    // Default the WS host to whatever origin the bundle was loaded from. On
+    // a simulator/emulator that's `localhost` (same as before). On a physical
+    // iOS device over Wi-Fi it's the Mac's LAN IP — the device can reach the
+    // MCP server without any extra port-forwarding because the WebSocket
+    // server already binds to 0.0.0.0. On Android over `adb reverse` it
+    // resolves to `localhost`, which the user must mirror with
+    // `adb reverse tcp:<port> tcp:<port>` for the MCP port. Production
+    // bundles return undefined here, so we fall back to `localhost` and the
+    // connect attempt simply no-ops.
+    const host = options?.host ?? auto.devServer?.host ?? 'localhost';
     const port = options?.port ?? DEFAULT_PORT;
 
-    const auto = autoDetectIdentity();
     const identity: ClientIdentity = {
       appName: options?.appName ?? auto.appName,
       appVersion: options?.appVersion ?? auto.appVersion,
