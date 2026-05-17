@@ -27,7 +27,7 @@ export const DEFAULT_DEPTH = 1;
 export const MAX_DEPTH = 8;
 export const DEFAULT_OBJECT_CAP = 30;
 export const DEFAULT_ARRAY_CAP = 50;
-export const DEFAULT_PREVIEW_CAP = 100;
+export const DEFAULT_PREVIEW_CAP = 250;
 export const DEFAULT_MAX_BYTES = 50_000;
 
 export type CollapseRule = (value: unknown) => Record<string, unknown> | undefined;
@@ -92,6 +92,12 @@ export const makeProjectionSchema = (
       examples: ['items[0].body', 'items[0:3].id', 'data.user.email'],
       type: 'string',
     },
+    previewCap: {
+      default: DEFAULT_PREVIEW_CAP,
+      description: `Per-string preview length. Strings longer than this collapse to \`{"\${str}":{len,preview}}\` showing the full \`len\` and the first \`previewCap\` chars. Bump when previews are getting cut mid-content; lower when you only need to confirm a value exists.`,
+      minimum: 1,
+      type: 'number',
+    },
   };
 };
 
@@ -102,6 +108,7 @@ export interface ProjectionArgs {
   depth?: number;
   maxBytes?: number;
   path?: string;
+  previewCap?: number;
 }
 
 /**
@@ -137,6 +144,7 @@ export const applyProjection = (
     depth: args.depth ?? defaultDepth,
     maxBytes: args.maxBytes,
     path: args.path,
+    previewCap: args.previewCap,
   });
 };
 
