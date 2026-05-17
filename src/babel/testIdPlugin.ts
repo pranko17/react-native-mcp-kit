@@ -265,20 +265,29 @@ const buildHooksGetterStmt = (
   return t.tryStatement(t.blockStatement([defineCall]), t.catchClause(null, t.blockStatement([])));
 };
 
-// Build the `ComponentName.__mcp_hooks = [...]` statement. Used at
-// `Program:exit` time when we drain the deferred queue.
+// Build the `ComponentName.__mcp_hooks = [...]` statement, wrapped in a
+// `try { ... } catch {}` so a stale binding can't crash module-init. We
+// place these at the END of the program body — by the time they run, every
+// `var X = ...` in the file has been initialized. Without that placement,
+// react-compiler + react-native preset rewrite `const Foo = ...` to a
+// hoisted `var Foo = ...` whose binding is `undefined` until its source-line
+// is reached, and a worklets-extracted `var _worklet_..._init_data` slips
+// between our queued insertAfter target and the rebuilt declaration —
+// `Foo.__mcp_hooks = [...]` then runs against `undefined` and throws.
 const buildAssignmentStmt = (
   componentName: string,
   hooks: CollectedHook[],
   t: typeof BabelTypes
-): BabelTypes.ExpressionStatement => {
-  return t.expressionStatement(
+): BabelTypes.TryStatement => {
+  const assignment = t.expressionStatement(
     t.assignmentExpression(
       '=',
       t.memberExpression(t.identifier(componentName), t.identifier('__mcp_hooks')),
       buildHooksArrayExpr(hooks, t)
     )
   );
+
+  return t.tryStatement(t.blockStatement([assignment]), t.catchClause(null, t.blockStatement([])));
 };
 
 // Queue a `ComponentName.__mcp_hooks = [...]` insertion for `Program:exit`.
@@ -552,13 +561,16 @@ export default function testIdPlugin({ types: t }: { types: typeof BabelTypes })
       // === Part 3: drain deferred-injection queue at module end. ===
       // Runs after all other plugins' visitors (in particular react-refresh's
       // replaceWith on HOC-wrapped components) have finished mutating the
-      // tree. Each queued entry's `statementPath` is the original declaration
-      // statement — still valid at this point because none of the upstream
-      // plugins replace top-level statements, only their inner expressions.
-      // We dedupe by `outer` name to defend against multiple visitor passes
-      // queuing the same component twice.
+      // tree. We dedupe by `outer` name to defend against multiple visitor
+      // passes queuing the same component twice, then push every queued
+      // statement onto the END of the Program body. End-of-body is the only
+      // placement that's safe across react-compiler + worklets + unistyles:
+      // earlier plugins can rewrite a `const Foo = ...` declaration into a
+      // hoisted `var Foo = ...` and slip extracted helpers (`_worklet_..._init_data`,
+      // memoization scaffolding) BEFORE Foo's source line, leaving an
+      // insertAfter-target-position holding a stale `undefined` binding.
       Program: {
-        exit(_programPath, state) {
+        exit(programPath, state) {
           const pluginState = state as PluginPassWithQueue;
           const queue = pluginState.pendingInjects;
           if (!queue || queue.length === 0) return;
@@ -566,11 +578,10 @@ export default function testIdPlugin({ types: t }: { types: typeof BabelTypes })
           for (const entry of queue) {
             if (seen.has(entry.outer)) continue;
             seen.add(entry.outer);
-            if (!entry.statementPath.node) continue; // statement was removed by another pass
             if (entry.kind === 'assignment') {
-              entry.statementPath.insertAfter(buildAssignmentStmt(entry.outer, entry.hooks, t));
+              programPath.pushContainer('body', buildAssignmentStmt(entry.outer, entry.hooks, t));
             } else {
-              entry.statementPath.insertAfter(buildHooksGetterStmt(entry.outer, entry.inner, t));
+              programPath.pushContainer('body', buildHooksGetterStmt(entry.outer, entry.inner, t));
             }
           }
           pluginState.pendingInjects = [];
