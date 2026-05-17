@@ -5,6 +5,7 @@ import { join } from 'node:path';
 
 import sharp from 'sharp';
 
+import { captureScreenshot } from '@/server/host/coredevice/screenshot';
 import { resolveDevice } from '@/server/host/deviceResolver';
 import { NATIVE_ID_SCHEMA, PLATFORM_ARG_SCHEMA, parseResolveOptions } from '@/server/host/helpers';
 import { ProcessNotFoundError, type ProcessRunner } from '@/server/host/processRunner';
@@ -220,6 +221,32 @@ const captureIos = async (
   }
 };
 
+// Real iOS device — talks DTX to the device's instruments dtservicehub
+// through the CoreDevice tunnel (see src/server/host/coredevice/). No
+// simulator involved.
+const captureIosRealDevice = async (
+  coreDeviceIdentifier: string,
+  width: number,
+  region: Region | null
+): Promise<ScreenshotResponse | ScreenshotUnchanged | ScreenshotError> => {
+  try {
+    const raw = await captureScreenshot(coreDeviceIdentifier, {
+      timeoutMs: SCREENSHOT_TIMEOUT_MS,
+    });
+    const resized = await resizeScreenshot(raw, width, region);
+    const hash = hashBuffer(resized.buffer);
+    if (lastScreenshotHash.get(coreDeviceIdentifier) === hash) {
+      return { message: 'Screenshot unchanged since last capture.', unchanged: true };
+    }
+    lastScreenshotHash.set(coreDeviceIdentifier, hash);
+    return buildResponse(resized);
+  } catch (err) {
+    return {
+      error: `Failed to capture real-device screenshot: ${(err as Error).message}`,
+    };
+  }
+};
+
 const captureAndroid = async (
   serial: string,
   runner: ProcessRunner,
@@ -281,6 +308,9 @@ Use fiber_tree bounds for tap targeting; screenshots are for visual verification
         return { error: region.error };
       }
       if (resolved.device.platform === 'ios') {
+        if (resolved.device.kind === 'real-device') {
+          return captureIosRealDevice(resolved.device.nativeId, width, region);
+        }
         return captureIos(resolved.device.nativeId, runner, width, region);
       }
       return captureAndroid(resolved.device.nativeId, runner, width, region);

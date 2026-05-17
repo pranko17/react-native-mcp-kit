@@ -1,3 +1,9 @@
+import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { type Bridge, type ClientEntry } from '@/server/bridge';
 
 import { ProcessNotFoundError, type ProcessRunner } from './processRunner';
@@ -12,13 +18,22 @@ export interface IosSimulator {
   udid: string;
 }
 
+export interface IosRealDevice {
+  coreDeviceIdentifier: string;
+  name: string;
+  pairingState: string;
+}
+
 export interface AndroidDevice {
   serial: string;
   state: string;
 }
 
+export type DeviceKind = 'real-device' | 'simulator';
+
 export interface ResolvedDevice {
   displayName: string;
+  kind: DeviceKind;
   nativeId: string;
   platform: 'android' | 'ios';
   bundleId?: string;
@@ -53,10 +68,12 @@ interface ResolveOptions {
 }
 
 let iosCache: Cache<IosSimulator[]> | null = null;
+let iosRealCache: Cache<IosRealDevice[]> | null = null;
 let androidCache: Cache<AndroidDevice[]> | null = null;
 
 export const clearDeviceCache = (): void => {
   iosCache = null;
+  iosRealCache = null;
   androidCache = null;
 };
 
@@ -85,6 +102,54 @@ export const listIosSimulators = async (runner: ProcessRunner): Promise<IosSimul
   }
   iosCache = { result: out, timestamp: Date.now() };
   return out;
+};
+
+// Paired physical iOS devices come from `xcrun devicectl` — simctl knows
+// nothing about them. The JSON output of `list devices` is the only stable
+// integration surface (its stdout has a human-readable header first).
+export const listIosRealDevices = async (runner: ProcessRunner): Promise<IosRealDevice[]> => {
+  if (iosRealCache && Date.now() - iosRealCache.timestamp < CACHE_TTL_MS) {
+    return iosRealCache.result;
+  }
+  const tmpPath = join(tmpdir(), `rnmcp-devicectl-${randomUUID()}.json`);
+  try {
+    const proc = await runner('xcrun', ['devicectl', 'list', 'devices', '--json-output', tmpPath], {
+      timeoutMs: LIST_TIMEOUT_MS,
+    });
+    if (proc.exitCode !== 0) {
+      throw new Error(
+        `xcrun devicectl list failed (exit ${proc.exitCode}): ${proc.stderr.toString('utf8').trim().slice(0, 500)}`
+      );
+    }
+    const raw = readFileSync(tmpPath, 'utf8');
+    const parsed = JSON.parse(raw) as {
+      result?: {
+        devices?: Array<{
+          connectionProperties?: { pairingState?: string };
+          deviceProperties?: { name?: string };
+          hardwareProperties?: { platform?: string };
+          identifier?: string;
+        }>;
+      };
+    };
+    const devices = parsed.result?.devices ?? [];
+    const out: IosRealDevice[] = [];
+    for (const d of devices) {
+      if (d.hardwareProperties?.platform !== 'iOS') continue;
+      const id = d.identifier;
+      const name = d.deviceProperties?.name;
+      const pairingState = d.connectionProperties?.pairingState;
+      if (typeof id === 'string' && typeof name === 'string' && typeof pairingState === 'string') {
+        out.push({ coreDeviceIdentifier: id, name, pairingState });
+      }
+    }
+    iosRealCache = { result: out, timestamp: Date.now() };
+    return out;
+  } finally {
+    rm(tmpPath, { force: true }).catch(() => {
+      // best-effort
+    });
+  }
 };
 
 export const listAndroidDevices = async (runner: ProcessRunner): Promise<AndroidDevice[]> => {
@@ -149,10 +214,77 @@ const matchAndroidDeviceByClient = (devices: AndroidDevice[]): AndroidDevice | n
   return online.length === 1 ? online[0]! : null;
 };
 
+const matchIosRealDeviceByClient = (
+  devices: IosRealDevice[],
+  client: ClientEntry
+): IosRealDevice | null => {
+  const paired = devices.filter((d) => {
+    return d.pairingState === 'paired';
+  });
+  if (paired.length === 0) return null;
+  if (!client.label) {
+    return paired.length === 1 ? paired[0]! : null;
+  }
+  const label = client.label;
+  const substring = paired.filter((d) => {
+    return d.name.includes(label) || label.includes(d.name);
+  });
+  if (substring.length === 1) return substring[0]!;
+  return paired.length === 1 ? paired[0]! : null;
+};
+
+const resolveIosRealClient = async (
+  client: ClientEntry,
+  runner: ProcessRunner
+): Promise<DeviceResolution> => {
+  try {
+    const devices = await listIosRealDevices(runner);
+    const matched = matchIosRealDeviceByClient(devices, client);
+    if (matched) {
+      return {
+        device: {
+          bundleId: client.bundleId,
+          displayName: matched.name,
+          kind: 'real-device',
+          nativeId: matched.coreDeviceIdentifier,
+          platform: 'ios',
+        },
+        ok: true,
+      };
+    }
+    const pairedList = devices
+      .filter((d) => {
+        return d.pairingState === 'paired';
+      })
+      .map((d) => {
+        return `${d.name} (${d.coreDeviceIdentifier})`;
+      })
+      .join(', ');
+    return {
+      error: `Cannot resolve iOS client '${client.id}' to a paired real device. Label hint: "${client.label ?? '(none)'}". Paired devices: ${pairedList || '(none)'}.`,
+      ok: false,
+    };
+  } catch (err) {
+    if (err instanceof ProcessNotFoundError) {
+      return {
+        error: 'xcrun not found. iOS host tools require Xcode command line tools (macOS only).',
+        ok: false,
+      };
+    }
+    return {
+      error: `Failed to list iOS real devices: ${(err as Error).message}`,
+      ok: false,
+    };
+  }
+};
+
 const resolveIosClient = async (
   client: ClientEntry,
   runner: ProcessRunner
 ): Promise<DeviceResolution> => {
+  if (client.isSimulator === false) {
+    return resolveIosRealClient(client, runner);
+  }
   try {
     const sims = await listIosSimulators(runner);
     const matched = matchIosSimByClient(sims, client);
@@ -161,6 +293,7 @@ const resolveIosClient = async (
         device: {
           bundleId: client.bundleId,
           displayName: matched.name,
+          kind: 'simulator',
           nativeId: matched.udid,
           platform: 'ios',
         },
@@ -205,6 +338,7 @@ const resolveAndroidClient = async (
         device: {
           bundleId: client.bundleId,
           displayName: matched.serial,
+          kind: 'real-device',
           nativeId: matched.serial,
           platform: 'android',
         },
@@ -269,7 +403,12 @@ const scanIosDevices = async (runner: ProcessRunner): Promise<DeviceResolution> 
     if (booted.length === 1) {
       const only = booted[0]!;
       return {
-        device: { displayName: only.name, nativeId: only.udid, platform: 'ios' },
+        device: {
+          displayName: only.name,
+          kind: 'simulator',
+          nativeId: only.udid,
+          platform: 'ios',
+        },
         ok: true,
       };
     }
@@ -313,6 +452,7 @@ const scanAndroidDevices = async (runner: ProcessRunner): Promise<DeviceResoluti
       return {
         device: {
           displayName: only.serial,
+          kind: 'real-device',
           nativeId: only.serial,
           platform: 'android',
         },
@@ -369,6 +509,7 @@ const resolveIosByUdid = async (udid: string, runner: ProcessRunner): Promise<De
     return {
       device: {
         displayName: match.name,
+        kind: 'simulator',
         nativeId: match.udid,
         platform: 'ios',
       },
@@ -418,6 +559,7 @@ const resolveAndroidBySerial = async (
     return {
       device: {
         displayName: match.serial,
+        kind: 'real-device',
         nativeId: match.serial,
         platform: 'android',
       },

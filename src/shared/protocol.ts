@@ -22,7 +22,7 @@ export const DYNAMIC_PREFIX = `${MODULE_SEPARATOR}dynamic${MODULE_SEPARATOR}`;
  * Introduced in package v2.0.0. Older clients/servers don't send or expect a
  * version field; the handshake treats their absence as an incompatibility.
  */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 /** WebSocket close code used when the server refuses the client over protocol mismatch. */
 export const WS_CLOSE_PROTOCOL_MISMATCH = 4010;
