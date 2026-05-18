@@ -17,7 +17,7 @@ Factory entry point: `fiberTreeModule({ rootRef?, navigationRef?, redactHookName
 | [fiberTree.ts](fiberTree.ts) | Module factory: long-form tool descriptions, root-pointer cache wiring, both handler bodies, projection plumbing for `select.props` / `select.hooks` / `select.children`. |
 | [query.ts](query.ts) | Chained-step runner. Defines `QueryScope` / `QueryStep` / `QueryRuntime`, `validateSteps`, `collectByScope`, `runQueryChain`, `dedupAncestors`, `resolveScreenFiber`. |
 | [finder.ts](finder.ts) | Single-fiber lookup used by `call` and any other imperative tool. `FIND_SCHEMA` spread, `findComponent` (with `within: "Parent/Child:N"` path), `requireRoot` guard. |
-| [utils.ts](utils.ts) | Fiber traversal primitives — rootRef store, `getComponentName`, `getDirectChildren`/`getSiblings`/`getAncestors`, `findHostFiber`, `getNativeInstance`, `getAvailableMethods`, `measureFiber`, `findScreenFiberByRouteKey`, `matchesQuery` + `matchPropValue` + `matchStringCriterion`, plus the fiber-aware `projectFiberValue` wrapper around shared `projectValue`. |
+| [utils/](utils/) | Fiber traversal primitives split per concern: [root.ts](utils/root.ts) (rootRef store + `getFiberRoot`), [naming.ts](utils/naming.ts) (`getComponentName`, `getComponentType`), [constants.ts](utils/constants.ts) (fiber tag constants), [traverse.ts](utils/traverse.ts) (`findFiber`, `findAllFibers`, `find*By*`, `getDirectChildren`, `getSiblings`, `getAncestors`, `findHostFiber`), [serialize.ts](utils/serialize.ts) (`serializeFiber` + tree skip logic + `getTextContent`), [match.ts](utils/match.ts) (`matchesQuery`, `findAllByQuery`, `matchPropValue`, `matchStringCriterion`), [screen.ts](utils/screen.ts) (`findScreenFiberByRouteKey` + RN-Navigation wrapper list), [native.ts](utils/native.ts) (`getNativeInstance`, `measureFiber`, `getAvailableMethods`), [projection.ts](utils/projection.ts) (`projectFiberValue` wrapper + fiber collapse rule), and [index.ts](utils/index.ts) (barrel). |
 | [hooks.ts](hooks.ts) | Hook walker. `extractHooks` pairs `fiber.memoizedState` with `__mcp_hooks` metadata, with shape-check alignment, `countHookSlots` for unannotated library hooks, `flattenHookMeta` for custom-hook recursion, `flatHooksToTree` for the tree-format output, and `buildHooksOptions` to normalise raw user options. |
 | [children.ts](children.ts) | `select.children` recursive light-only walker. `parseChildrenOptions` / `parseChildrenSelect` / `walkChildren`. Heavy fields (`props`/`hooks`) rejected at parse time. |
 | [projection.ts](projection.ts) | `parseProjection` — normalises `select` array into `{ fields, props, hooks, children }`; orchestrates `buildHooksOptions` and `parseChildrenOptions`. |
@@ -51,7 +51,7 @@ Valid scopes are validated up-front in `validateSteps` so a typo surfaces as a s
 
 ### Step criteria
 
-`matchesQuery` in [utils.ts](utils.ts) is the central predicate. All string criteria — `name`, `mcpId`, `testID`, `text` — go through `matchStringCriterion`, which accepts either:
+`matchesQuery` in [utils/match.ts](utils/match.ts) is the central predicate. All string criteria — `name`, `mcpId`, `testID`, `text` — go through `matchStringCriterion`, which accepts either:
 
 - a bare string (strict equality for `name`/`mcpId`/`testID`; substring for `text`), or
 - a `/pattern/flags` slash form (`name: "/^Pressable/"` matches `Pressable`, `PressableView`, …).
@@ -214,11 +214,11 @@ Exactly one of `prop` / `method` is required — both or neither returns a struc
 
 ## Coordinate invariants
 
-`measureFiber` in [utils.ts](utils.ts) uses `UIManager.measure(node, cb)` which yields `pageX`/`pageY` — coordinates relative to the React root view, mapped to `View.getLocationOnScreen` on Android. This is what `adb shell input tap` expects (and `xcrun simctl io … tap` on iOS); unlike `measureInWindow` whose origin shifts depending on translucent status-bar / SafeArea insets. Output is multiplied by `PixelRatio.get()` so `bounds` is in physical pixels — feed `bounds.centerX` / `bounds.centerY` straight into `host__tap`.
+`measureFiber` in [utils/native.ts](utils/native.ts) uses `UIManager.measure(node, cb)` which yields `pageX`/`pageY` — coordinates relative to the React root view, mapped to `View.getLocationOnScreen` on Android. This is what `adb shell input tap` expects (and `xcrun simctl io … tap` on iOS); unlike `measureInWindow` whose origin shifts depending on translucent status-bar / SafeArea insets. Output is multiplied by `PixelRatio.get()` so `bounds` is in physical pixels — feed `bounds.centerX` / `bounds.centerY` straight into `host__tap`.
 
 ## projectFiberValue — fiber-aware projection wrapper
 
-[utils.ts](utils.ts) exports `projectFiberValue`, a wrapper around the shared `projectValue` from `@/shared/projection/projectValue` that pre-applies fiber-specific behaviour:
+[utils/projection.ts](utils/projection.ts) exports `projectFiberValue`, a wrapper around the shared `projectValue` from `@/shared/projection/projectValue` that pre-applies fiber-specific behaviour:
 
 - **`fiberCollapseRule`** — recognises React internals and collapses them to compact markers. Anything with a `$$typeof` symbol becomes `{"${ReactElement}": true}`. Anything with `stateNode` / `memoizedProps` / `__nativeTag` (i.e. a Fiber or a native instance) collapses to `{"${ref}":{ mcpId?, testID?, name?, nativeTag?, viewClass? }}` — pulling the fiber out via `_reactInternals` / `_reactInternalFiber` / `_internalFiberInstanceHandleDEV` / `_internalInstanceHandle` as needed. Stops `projectValue` from descending into the unbounded React internals graph and gives the agent something to follow up on.
 - **`SKIP_KEYS_FIBER`** — drops `children`, `ref`, `collapsableChildren`, `__internalInstanceHandle`, `__nativeTag`, and any `__`-prefixed key (catches `__reactProps$...` and react-refresh markers).
@@ -243,7 +243,7 @@ Step shapes are kept loose at the type level (any `ComponentQuery` field is opti
 
 `fiberTreeModule({ rootRef?, navigationRef?, redactHookNames?, additionalRedactHookNames? })` in [fiberTree.ts](fiberTree.ts) does the one-time setup:
 
-1. `setRootRef(rootRef)` — stashes the ref globally in [utils.ts](utils.ts) so `getFiberRoot()` is callable from anywhere (e.g. cross-module helpers in `index.ts`). `McpProvider` passes its internally-captured root `View` ref here.
+1. `setRootRef(rootRef)` — stashes the ref globally in [utils/root.ts](utils/root.ts) so `getFiberRoot()` is callable from anywhere (e.g. cross-module helpers in `index.ts`). `McpProvider` passes its internally-captured root `View` ref here.
 2. Compile redact patterns once via `compileRedactPatterns` — precedence: `redactHookNames` (replace) > `[...defaults, ...additionalRedactHookNames]` (extend) > defaults.
 3. Initialise the per-module cache (`cacheRoot`, `cacheEntries: Map<string, Fiber[]>`).
 4. Return the `McpModule` object with the two tools.
