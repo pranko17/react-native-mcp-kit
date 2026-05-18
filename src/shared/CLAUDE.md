@@ -36,7 +36,7 @@ All messages carry a discriminated `type` field. The two unions at the bottom of
 - `ModuleDescriptor` — `{ name, tools, description? }`.
 - `ModuleToolDescriptor` — `{ name, description, inputSchema?, timeout? }`. `timeout` is per-tool in ms (default 10s, see `mcpServer.ts`).
 - `DevServerInfo` — `{ host, port, url, bundleLoadedFromServer }`. Filled client-side from `getDevServer()` (`react-native/Libraries/Core/Devtools/getDevServer`, loaded via [rn/core.ts](rn/core.ts)'s `loadRNInternal`). Absent in production builds or when detection fails. Server's `metro__*` tools read this via `resolveMetroUrl()` instead of hardcoding `localhost:8081`.
-- `isSimulator` — auto-detected client-side via `react-native-device-info`'s `isEmulatorSync()` (loaded via [rn/deviceInfo.ts](rn/deviceInfo.ts)). The host's `deviceResolver.ts` reads this to route iOS clients to the simulator path vs. the CoreDevice tunnel.
+- `isSimulator` — auto-detected client-side via `react-native-device-info`'s `isEmulatorSync()` (loaded via [rn/deviceInfo.ts](rn/deviceInfo.ts)). The host's `deviceResolver` reads this to route iOS clients to the simulator path vs. the CoreDevice tunnel.
 
 ### Bumping the protocol
 

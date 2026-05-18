@@ -52,7 +52,9 @@ Every input-taking host tool funnels argument parsing through these helpers so b
 - **`parseStringArg`**, **`parsePlatformArg`** — small validators used directly by tools that take `bundleId` / `key` / etc.
 - **`AppTargetError`** — `{ error: string }` shape returned by the platform-specific helpers (`tapIos`, `runAdbInput`, …).
 
-## Device resolution ([deviceResolver.ts](deviceResolver.ts))
+## Device resolution ([deviceResolver/](deviceResolver/))
+
+Split across [deviceResolver/index.ts](deviceResolver/index.ts) (main `resolveDevice` orchestrator), [list.ts](deviceResolver/list.ts) (cache + `listIos*`/`listAndroid*`), [byClient.ts](deviceResolver/byClient.ts) (label-based match → resolve from a connected `ClientEntry`), [byId.ts](deviceResolver/byId.ts) (resolve by explicit `udid` / `serial`), [scan.ts](deviceResolver/scan.ts) (bare platform scan when no client info), [enrich.ts](deviceResolver/enrich.ts) (`enrichDevicesWithClientStatus` for `list_devices`), [types.ts](deviceResolver/types.ts).
 
 The whole module flows through one function: `resolveDevice(ctx, options, runner)`. It walks a 4-step priority list and returns a `ResolvedDevice` with `{ platform, kind, nativeId, displayName, bundleId? }` where `kind` is `'simulator' | 'real-device'`. Consumers branch on `device.platform` + `device.kind` to pick the right backend.
 
