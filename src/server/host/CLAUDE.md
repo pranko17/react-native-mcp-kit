@@ -10,7 +10,7 @@ Tools registered:
 
 | Tool | File |
 | ---- | ---- |
-| `host__tap`, `host__long_press`, `host__swipe`, `host__drag`, `host__type_text`, `host__type_text_batch`, `host__press_key` | [tools/input.ts](tools/input.ts) |
+| `host__tap`, `host__long_press`, `host__swipe`, `host__drag`, `host__type_text`, `host__type_text_batch`, `host__press_key` | [tools/input/](tools/input/) — one file per tool (`tap.ts`, `longPress.ts`, `swipe.ts`, `drag.ts`, `typeText.ts`, `typeTextBatch.ts`, `pressKey.ts`); shared `constants.ts` + `android.ts` |
 | `host__tap_fiber` | [tools/tapFiber.ts](tools/tapFiber.ts) |
 | `host__screenshot` | [tools/capture.ts](tools/capture.ts) |
 | `host__launch_app`, `host__terminate_app`, `host__restart_app` | [tools/lifecycle.ts](tools/lifecycle.ts) |
