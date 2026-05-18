@@ -15,6 +15,7 @@ export {
   deviceModule,
   errorsModule,
   i18nextModule,
+  logBoxModule,
   navigationModule,
   networkModule,
   reactQueryModule,

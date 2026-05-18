@@ -27,7 +27,7 @@ module.exports = {
       },
     },
     {
-      files: ['src/server/mcpServer.ts'],
+      files: ['src/server/mcpServer.ts', 'src/server/tools/*.ts'],
       rules: {
         'import/extensions': 'off',
       },
