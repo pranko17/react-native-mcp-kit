@@ -50,7 +50,7 @@ Multiple bundles ship from one `package.json`:
 | `…/modules`              | `src/modules/index.ts`  | Module factories only.                                         |
 | `…/server`               | `src/server/index.ts`   | Node-side `createServer` — **not** bundled into RN.            |
 | `…/babel`                | `src/babel/index.ts`    | Both Babel plugins.                                            |
-| `…/babel/test-id-plugin` | `src/babel/testIdPlugin.ts` | Direct plugin import.                                       |
+| `…/babel/test-id-plugin` | `src/babel/testIdPlugin/index.ts` | Direct plugin import.                                 |
 | `…/babel/strip-plugin`   | `src/babel/stripPlugin.ts`  | Direct plugin import.                                       |
 
 `react-native-mcp-kit` CLI binary (`bin/react-native-mcp-kit`) resolves to `dist/server/cli.js`.

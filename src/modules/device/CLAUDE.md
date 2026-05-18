@@ -22,7 +22,7 @@ Fields already surfaced in the handshake (`appName` / `appVersion` / `bundleId` 
 Read through `getRN()` — these never error in-app.
 
 - `platform` — `{ os, version, constants }` from `Platform`.
-- `dimensions` — `{ screen, window, screenPixels, windowPixels, pixelRatio }`. `screen` / `window` are raw `Dimensions.get(...)` (DP, includes `fontScale` / `scale` / `width` / `height`). `screenPixels` / `windowPixels` are `Math.round(dp * PixelRatio.get())` — physical pixels matching what [`host__tap`](../../server/host/tools/input.ts) and `adb shell input tap` consume. [device.ts:121](device.ts).
+- `dimensions` — `{ screen, window, screenPixels, windowPixels, pixelRatio }`. `screen` / `window` are raw `Dimensions.get(...)` (DP, includes `fontScale` / `scale` / `width` / `height`). `screenPixels` / `windowPixels` are `Math.round(dp * PixelRatio.get())` — physical pixels matching what [`host__tap`](../../server/host/tools/input/tap.ts) and `adb shell input tap` consume. [device.ts:121](device.ts).
 - `pixelRatio` — `{ pixelRatio, fontScale }` (just the two scalars; for the full DP+pixels block use `dimensions`).
 - `appearance` — `{ colorScheme: 'light' | 'dark' | null }` from `Appearance.getColorScheme()`.
 - `appState` — `{ state: 'active' | 'background' | 'inactive' }` from `AppState.currentState`.
