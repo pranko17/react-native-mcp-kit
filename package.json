@@ -57,7 +57,7 @@
     "./client": "./dist/client/index.js",
     "./modules": "./dist/modules/index.js",
     "./babel": "./dist/babel/index.js",
-    "./babel/test-id-plugin": "./dist/babel/testIdPlugin.js",
+    "./babel/test-id-plugin": "./dist/babel/testIdPlugin/index.js",
     "./babel/strip-plugin": "./dist/babel/stripPlugin.js",
     "./server": "./dist/server/index.js"
   },

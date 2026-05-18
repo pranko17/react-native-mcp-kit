@@ -6,60 +6,70 @@ Both plugins are `.ts` only (no JSX). They use `@babel/core` types and `state.fi
 
 ## `testIdPlugin` (dev only)
 
-Lives in [testIdPlugin.ts](testIdPlugin.ts). One Babel pass performing two transforms that both feed the runtime `fiber_tree` module.
+Lives in [testIdPlugin/](testIdPlugin/). One Babel pass performing two transforms that both feed the runtime `fiber_tree` module. Split into:
 
-### Part 1 — `data-mcp-id` on JSX (`JSXOpeningElement` visitor, l. 570)
+| File | Role |
+| ---- | ---- |
+| [testIdPlugin/index.ts](testIdPlugin/index.ts) | Default export + the four visitors (`FunctionDeclaration`, `JSXOpeningElement`, `VariableDeclarator`, `Program:exit`). |
+| [testIdPlugin/types.ts](testIdPlugin/types.ts) | `PluginOptions`, `CollectedHook`, `DeferredInsert`, `PluginPassWithQueue`. |
+| [testIdPlugin/constants.ts](testIdPlugin/constants.ts) | `DEFAULT_ATTR`, `DEFAULT_EXCLUDE`, `HOOK_KIND`, `HOOK_NAME_RE`, `REACT_NAMESPACE_RE`. |
+| [testIdPlugin/helpers.ts](testIdPlugin/helpers.ts) | `isCapitalized`, `getShortFile`, `isCustomHookName`, `bodyUsesJSX`, `bodyCallsHook`. |
+| [testIdPlugin/hocUnwrap.ts](testIdPlugin/hocUnwrap.ts) | `unwrapHocChainToBottom`, `isLikelyHocCallee`, `unwrapTransparentExpr`, `findInnerFunctionBodyPath`, `findInnerIdentifier`. |
+| [testIdPlugin/collectHooks.ts](testIdPlugin/collectHooks.ts) | `collectHooksInBody` — the per-component hook walker. |
+| [testIdPlugin/inject.ts](testIdPlugin/inject.ts) | `buildHooksArrayExpr`, `buildAssignmentStmt`, `buildHooksGetterStmt`, `queueHooksAssignment`, `queueHooksGetter`. |
+
+### Part 1 — `data-mcp-id` on JSX (`JSXOpeningElement` visitor in [index.ts](testIdPlugin/index.ts))
 
 Stamps `data-mcp-id="ComponentName:shortFile:line"` onto every capitalized JSX element. `JSXMemberExpression` names render as `Object.Property` (e.g. `Animated.View`).
 
-Options (`PluginOptions`, l. 30):
+Options (`PluginOptions` in [types.ts](testIdPlugin/types.ts)):
 - `attr` — attribute name, default `"data-mcp-id"`.
 - `separator` — default `":"`.
 - `include` — explicit allowlist; when set, only listed names are stamped.
-- `exclude` — default `['Fragment', 'React.Fragment', 'React.StrictMode', 'React.Suspense', 'StrictMode', 'Suspense']` (DEFAULT_EXCLUDE, l. 43).
+- `exclude` — default `['Fragment', 'React.Fragment', 'React.StrictMode', 'React.Suspense', 'StrictMode', 'Suspense']` (`DEFAULT_EXCLUDE` in [constants.ts](testIdPlugin/constants.ts)).
 
-If an attribute with the same name already exists and its value is a `StringLiteral`, the new id is appended with the separator (l. 602) — chains like `${existing}:Foo:bar.tsx:42` accumulate; non-literal values (`{expr}`) are skipped without overwrite.
+If an attribute with the same name already exists and its value is a `StringLiteral`, the new id is appended with the separator — chains like `${existing}:Foo:bar.tsx:42` accumulate; non-literal values (`{expr}`) are skipped without overwrite.
 
-`shortFile` (l. 110): everything before and including `/src/` is stripped; if no `/src/` is present, only the basename is kept; the trailing `.tsx`/`.ts`/`.jsx`/`.js` is removed. Synthetic nodes with no `loc` get `line=0`.
+`shortFile` ([helpers.ts](testIdPlugin/helpers.ts)): everything before and including `/src/` is stripped; if no `/src/` is present, only the basename is kept; the trailing `.tsx`/`.ts`/`.jsx`/`.js` is removed. Synthetic nodes with no `loc` get `line=0`.
 
 ### Part 2 — `Component.__mcp_hooks` metadata
 
-Per file, the plugin queues hook-array assignments (or HOC-forwarding getters) and flushes them in `Program:exit` (l. 628). Queueing rather than inserting on entry is mandatory: react-refresh, react-compiler, and worklets all use `replaceWith` mid-traversal, which silently drops sibling statements inserted via `insertAfter`. End-of-body placement also dodges a separate bug where `var Foo = ...` gets hoisted by other presets and our injected statement runs before `Foo` is initialized — see the comment block at l. 325 for the worklets-extracted `_worklet_..._init_data` case.
+Per file, the plugin queues hook-array assignments (or HOC-forwarding getters) and flushes them in `Program:exit` (in [index.ts](testIdPlugin/index.ts)). Queueing rather than inserting on entry is mandatory: react-refresh, react-compiler, and worklets all use `replaceWith` mid-traversal, which silently drops sibling statements inserted via `insertAfter`. End-of-body placement also dodges a separate bug where `var Foo = ...` gets hoisted by other presets and our injected statement runs before `Foo` is initialized — see the block comment above `buildAssignmentStmt` in [inject.ts](testIdPlugin/inject.ts) for the worklets-extracted `_worklet_..._init_data` case.
 
-Candidate emit sites (in two visitors, `FunctionDeclaration` l. 541 and `VariableDeclarator` l. 647):
+Candidate emit sites — the `FunctionDeclaration` and `VariableDeclarator` visitors in [index.ts](testIdPlugin/index.ts):
 1. **Component** — capitalized name AND (`bodyUsesJSX` OR `bodyCallsHook`). The hook-call branch covers portal/imperative-handle components that legitimately `return null`. Under the Rules of Hooks, a capitalized hook-calling function is unambiguously a component.
 2. **Custom hook** — name matches `/^use[A-Z]/` AND body calls at least one hook.
 
-`Program:exit` dedupes by `outer` name before flushing (l. 633), defending against multi-pass traversals queueing the same component twice.
+`Program:exit` dedupes by `outer` name before flushing, defending against multi-pass traversals queueing the same component twice.
 
 #### HOC unwrap
 
-For `const Foo = anyHoc(InnerFn)`, [`unwrapHocChainToBottom`](testIdPlugin.ts#L460) walks the call chain. `isLikelyHocCallee` (l. 409) accepts:
+For `const Foo = anyHoc(InnerFn)`, `unwrapHocChainToBottom` in [hocUnwrap.ts](testIdPlugin/hocUnwrap.ts) walks the call chain. `isLikelyHocCallee` accepts:
 - bare `Identifier` callees (`memo`, `forwardRef`, `observer`, `withAuth`, …) — name-agnostic;
 - non-computed `MemberExpression` callees whose object resolves to a **module-kind binding** (`React.memo`, `Mobx.observer`). Local-method calls like `arr.map(fn)` are rejected by the `binding.kind === 'module'` gate.
 
-`unwrapTransparentExpr` (l. 441) additionally steps through `AssignmentExpression` (`_c = arrow`) and `SequenceExpression` wrappers that react-refresh inserts around the inner function during its own `VariableDeclaration` visitor (which runs before ours). Bounded to 8 hops as a guard.
+`unwrapTransparentExpr` additionally steps through `AssignmentExpression` (`_c = arrow`) and `SequenceExpression` wrappers that react-refresh inserts around the inner function during its own `VariableDeclaration` visitor (which runs before ours). Bounded to 8 hops as a guard.
 
-The `VariableDeclarator` visitor also unwraps TS casts on the initializer (`TSAsExpression`, `TSTypeAssertion`, `TSSatisfiesExpression`, `TSNonNullExpression`, l. 664) — bounded to 4 hops — so `const Wrapped = memo(arrow) as { ... }` succeeds.
+The `VariableDeclarator` visitor also unwraps TS casts on the initializer (`TSAsExpression`, `TSTypeAssertion`, `TSSatisfiesExpression`, `TSNonNullExpression`) — bounded to 4 hops — so `const Wrapped = memo(arrow) as { ... }` succeeds.
 
 Two HOC outcomes:
 - **Inline-function form** (`memo((p) => <JSX/>)`) — `findInnerFunctionBodyPath` returns the body; hooks are collected and a direct assignment is queued.
-- **Identifier-ref form** (`memo(Inner)`) — `findInnerIdentifier` returns the name; a try/catch-wrapped `Object.defineProperty(Outer, '__mcp_hooks', { configurable: true, get: () => Inner.__mcp_hooks })` is queued via `buildHooksGetterStmt` (l. 300). The getter sidesteps declaration order, hoisting, scope, and arbitrary HOC return shapes (frozen / primitive / null). The try/catch is mandatory because ES modules run in strict mode and `Object.defineProperty` on a primitive throws `TypeError`. The getter is only queued when the outer name is capitalized AND the inner identifier has a resolvable scope binding (l. 699).
+- **Identifier-ref form** (`memo(Inner)`) — `findInnerIdentifier` returns the name; a try/catch-wrapped `Object.defineProperty(Outer, '__mcp_hooks', { configurable: true, get: () => Inner.__mcp_hooks })` is queued via `buildHooksGetterStmt` in [inject.ts](testIdPlugin/inject.ts). The getter sidesteps declaration order, hoisting, scope, and arbitrary HOC return shapes (frozen / primitive / null). The try/catch is mandatory because ES modules run in strict mode and `Object.defineProperty` on a primitive throws `TypeError`. The getter is only queued when the outer name is capitalized AND the inner identifier has a resolvable scope binding.
 
-Each queued assignment is itself wrapped in `try { ... } catch {}` (`buildAssignmentStmt`, l. 334) for the same stale-binding defense.
+Each queued assignment is itself wrapped in `try { ... } catch {}` (`buildAssignmentStmt` in [inject.ts](testIdPlugin/inject.ts)) for the same stale-binding defense.
 
-#### Hook detection (`collectHooksInBody`, l. 152)
+#### Hook detection (`collectHooksInBody` in [collectHooks.ts](testIdPlugin/collectHooks.ts))
 
 Recognized call shapes per `CallExpression`:
 - `useState(x)` — direct `Identifier` callee.
-- `React.useState(x)` — non-computed `MemberExpression`. Property name must match `HOOK_NAME_RE = /^use([A-Z]|$)/` (l. 81).
-- `_React2.useState(x)` — bundler-mangled namespace; the object name must match `REACT_NAMESPACE_RE = /^_?[Rr]eact\d*$/` (l. 89). This filter is critical for **bare `use(...)`** specifically — `database.use(middleware)` / `app.use(router)` are filtered out (l. 188) so they don't show as Use-kind false positives. For `useXxx` member calls (`React.useState`) the property name is already unique enough; the namespace filter is technically applied to them too but rarely matters.
+- `React.useState(x)` — non-computed `MemberExpression`. Property name must match `HOOK_NAME_RE = /^use([A-Z]|$)/` in [constants.ts](testIdPlugin/constants.ts).
+- `_React2.useState(x)` — bundler-mangled namespace; the object name must match `REACT_NAMESPACE_RE = /^_?[Rr]eact\d*$/` in [constants.ts](testIdPlugin/constants.ts). This filter is critical for **bare `use(...)`** specifically — `database.use(middleware)` / `app.use(router)` are filtered out so they don't show as Use-kind false positives. For `useXxx` member calls (`React.useState`) the property name is already unique enough; the namespace filter is technically applied to them too but rarely matters.
 
-`HOOK_KIND` (l. 58) maps all 18 React 16/18/19 stable hooks: State, Effect, Memo, Callback, Ref, Context, Reducer, ImperativeHandle, LayoutEffect, InsertionEffect, DebugValue, Transition, DeferredValue, Id, SyncExternalStore, Optimistic, ActionState, Use. **`useFormStatus` and `useFormState` are intentionally omitted** — react-dom only.
+`HOOK_KIND` in [constants.ts](testIdPlugin/constants.ts) maps all 18 React 16/18/19 stable hooks: State, Effect, Memo, Callback, Ref, Context, Reducer, ImperativeHandle, LayoutEffect, InsertionEffect, DebugValue, Transition, DeferredValue, Id, SyncExternalStore, Optimistic, ActionState, Use. **`useFormStatus` and `useFormState` are intentionally omitted** — react-dom only.
 
 Anything matching the hook-name detector that isn't in `HOOK_KIND` is `kind: "Custom"`.
 
-Name resolution from consuming binding (l. 196):
+Name resolution from consuming binding:
 - `Identifier` → that name.
 - `ArrayPattern` (`const [v, setV] = useState(0)`) → first element identifier.
 - `ObjectPattern` (`const { foo } = useCustomHook()`) → first object-property key.
@@ -67,14 +77,14 @@ Name resolution from consuming binding (l. 196):
 
 For each entry: `mcpId = name:shortFile:line` when source line is known — matches the JSX `data-mcp-id` shape so a single `Read(file, line)` jumps to the call site. `hook` records the source-level hook function name (`useState`, `useAnimatedStyle`, `use`) — for `React.useX` it stores just the property (`useState`).
 
-`fn: Identifier` is emitted only for **Custom-kind direct-identifier calls** where the binding resolves to **module scope** (`binding.scope.block.type === 'Program'`, l. 239). The runtime reads `fn.__mcp_hooks` to recursively expand sub-hooks. Local / parameter bindings are filtered because the injection site is module-level and would throw `ReferenceError`. Member-call form skips `fn` because built-in `kind` mapping is enough.
+`fn: Identifier` is emitted only for **Custom-kind direct-identifier calls** where the binding resolves to **module scope** (`binding.scope.block.type === 'Program'`). The runtime reads `fn.__mcp_hooks` to recursively expand sub-hooks. Local / parameter bindings are filtered because the injection site is module-level and would throw `ReferenceError`. Member-call form skips `fn` because built-in `kind` mapping is enough.
 
-`collectHooksInBody` and `bodyCallsHook` both call `innerPath.skip()` on every nested `Function` (l. 250, l. 522) — hooks defined inside nested callbacks are not this component's hooks. The wrapper call (`useCallback(() => { useFoo() })`) is still visited because the outer `CallExpression` fires before the inner function is skipped.
+`collectHooksInBody` and `bodyCallsHook` ([helpers.ts](testIdPlugin/helpers.ts)) both call `innerPath.skip()` on every nested `Function` — hooks defined inside nested callbacks are not this component's hooks. The wrapper call (`useCallback(() => { useFoo() })`) is still visited because the outer `CallExpression` fires before the inner function is skipped.
 
 ### Operational notes
 
 - Metro runs Babel plugins on `node_modules` by default — `react-redux`, `@tanstack/react-query`, etc. get annotated automatically. First build pays a few-second cost; subsequent builds hit Metro's cache.
-- `PluginPassWithQueue.pendingInjects` (l. 26) is per-file; Babel instantiates a fresh `PluginPass` per transform, so cross-file leakage is structurally impossible.
+- `PluginPassWithQueue.pendingInjects` in [types.ts](testIdPlugin/types.ts) is per-file; Babel instantiates a fresh `PluginPass` per transform, so cross-file leakage is structurally impossible.
 - The injected `try/catch` blocks use **optional catch binding** (`catch {}`, ES2019) — confirmed supported by Hermes. Don't change to `catch (_e)` unless you also bump the engine target.
 
 ## `stripPlugin` (prod only)
