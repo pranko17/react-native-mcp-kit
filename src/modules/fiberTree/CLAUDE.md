@@ -18,13 +18,13 @@ Factory entry point: `fiberTreeModule({ rootRef?, navigationRef?, redactHookName
 | [query.ts](query.ts) | Chained-step runner. Defines `QueryScope` / `QueryStep` / `QueryRuntime`, `validateSteps`, `collectByScope`, `runQueryChain`, `dedupAncestors`, `resolveScreenFiber`. |
 | [finder.ts](finder.ts) | Single-fiber lookup used by `call` and any other imperative tool. `FIND_SCHEMA` spread, `findComponent` (with `within: "Parent/Child:N"` path), `requireRoot` guard. |
 | [utils/](utils/) | Fiber traversal primitives split per concern: [root.ts](utils/root.ts) (rootRef store + `getFiberRoot`), [naming.ts](utils/naming.ts) (`getComponentName`, `getComponentType`), [constants.ts](utils/constants.ts) (fiber tag constants), [traverse.ts](utils/traverse.ts) (`findFiber`, `findAllFibers`, `find*By*`, `getDirectChildren`, `getSiblings`, `getAncestors`, `findHostFiber`), [serialize.ts](utils/serialize.ts) (`serializeFiber` + tree skip logic + `getTextContent`), [match.ts](utils/match.ts) (`matchesQuery`, `findAllByQuery`, `matchPropValue`, `matchStringCriterion`), [screen.ts](utils/screen.ts) (`findScreenFiberByRouteKey` + RN-Navigation wrapper list), [native.ts](utils/native.ts) (`getNativeInstance`, `measureFiber`, `getAvailableMethods`), [projection.ts](utils/projection.ts) (`projectFiberValue` wrapper + fiber collapse rule), and [index.ts](utils/index.ts) (barrel). |
-| [hooks.ts](hooks.ts) | Hook walker. `extractHooks` pairs `fiber.memoizedState` with `__mcp_hooks` metadata, with shape-check alignment, `countHookSlots` for unannotated library hooks, `flattenHookMeta` for custom-hook recursion, `flatHooksToTree` for the tree-format output, and `buildHooksOptions` to normalise raw user options. |
+| [hooks/](hooks/) | Hook walker split per concern: [extract.ts](hooks/extract.ts) (`extractHooks` — pairs `fiber.memoizedState` with `__mcp_hooks` metadata, shape-check alignment), [slotCount.ts](hooks/slotCount.ts) (`countHookSlots` for unannotated library hooks), [flatten.ts](hooks/flatten.ts) (`flattenHookMeta`, `flatHooksToTree`), [shape.ts](hooks/shape.ts) (`shapeMatchesKind`, `looksLikeEffectRecord`), [value.ts](hooks/value.ts) (`serializeHookValue` + component-ref collapse), [options.ts](hooks/options.ts) (`buildHooksOptions`), [patterns.ts](hooks/patterns.ts) (`parseNamePattern`), [types.ts](hooks/types.ts), [index.ts](hooks/index.ts). |
 | [children.ts](children.ts) | `select.children` recursive light-only walker. `parseChildrenOptions` / `parseChildrenSelect` / `walkChildren`. Heavy fields (`props`/`hooks`) rejected at parse time. |
 | [projection.ts](projection.ts) | `parseProjection` — normalises `select` array into `{ fields, props, hooks, children }`; orchestrates `buildHooksOptions` and `parseChildrenOptions`. |
 | [redact.ts](redact.ts) | Hook-value redaction. `DEFAULT_REDACT_HOOK_NAMES`, `compileRedactPatterns`, `matchesAnyRedactPattern`. |
 | [waitFor.ts](waitFor.ts) | `query.waitFor` polling loop — `runWaitForLoop` drives `runOnce` until predicate holds (with optional stability window) or timeout. |
 | [viewport.ts](viewport.ts) | `onlyVisible` filter — `getVisibleRect` reads `Dimensions.get('window') × PixelRatio`; `intersectsRect` AABB check. |
-| [constants.ts](constants.ts) | Numeric tunables — `QUERY_LIMIT_DEFAULT/MAX`, `WAIT_TIMEOUT_*` / `WAIT_INTERVAL_*`, `FIBER_DEFAULT_DEPTH`. No HOOK_KIND table — kinds are resolved by shape-matching in `hooks.ts`. |
+| [constants.ts](constants.ts) | Numeric tunables — `QUERY_LIMIT_DEFAULT/MAX`, `WAIT_TIMEOUT_*` / `WAIT_INTERVAL_*`, `FIBER_DEFAULT_DEPTH`. No HOOK_KIND table — kinds are resolved by shape-matching in [hooks/shape.ts](hooks/shape.ts). |
 | [types.ts](types.ts) | Shared types — `Fiber` (deliberately `any`), `ComponentType`, `Bounds`, `SerializedComponent`, `ComponentQuery`, `PropMatcher`. |
 
 ## query — chained search
@@ -116,7 +116,7 @@ Default fields are `['mcpId', 'name', 'testID']` (see `QUERY_DEFAULT_FIELDS`); e
 
 ## Hook inspection (`select.hooks`)
 
-`extractHooks` in [hooks.ts](hooks.ts) walks a fiber's `memoizedState` chain (a linked list of slots that React allocates one per hook call) and pairs each slot with the next entry of `__mcp_hooks` — metadata the [babel test-id plugin](../../babel/testIdPlugin.ts) emits on every annotated component / custom hook function.
+`extractHooks` in [hooks/extract.ts](hooks/extract.ts) walks a fiber's `memoizedState` chain (a linked list of slots that React allocates one per hook call) and pairs each slot with the next entry of `__mcp_hooks` — metadata the [babel test-id plugin](../../babel/testIdPlugin/) emits on every annotated component / custom hook function.
 
 ### Metadata lookup across HOC chains
 
