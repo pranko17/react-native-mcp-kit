@@ -16,18 +16,24 @@ Multiple React Native apps can connect simultaneously — each is identified by 
 
 ### Broadcast — same call on several clients
 
-\`call\`, \`wait_until\` and \`assert\` accept \`clientId\` as either a string or an array of strings. A string keeps the single-client shape (image content passes through). An array dispatches the same invocation to every listed client in parallel — useful for iOS↔Android parity, A/B device runs, or asserting a state across all attached apps in one round-trip.
+\`call\`, \`wait_until\` and \`assert\` accept \`clientId\` as a string, a \`/body/flags\` regex literal, or an array (literals and regex mixed). A plain string keeps the single-client shape (image content passes through). Regex and array forms switch into broadcast mode — every matching connected client is dispatched in parallel. Same regex slash form as fiber_tree hook filters and log_box ignore patterns.
 
   \`call({ clientId: ["ios-1", "android-1"], tool: "host${MODULE_SEPARATOR}screenshot" })\`          — two screenshots in one response
+  \`call({ clientId: "/^ios/", tool: "host${MODULE_SEPARATOR}screenshot" })\`                       — broadcast to every connected iOS client
   \`wait_until({ clientId: ["ios-1", "android-1"], tool: "navigation${MODULE_SEPARATOR}get_current_route", predicate: { op: "equals", path: "name", value: "CART" } })\`  — wait until both clients land on CART
-  \`assert({ clientId: ["ios-1", "android-1"], tool: "fiber_tree${MODULE_SEPARATOR}query", args: { mcpId: "checkout:button:submit" }, predicate: { op: "exists" } })\`     — the same fiber exists on both platforms
+  \`assert({ clientId: "/./", tool: "fiber_tree${MODULE_SEPARATOR}query", args: { mcpId: "checkout:button:submit" }, predicate: { op: "exists" } })\`                     — the same fiber exists on every connected client
 
 Broadcast result shapes:
   \`call\` — when every per-client result is text, you get one JSON envelope \`{ results: [{ clientId, ok, result | error }, ...] }\`. When any result is an image (screenshot), per-client \`## <clientId>\` text headers are interleaved with each client's blocks so each image stays paired with its source.
   \`wait_until\` — \`{ ok, perClient: [{ clientId, ok, attempts, elapsedMs, matched? | lastResult, lastError?, reason? }, ...] }\`; overall \`ok\` is true only if every client matched within the shared timeout.
   \`assert\` — \`{ pass, perClient: [{ clientId, pass, actual?, expected?, op?, path?, message?, result?, error? }, ...] }\`; overall \`pass\` is true only when every client passed.
 
-\`list_tools\` and \`describe_tool\` also accept an array \`clientId\` — there it narrows the considered client set (filter / canonicalisation pool) rather than triggering a broadcast.
+\`list_tools\` and \`describe_tool\` accept the same regex / array forms — there they narrow the considered client set (filter / canonicalisation pool) rather than triggering a broadcast.
+
+Regex form details:
+  • A leading \`/\` plus a trailing \`/<flags>\` switches the string into regex mode. Flags from \`[gimsuy]\`. Anything else is treated as a literal client ID.
+  • Pattern is matched against connected client IDs (\`ios-1\`, \`android-2\`, …). \`"/./"\` matches every connected client; \`"/^ios/"\` only iOS; \`"/-1$/"\` only the first client per platform.
+  • Pattern that matches zero connected clients returns an error up front — broadcasting to nobody is almost always a mistake. Literals that are unconnected still fall through to the per-client error in the broadcast envelope (matches the not-fail-fast contract).
 8. Use \`host${MODULE_SEPARATOR}tap_fiber\` to collapse "fiber_tree__query → host__tap at bounds" into one call. Pass fiber_tree steps; if exactly one fiber matches, its center is tapped. Ambiguous match returns the candidate list so you can add \`index\` or narrow the chain.
 
 Some tools run inline on the MCP server host (e.g. \`host${MODULE_SEPARATOR}screenshot\`, \`host${MODULE_SEPARATOR}list_devices\`, \`host${MODULE_SEPARATOR}launch_app\`, \`host${MODULE_SEPARATOR}terminate_app\`, \`host${MODULE_SEPARATOR}restart_app\`, \`metro${MODULE_SEPARATOR}reload\`, \`metro${MODULE_SEPARATOR}symbolicate\`) and work even when no React Native client is connected. They use xcrun simctl / adb on the dev machine. When \`clientId\` is provided, host tools use that client's platform/label/deviceId as hints to resolve the target device; otherwise they prefer the device of the single connected client, falling back to the single booted sim / online device. \`launch_app\`, \`terminate_app\`, and \`restart_app\` accept an \`appId\` arg (iOS bundle ID / Android package name); omit it to reuse the target client's registered \`bundleId\` from its connection metadata.

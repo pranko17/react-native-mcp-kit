@@ -19,13 +19,13 @@ export const registerListToolsTool = (mcp: McpServer, ctx: ServerContext): void 
         title: 'List Tools',
       },
       description:
-        'Browse available tools with compact (schema-free) descriptions. Modules with identical shape across multiple clients are deduplicated into a single entry with a clientIds array. Use describe_tool to fetch the full input schema for a specific tool before calling it. Pass `module` to narrow to one module, `clientId` to narrow to one client (string) or several clients (array, e.g. ["ios-1", "android-1"]), `compact: true` to drop long module-level descriptions.',
+        'Browse available tools with compact (schema-free) descriptions. Modules with identical shape across multiple clients are deduplicated into a single entry with a clientIds array. Use describe_tool to fetch the full input schema for a specific tool before calling it. Pass `module` to narrow to one module, `clientId` to narrow to one client (string), several clients (array), or by regex (`"/^ios/"`), `compact: true` to drop long module-level descriptions.',
       inputSchema: {
         clientId: z
           .union([z.string(), z.array(z.string())])
           .optional()
           .describe(
-            'Narrow listing to a single client (string) or several clients (array). Omit for all connected clients.'
+            'Narrow listing to a single client (string), a `/body/flags` regex over IDs, or several clients (array of literals and/or regex strings). Omit for all connected clients.'
           ),
         compact: z
           .boolean()
@@ -42,7 +42,7 @@ export const registerListToolsTool = (mcp: McpServer, ctx: ServerContext): void 
       },
     },
     async ({ clientId, compact, module }) => {
-      const filter = parseClientIds(clientId);
+      const filter = parseClientIds(clientId, ctx.bridge);
       if (!filter.ok) return jsonError(filter.error);
       const allClients = ctx.bridge.listClients();
       const clients =

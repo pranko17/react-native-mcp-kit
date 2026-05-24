@@ -80,7 +80,7 @@ Useful after wait_until as a checkpoint — the pair reads "do action → wait �
           .union([z.string(), z.array(z.string())])
           .optional()
           .describe(
-            'Target client ID(s). String asserts on one client; array runs the same assertion on multiple clients in parallel. Same auto-resolution semantics as `call`.'
+            'Target client ID(s). String asserts on one client; `/body/flags` literal ("/^ios/") expands to every matching connected client; array mixes literals and regex strings. Broadcast forms run the assertion on each matched client in parallel. Same auto-resolution semantics as `call`.'
           ),
         message: z
           .string()
@@ -102,7 +102,7 @@ Useful after wait_until as a checkpoint — the pair reads "do action → wait �
       const parsedArgs = parseCallArgs(args);
       if (!parsedArgs.ok) return jsonError(parsedArgs.error);
 
-      const clients = parseClientIds(clientId);
+      const clients = parseClientIds(clientId, ctx.bridge);
       if (!clients.ok) return jsonError(clients.error);
 
       const pred = predicate as Predicate;

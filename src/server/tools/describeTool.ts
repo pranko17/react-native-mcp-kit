@@ -20,13 +20,13 @@ export const registerDescribeToolTool = (mcp: McpServer, ctx: ServerContext): vo
         title: 'Describe Tool',
       },
       description:
-        'Fetch the full description and input schema for a single tool. Use this after list_tools to learn how to construct arguments for a tool before calling it. For host tools, clientId is ignored. For in-app tools, omit clientId to auto-pick the shared descriptor; specify a string clientId to pin to one client, or an array of clientIds to narrow the auto-pick to that subset (useful when other clients have a divergent schema).',
+        'Fetch the full description and input schema for a single tool. Use this after list_tools to learn how to construct arguments for a tool before calling it. For host tools, clientId is ignored. For in-app tools, omit clientId to auto-pick the shared descriptor; pass a literal string to pin to one client, a `/body/flags` regex to narrow the canonicalisation pool to matching IDs, or an array (literals and regex mixed) for an explicit subset.',
       inputSchema: {
         clientId: z
           .union([z.string(), z.array(z.string())])
           .optional()
           .describe(
-            'Target client(s) for in-app tools. String pins to one client; array narrows the canonicalisation pool to the listed clients. Ignored for host tools.'
+            'Target client(s) for in-app tools. String pins to one client; `/body/flags` regex or array narrow the canonicalisation pool to matching IDs. Ignored for host tools.'
           ),
         tool: z
           .string()
@@ -36,7 +36,7 @@ export const registerDescribeToolTool = (mcp: McpServer, ctx: ServerContext): vo
       },
     },
     async ({ clientId, tool }) => {
-      const parsedClient = parseClientIds(clientId);
+      const parsedClient = parseClientIds(clientId, ctx.bridge);
       if (!parsedClient.ok) return jsonError(parsedClient.error);
 
       // 1. Host tool path — resolved via hostToolMap, clientId is ignored

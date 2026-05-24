@@ -117,7 +117,7 @@ RETURNS
           .union([z.string(), z.array(z.string())])
           .optional()
           .describe(
-            'Target client ID(s). String polls one client; array broadcasts the poll to multiple clients in parallel and reports per-client outcomes. Same auto-resolution semantics as `call`.'
+            'Target client ID(s). String polls one client; `/body/flags` literal ("/^ios/") expands to every matching connected client; array mixes literals and regex strings. Broadcast forms poll each matched client in parallel under the shared timeoutMs and report per-client outcomes. Same auto-resolution semantics as `call`.'
           ),
         intervalMs: z
           .number()
@@ -141,7 +141,7 @@ RETURNS
       const parsedArgs = parseCallArgs(args);
       if (!parsedArgs.ok) return jsonError(parsedArgs.error);
 
-      const clients = parseClientIds(clientId);
+      const clients = parseClientIds(clientId, ctx.bridge);
       if (!clients.ok) return jsonError(clients.error);
 
       const pred = predicate as Predicate;

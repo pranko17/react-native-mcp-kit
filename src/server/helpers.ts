@@ -60,34 +60,96 @@ export type ClientIdsParse =
   | { clientId: string | undefined; mode: 'single'; ok: true }
   | { error: string; ok: false };
 
+// Same `/body/flags` literal recogniser used by logBox.parsePattern — keep the
+// vocabulary in sync so an agent that knows the form from fiber_tree hook
+// filters can use it here too.
+const REGEX_LITERAL = /^\/(.+)\/([gimsuy]*)$/;
+
+const tryParseRegex = (raw: string): RegExp | { error: string } | null => {
+  const m = raw.match(REGEX_LITERAL);
+  if (!m) return null;
+  try {
+    return new RegExp(m[1]!, m[2]);
+  } catch (err) {
+    return { error: `Invalid regex in clientId "${raw}": ${(err as Error).message}` };
+  }
+};
+
 /**
- * Normalises the `clientId` arg accepted by every public tool. A bare string
- * keeps the single-client shape (image content passes through; auto-resolution
- * still applies when undefined). An array — even with one entry — switches the
- * caller into broadcast mode, where each client is dispatched in parallel and
- * results are aggregated.
+ * Normalises the `clientId` arg accepted by every public tool.
+ *
+ * Forms:
+ *   undefined / null   — auto-resolve to the single connected client.
+ *   "ios-1"            — literal single-client target (image content passes
+ *                        through, single-shape response).
+ *   "/^ios/"           — regex against connected client IDs; always returns
+ *                        the broadcast envelope (even if matched count is 1).
+ *   ["ios-1","..."]    — array form: literals and regex strings can be mixed.
+ *                        Regex entries are expanded against `bridge.listClients()`
+ *                        and unioned with literals before dedup.
+ *
+ * Errors when an array entry is non-string / array is empty / a regex matches
+ * zero connected clients. Literals that aren't connected are NOT pre-validated
+ * here — they fall through to dispatchTool which reports a per-client error,
+ * matching the broadcast "not fail-fast" semantics.
  */
-export const parseClientIds = (raw: unknown): ClientIdsParse => {
+export const parseClientIds = (raw: unknown, bridge: Bridge): ClientIdsParse => {
   if (raw === undefined || raw === null) return { clientId: undefined, mode: 'single', ok: true };
-  if (typeof raw === 'string') return { clientId: raw, mode: 'single', ok: true };
+
+  if (typeof raw === 'string') {
+    const re = tryParseRegex(raw);
+    if (re === null) return { clientId: raw, mode: 'single', ok: true };
+    if ('error' in re) return { error: re.error, ok: false };
+    const ids = expandRegex(re, bridge);
+    if (ids.length === 0) {
+      return { error: `Pattern "${raw}" matched no connected clients.`, ok: false };
+    }
+    return { ids, mode: 'broadcast', ok: true };
+  }
+
   if (Array.isArray(raw)) {
     if (raw.length === 0) {
       return { error: 'clientId array must contain at least one entry.', ok: false };
     }
     const seen = new Set<string>();
     const ids: string[] = [];
-    for (const id of raw) {
-      if (typeof id !== 'string') {
+    for (const entry of raw) {
+      if (typeof entry !== 'string') {
         return { error: 'clientId array must contain strings only.', ok: false };
       }
-      if (!seen.has(id)) {
-        seen.add(id);
-        ids.push(id);
+      const re = tryParseRegex(entry);
+      if (re && 'error' in re) return { error: re.error, ok: false };
+      if (re instanceof RegExp) {
+        const matched = expandRegex(re, bridge);
+        if (matched.length === 0) {
+          return { error: `Pattern "${entry}" matched no connected clients.`, ok: false };
+        }
+        for (const id of matched) {
+          if (!seen.has(id)) {
+            seen.add(id);
+            ids.push(id);
+          }
+        }
+      } else if (!seen.has(entry)) {
+        seen.add(entry);
+        ids.push(entry);
       }
     }
     return { ids, mode: 'broadcast', ok: true };
   }
+
   return { error: 'clientId must be a string or an array of strings.', ok: false };
+};
+
+const expandRegex = (re: RegExp, bridge: Bridge): string[] => {
+  return bridge
+    .listClients()
+    .filter((c) => {
+      return re.test(c.id);
+    })
+    .map((c) => {
+      return c.id;
+    });
 };
 
 /**
