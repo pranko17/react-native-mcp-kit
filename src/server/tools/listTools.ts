@@ -1,7 +1,13 @@
 import { type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
-import { canonicalizeGroup, type ServerContext, type ToolGroup } from '@/server/helpers';
+import {
+  canonicalizeGroup,
+  jsonError,
+  parseClientIds,
+  type ServerContext,
+  type ToolGroup,
+} from '@/server/helpers';
 import { MODULE_SEPARATOR } from '@/shared/protocol';
 
 export const registerListToolsTool = (mcp: McpServer, ctx: ServerContext): void => {
@@ -13,12 +19,14 @@ export const registerListToolsTool = (mcp: McpServer, ctx: ServerContext): void 
         title: 'List Tools',
       },
       description:
-        'Browse available tools with compact (schema-free) descriptions. Modules with identical shape across multiple clients are deduplicated into a single entry with a clientIds array. Use describe_tool to fetch the full input schema for a specific tool before calling it. Pass `module` to narrow to one module, `clientId` to narrow to one client, `compact: true` to drop long module-level descriptions.',
+        'Browse available tools with compact (schema-free) descriptions. Modules with identical shape across multiple clients are deduplicated into a single entry with a clientIds array. Use describe_tool to fetch the full input schema for a specific tool before calling it. Pass `module` to narrow to one module, `clientId` to narrow to one client (string) or several clients (array, e.g. ["ios-1", "android-1"]), `compact: true` to drop long module-level descriptions.',
       inputSchema: {
         clientId: z
-          .string()
+          .union([z.string(), z.array(z.string())])
           .optional()
-          .describe('Narrow listing to a single client. Omit for all connected clients.'),
+          .describe(
+            'Narrow listing to a single client (string) or several clients (array). Omit for all connected clients.'
+          ),
         compact: z
           .boolean()
           .optional()
@@ -34,12 +42,19 @@ export const registerListToolsTool = (mcp: McpServer, ctx: ServerContext): void 
       },
     },
     async ({ clientId, compact, module }) => {
+      const filter = parseClientIds(clientId);
+      if (!filter.ok) return jsonError(filter.error);
       const allClients = ctx.bridge.listClients();
-      const clients = clientId
-        ? allClients.filter((c) => {
-            return c.id === clientId;
-          })
-        : allClients;
+      const clients =
+        filter.mode === 'broadcast'
+          ? allClients.filter((c) => {
+              return filter.ids.includes(c.id);
+            })
+          : filter.clientId
+            ? allClients.filter((c) => {
+                return c.id === filter.clientId;
+              })
+            : allClients;
 
       // Dedup tool groups across clients by canonical shape
       const dedupMap = new Map<string, { clientIds: string[]; group: ToolGroup }>();

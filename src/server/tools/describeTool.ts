@@ -5,6 +5,7 @@ import {
   canonicalize,
   findToolInClient,
   jsonError,
+  parseClientIds,
   type ServerContext,
   type ToolDescriptorShape,
 } from '@/server/helpers';
@@ -19,13 +20,13 @@ export const registerDescribeToolTool = (mcp: McpServer, ctx: ServerContext): vo
         title: 'Describe Tool',
       },
       description:
-        'Fetch the full description and input schema for a single tool. Use this after list_tools to learn how to construct arguments for a tool before calling it. For host tools, clientId is ignored. For in-app tools, omit clientId to auto-pick the shared descriptor; specify it only when multiple clients have the same tool with different schemas.',
+        'Fetch the full description and input schema for a single tool. Use this after list_tools to learn how to construct arguments for a tool before calling it. For host tools, clientId is ignored. For in-app tools, omit clientId to auto-pick the shared descriptor; specify a string clientId to pin to one client, or an array of clientIds to narrow the auto-pick to that subset (useful when other clients have a divergent schema).',
       inputSchema: {
         clientId: z
-          .string()
+          .union([z.string(), z.array(z.string())])
           .optional()
           .describe(
-            'Target client ID for in-app tools. Required only when multiple clients have the same tool with different schemas. Ignored for host tools.'
+            'Target client(s) for in-app tools. String pins to one client; array narrows the canonicalisation pool to the listed clients. Ignored for host tools.'
           ),
         tool: z
           .string()
@@ -35,6 +36,9 @@ export const registerDescribeToolTool = (mcp: McpServer, ctx: ServerContext): vo
       },
     },
     async ({ clientId, tool }) => {
+      const parsedClient = parseClientIds(clientId);
+      if (!parsedClient.ok) return jsonError(parsedClient.error);
+
       // 1. Host tool path — resolved via hostToolMap, clientId is ignored
       const hostEntry = ctx.hostToolMap.get(tool);
       if (hostEntry) {
@@ -66,9 +70,10 @@ export const registerDescribeToolTool = (mcp: McpServer, ctx: ServerContext): vo
         };
       }
 
-      // 2. Explicit clientId — look up the specific client
-      if (clientId) {
-        const client = ctx.bridge.getClient(clientId);
+      // 2. Explicit single clientId — pin to one client
+      if (parsedClient.mode === 'single' && parsedClient.clientId) {
+        const pinned = parsedClient.clientId;
+        const client = ctx.bridge.getClient(pinned);
         if (!client) {
           const available =
             ctx.bridge
@@ -77,18 +82,18 @@ export const registerDescribeToolTool = (mcp: McpServer, ctx: ServerContext): vo
                 return c.id;
               })
               .join(', ') || '(none)';
-          return jsonError(`Client '${clientId}' not connected. Available: ${available}`);
+          return jsonError(`Client '${pinned}' not connected. Available: ${available}`);
         }
         const found = findToolInClient(client, tool);
         if (!found) {
-          return jsonError(`Tool '${tool}' not found on client '${clientId}'.`);
+          return jsonError(`Tool '${tool}' not found on client '${pinned}'.`);
         }
         return {
           content: [
             {
               text: JSON.stringify(
                 {
-                  clientIds: [clientId],
+                  clientIds: [pinned],
                   description: found.description,
                   inputSchema: found.inputSchema,
                   name: tool,
@@ -103,8 +108,27 @@ export const registerDescribeToolTool = (mcp: McpServer, ctx: ServerContext): vo
         };
       }
 
-      // 3. Auto-pick across all connected clients
-      const clients = ctx.bridge.listClients();
+      // 3. Auto-pick across all connected clients (optionally narrowed by an
+      //    explicit array of clientIds — only those clients participate in the
+      //    canonicalisation pool).
+      const allClients = ctx.bridge.listClients();
+      const clients =
+        parsedClient.mode === 'broadcast'
+          ? allClients.filter((c) => {
+              return parsedClient.ids.includes(c.id);
+            })
+          : allClients;
+      if (parsedClient.mode === 'broadcast' && clients.length === 0) {
+        const available =
+          allClients
+            .map((c) => {
+              return c.id;
+            })
+            .join(', ') || '(none)';
+        return jsonError(
+          `None of the requested clients (${parsedClient.ids.join(', ')}) are connected. Available: ${available}`
+        );
+      }
       const matches: Array<{ clientId: string; descriptor: ToolDescriptorShape }> = [];
       for (const c of clients) {
         const found = findToolInClient(c, tool);

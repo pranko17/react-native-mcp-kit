@@ -1,7 +1,7 @@
 import { type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
-import { jsonError, parseCallArgs, type ServerContext } from '@/server/helpers';
+import { jsonError, parseCallArgs, parseClientIds, type ServerContext } from '@/server/helpers';
 import {
   evalPredicate,
   isLeafPredicate,
@@ -10,6 +10,68 @@ import {
   resolvePath,
 } from '@/server/predicate';
 import { MODULE_SEPARATOR } from '@/shared/protocol';
+
+interface PollOutcome {
+  attempts: number;
+  elapsedMs: number;
+  ok: boolean;
+  lastError?: string;
+  lastResult?: unknown;
+  matched?: unknown;
+  reason?: string;
+}
+
+const pollForClient = async (
+  ctx: ServerContext,
+  tool: string,
+  args: Record<string, unknown>,
+  clientId: string | undefined,
+  pred: Predicate,
+  isLeaf: boolean,
+  leafPath: string | undefined,
+  timeout: number,
+  interval: number
+): Promise<PollOutcome> => {
+  const started = Date.now();
+  let attempts = 0;
+  let lastResult: unknown;
+  let lastError: string | undefined;
+
+  while (Date.now() - started < timeout) {
+    attempts += 1;
+    const dispatch = await ctx.dispatchTool(tool, args, clientId);
+    if (dispatch.ok) {
+      lastResult = dispatch.result;
+      if (evalPredicate(lastResult, pred)) {
+        const outcome: PollOutcome = {
+          attempts,
+          elapsedMs: Date.now() - started,
+          ok: true,
+        };
+        if (isLeaf) outcome.matched = resolvePath(lastResult, leafPath);
+        return outcome;
+      }
+    } else {
+      lastError = dispatch.error;
+    }
+    const remaining = timeout - (Date.now() - started);
+    if (remaining <= 0) break;
+    await new Promise((r) => {
+      return setTimeout(r, Math.min(interval, remaining));
+    });
+  }
+
+  return {
+    attempts,
+    elapsedMs: Date.now() - started,
+    lastError,
+    lastResult,
+    ok: false,
+    reason: lastError
+      ? `Last dispatch failed: ${lastError}`
+      : `Predicate did not hold within ${timeout}ms`,
+  };
+};
 
 export const registerWaitUntilTool = (mcp: McpServer, ctx: ServerContext): void => {
   mcp.registerTool(
@@ -38,15 +100,25 @@ PREDICATE
   Example: { all: [{op:"equals", path:"name", value:"CART"}, {op:"gt", path:"items.length", value:0}] }
 
 RETURNS
-  { ok: true, attempts, elapsedMs, matched? } on success — matched is the path-
-    resolved value for leaf predicates, omitted for compound.
-  { ok: false, reason, attempts, elapsedMs, lastResult, lastError? } on timeout.`,
+  Single client (clientId omitted or a string):
+    { ok: true, attempts, elapsedMs, matched? } on success — matched is the path-
+      resolved value for leaf predicates, omitted for compound.
+    { ok: false, reason, attempts, elapsedMs, lastResult, lastError? } on timeout.
+
+  Broadcast (clientId is an array — polls each client in parallel under the
+  shared timeout): { ok, perClient: [{ clientId, ok, attempts, elapsedMs, matched? | lastResult, lastError? }, ...] }
+  with overall ok = every client matched within its budget.`,
       inputSchema: {
         args: z
           .union([z.string(), z.record(z.string(), z.unknown())])
           .optional()
           .describe('Arguments for the polled tool — object or JSON string.'),
-        clientId: z.string().optional().describe('Target client ID, same semantics as `call`.'),
+        clientId: z
+          .union([z.string(), z.array(z.string())])
+          .optional()
+          .describe(
+            'Target client ID(s). String polls one client; array broadcasts the poll to multiple clients in parallel and reports per-client outcomes. Same auto-resolution semantics as `call`.'
+          ),
         intervalMs: z
           .number()
           .optional()
@@ -68,64 +140,80 @@ RETURNS
     async ({ args, clientId, intervalMs, predicate, timeoutMs, tool }) => {
       const parsedArgs = parseCallArgs(args);
       if (!parsedArgs.ok) return jsonError(parsedArgs.error);
+
+      const clients = parseClientIds(clientId);
+      if (!clients.ok) return jsonError(clients.error);
+
       const pred = predicate as Predicate;
       const isLeaf = isLeafPredicate(pred);
       const leafPath = isLeaf ? (pred as LeafPredicate).path : undefined;
       const timeout = Math.max(500, Math.min(60_000, timeoutMs ?? 10_000));
       const interval = Math.max(50, Math.min(5_000, intervalMs ?? 300));
-      const started = Date.now();
-      let attempts = 0;
-      let lastResult: unknown;
-      let lastError: string | undefined;
 
-      while (Date.now() - started < timeout) {
-        attempts += 1;
-        const dispatch = await ctx.dispatchTool(tool, parsedArgs.args, clientId);
-        if (dispatch.ok) {
-          lastResult = dispatch.result;
-          if (evalPredicate(lastResult, pred)) {
-            const payload: Record<string, unknown> = {
-              attempts,
-              elapsedMs: Date.now() - started,
-              ok: true,
-            };
-            if (isLeaf) {
-              payload.matched = resolvePath(lastResult, leafPath);
-            }
-            return {
-              content: [{ text: JSON.stringify(payload, null, 2), type: 'text' as const }],
-            };
-          }
+      if (clients.mode === 'single') {
+        const outcome = await pollForClient(
+          ctx,
+          tool,
+          parsedArgs.args,
+          clients.clientId,
+          pred,
+          isLeaf,
+          leafPath,
+          timeout,
+          interval
+        );
+        const payload: Record<string, unknown> = {
+          attempts: outcome.attempts,
+          elapsedMs: outcome.elapsedMs,
+          ok: outcome.ok,
+        };
+        if (outcome.ok) {
+          if (isLeaf) payload.matched = outcome.matched;
         } else {
-          lastError = dispatch.error;
+          payload.lastResult = outcome.lastResult;
+          payload.reason = outcome.reason;
+          if (outcome.lastError) payload.lastError = outcome.lastError;
         }
-        const remaining = timeout - (Date.now() - started);
-        if (remaining <= 0) break;
-        await new Promise((r) => {
-          return setTimeout(r, Math.min(interval, remaining));
-        });
+        return {
+          content: [{ text: JSON.stringify(payload, null, 2), type: 'text' as const }],
+        };
       }
 
+      const perClient = await Promise.all(
+        clients.ids.map(async (id) => {
+          const outcome = await pollForClient(
+            ctx,
+            tool,
+            parsedArgs.args,
+            id,
+            pred,
+            isLeaf,
+            leafPath,
+            timeout,
+            interval
+          );
+          const entry: Record<string, unknown> = {
+            attempts: outcome.attempts,
+            clientId: id,
+            elapsedMs: outcome.elapsedMs,
+            ok: outcome.ok,
+          };
+          if (outcome.ok) {
+            if (isLeaf) entry.matched = outcome.matched;
+          } else {
+            entry.lastResult = outcome.lastResult;
+            entry.reason = outcome.reason;
+            if (outcome.lastError) entry.lastError = outcome.lastError;
+          }
+          return entry;
+        })
+      );
+
+      const ok = perClient.every((entry) => {
+        return entry.ok === true;
+      });
       return {
-        content: [
-          {
-            text: JSON.stringify(
-              {
-                attempts,
-                elapsedMs: Date.now() - started,
-                lastError,
-                lastResult,
-                ok: false,
-                reason: lastError
-                  ? `Last dispatch failed: ${lastError}`
-                  : `Predicate did not hold within ${timeout}ms`,
-              },
-              null,
-              2
-            ),
-            type: 'text' as const,
-          },
-        ],
+        content: [{ text: JSON.stringify({ ok, perClient }, null, 2), type: 'text' as const }],
       };
     }
   );

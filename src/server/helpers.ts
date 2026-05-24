@@ -55,6 +55,111 @@ export const jsonError = (msg: string): { content: TextContent[] } => {
   };
 };
 
+export type ClientIdsParse =
+  | { ids: string[]; mode: 'broadcast'; ok: true }
+  | { clientId: string | undefined; mode: 'single'; ok: true }
+  | { error: string; ok: false };
+
+/**
+ * Normalises the `clientId` arg accepted by every public tool. A bare string
+ * keeps the single-client shape (image content passes through; auto-resolution
+ * still applies when undefined). An array — even with one entry — switches the
+ * caller into broadcast mode, where each client is dispatched in parallel and
+ * results are aggregated.
+ */
+export const parseClientIds = (raw: unknown): ClientIdsParse => {
+  if (raw === undefined || raw === null) return { clientId: undefined, mode: 'single', ok: true };
+  if (typeof raw === 'string') return { clientId: raw, mode: 'single', ok: true };
+  if (Array.isArray(raw)) {
+    if (raw.length === 0) {
+      return { error: 'clientId array must contain at least one entry.', ok: false };
+    }
+    const seen = new Set<string>();
+    const ids: string[] = [];
+    for (const id of raw) {
+      if (typeof id !== 'string') {
+        return { error: 'clientId array must contain strings only.', ok: false };
+      }
+      if (!seen.has(id)) {
+        seen.add(id);
+        ids.push(id);
+      }
+    }
+    return { ids, mode: 'broadcast', ok: true };
+  }
+  return { error: 'clientId must be a string or an array of strings.', ok: false };
+};
+
+/**
+ * Detects an MCP image-content payload (the shape host__screenshot returns)
+ * without re-running formatResult. Used to pick the broadcast aggregation
+ * strategy — text-only results collapse into a single JSON envelope, image
+ * results keep per-client blocks so each image is anchored to its source.
+ */
+const isImageResult = (result: unknown): boolean => {
+  if (!Array.isArray(result) || result.length === 0) return false;
+  const first = result[0];
+  return (
+    typeof first === 'object' &&
+    first !== null &&
+    'type' in first &&
+    (first as { type: unknown }).type === 'image'
+  );
+};
+
+export interface BroadcastDispatch {
+  clientId: string;
+  result: DispatchResult;
+}
+
+/**
+ * Build MCP content blocks from per-client dispatch results. When every result
+ * is text-only, the function returns a single JSON envelope so the agent can
+ * parse one blob; when any result carries image content (e.g. screenshots),
+ * results are emitted as per-client blocks prefixed with `## <clientId>`
+ * headers so each image stays paired with its source.
+ */
+export const buildBroadcastContent = (
+  results: BroadcastDispatch[],
+  formatResult: (result: unknown) => Array<TextContent | ImageContent>
+): Array<TextContent | ImageContent> => {
+  const hasImage = results.some(({ result }) => {
+    return result.ok && isImageResult(result.result);
+  });
+
+  if (!hasImage) {
+    return [
+      {
+        text: JSON.stringify(
+          {
+            results: results.map(({ clientId, result }) => {
+              if (result.ok) return { clientId, ok: true, result: result.result };
+              return { clientId, error: result.error, ok: false };
+            }),
+          },
+          null,
+          2
+        ),
+        type: 'text' as const,
+      },
+    ];
+  }
+
+  const blocks: Array<TextContent | ImageContent> = [];
+  for (const { clientId, result } of results) {
+    blocks.push({ text: `## ${clientId}`, type: 'text' as const });
+    if (result.ok) {
+      blocks.push(...formatResult(result.result));
+    } else {
+      blocks.push({
+        text: JSON.stringify({ error: result.error }, null, 2),
+        type: 'text' as const,
+      });
+    }
+  }
+  return blocks;
+};
+
 /**
  * Parse a `call`-style args argument that may arrive as a JSON string (older
  * clients) or a plain object (new form). Returns { ok, args } or { ok: false,
