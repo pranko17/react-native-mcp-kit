@@ -189,11 +189,18 @@ export const buildBroadcastContent = (
     return result.ok && isImageResult(result.result);
   });
 
+  const okCount = results.reduce((n, { result }) => {
+    return n + (result.ok ? 1 : 0);
+  }, 0);
+  const failedCount = results.length - okCount;
+
   if (!hasImage) {
     return [
       {
         text: JSON.stringify(
           {
+            failedCount,
+            okCount,
             results: results.map(({ clientId, result }) => {
               if (result.ok) return { clientId, ok: true, result: result.result };
               return { clientId, error: result.error, ok: false };
@@ -207,7 +214,12 @@ export const buildBroadcastContent = (
     ];
   }
 
-  const blocks: Array<TextContent | ImageContent> = [];
+  const blocks: Array<TextContent | ImageContent> = [
+    {
+      text: `Broadcast: ${okCount} ok, ${failedCount} failed (${results.length} clients).`,
+      type: 'text' as const,
+    },
+  ];
   for (const { clientId, result } of results) {
     blocks.push({ text: `## ${clientId}`, type: 'text' as const });
     if (result.ok) {

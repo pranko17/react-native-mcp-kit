@@ -126,11 +126,18 @@ Useful after wait_until as a checkpoint — the pair reads "do action → wait �
           return { clientId: id, ...entry };
         })
       );
-      const pass = perClient.every((entry) => {
-        return entry.pass === true;
-      });
+      const passedCount = perClient.reduce((n, entry) => {
+        return n + (entry.pass === true ? 1 : 0);
+      }, 0);
+      const failedCount = perClient.length - passedCount;
+      const pass = failedCount === 0;
       return {
-        content: [{ text: JSON.stringify({ pass, perClient }, null, 2), type: 'text' as const }],
+        content: [
+          {
+            text: JSON.stringify({ failedCount, pass, passedCount, perClient }, null, 2),
+            type: 'text' as const,
+          },
+        ],
       };
     }
   );

@@ -23,10 +23,10 @@ Multiple React Native apps can connect simultaneously — each is identified by 
   \`wait_until({ clientId: ["ios-1", "android-1"], tool: "navigation${MODULE_SEPARATOR}get_current_route", predicate: { op: "equals", path: "name", value: "CART" } })\`  — wait until both clients land on CART
   \`assert({ clientId: "/./", tool: "fiber_tree${MODULE_SEPARATOR}query", args: { mcpId: "checkout:button:submit" }, predicate: { op: "exists" } })\`                     — the same fiber exists on every connected client
 
-Broadcast result shapes:
-  \`call\` — when every per-client result is text, you get one JSON envelope \`{ results: [{ clientId, ok, result | error }, ...] }\`. When any result is an image (screenshot), per-client \`## <clientId>\` text headers are interleaved with each client's blocks so each image stays paired with its source.
-  \`wait_until\` — \`{ ok, perClient: [{ clientId, ok, attempts, elapsedMs, matched? | lastResult, lastError?, reason? }, ...] }\`; overall \`ok\` is true only if every client matched within the shared timeout.
-  \`assert\` — \`{ pass, perClient: [{ clientId, pass, actual?, expected?, op?, path?, message?, result?, error? }, ...] }\`; overall \`pass\` is true only when every client passed.
+Broadcast result shapes (each carries top-level counters so you can pick out failures without scanning per-client):
+  \`call\` — text-only: \`{ okCount, failedCount, results: [{ clientId, ok, result | error }, ...] }\`. Image results: a summary text block \`Broadcast: N ok, M failed (T clients).\` precedes per-client \`## <clientId>\` headers + blocks.
+  \`wait_until\` — \`{ ok, okCount, failedCount, perClient: [{ clientId, ok, attempts, elapsedMs, matched? | lastResult, lastError?, reason? }, ...] }\`; overall \`ok\` is true only if every client matched within the shared timeout.
+  \`assert\` — \`{ pass, passedCount, failedCount, perClient: [{ clientId, pass, actual?, expected?, op?, path?, message?, result?, error? }, ...] }\`; overall \`pass\` is true only when every client passed.
 
 \`list_tools\` and \`describe_tool\` accept the same regex / array forms — there they narrow the considered client set (filter / canonicalisation pool) rather than triggering a broadcast.
 

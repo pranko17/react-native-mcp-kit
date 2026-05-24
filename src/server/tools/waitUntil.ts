@@ -209,11 +209,18 @@ RETURNS
         })
       );
 
-      const ok = perClient.every((entry) => {
-        return entry.ok === true;
-      });
+      const okCount = perClient.reduce((n, entry) => {
+        return n + (entry.ok === true ? 1 : 0);
+      }, 0);
+      const failedCount = perClient.length - okCount;
+      const ok = failedCount === 0;
       return {
-        content: [{ text: JSON.stringify({ ok, perClient }, null, 2), type: 'text' as const }],
+        content: [
+          {
+            text: JSON.stringify({ failedCount, ok, okCount, perClient }, null, 2),
+            type: 'text' as const,
+          },
+        ],
       };
     }
   );
