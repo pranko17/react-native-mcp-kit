@@ -4,6 +4,7 @@ import { z } from 'zod';
 import {
   type BroadcastDispatch,
   buildBroadcastContent,
+  detectShadowedOuterArgs,
   jsonError,
   parseCallArgs,
   parseClientIds,
@@ -44,6 +45,9 @@ export const registerCallTool = (mcp: McpServer, ctx: ServerContext): void => {
     async ({ args, clientId, tool }) => {
       const parsed = parseCallArgs(args);
       if (!parsed.ok) return jsonError(parsed.error);
+
+      const shadowed = detectShadowedOuterArgs(parsed.args, 'call', tool);
+      if (shadowed) return jsonError(shadowed);
 
       const clients = parseClientIds(clientId, ctx.bridge);
       if (!clients.ok) return jsonError(clients.error);

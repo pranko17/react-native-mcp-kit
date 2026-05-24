@@ -1,7 +1,13 @@
 import { type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
-import { jsonError, parseCallArgs, parseClientIds, type ServerContext } from '@/server/helpers';
+import {
+  detectShadowedOuterArgs,
+  jsonError,
+  parseCallArgs,
+  parseClientIds,
+  type ServerContext,
+} from '@/server/helpers';
 import {
   evalPredicate,
   isLeafPredicate,
@@ -140,6 +146,9 @@ RETURNS
     async ({ args, clientId, intervalMs, predicate, timeoutMs, tool }) => {
       const parsedArgs = parseCallArgs(args);
       if (!parsedArgs.ok) return jsonError(parsedArgs.error);
+
+      const shadowed = detectShadowedOuterArgs(parsedArgs.args, 'wait_until', tool);
+      if (shadowed) return jsonError(shadowed);
 
       const clients = parseClientIds(clientId, ctx.bridge);
       if (!clients.ok) return jsonError(clients.error);

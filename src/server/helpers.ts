@@ -235,6 +235,24 @@ export const buildBroadcastContent = (
 };
 
 /**
+ * Catch the common agent mistake of nesting outer dispatcher args (`clientId`)
+ * inside the tool's own `args`. Returns a remediation message or null. Hard
+ * error rather than silent fallback because a silent fallback hides the bug
+ * the agent needs to learn from; the message includes a corrected example so
+ * the next attempt lands right.
+ */
+export const detectShadowedOuterArgs = (
+  args: Record<string, unknown>,
+  outer: 'call' | 'wait_until' | 'assert',
+  tool: string
+): string | null => {
+  if ('clientId' in args) {
+    return `clientId belongs to the outer ${outer}() argument, not to args. Use ${outer}({ clientId: "...", tool: "${tool}", args: { ...the tool's own args } }). The tool's inputSchema (see describe_tool) never includes clientId — it's resolved by ${outer} itself before dispatch.`;
+  }
+  return null;
+};
+
+/**
  * Parse a `call`-style args argument that may arrive as a JSON string (older
  * clients) or a plain object (new form). Returns { ok, args } or { ok: false,
  * error } on malformed JSON.

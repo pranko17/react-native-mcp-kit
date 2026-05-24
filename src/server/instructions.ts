@@ -14,6 +14,20 @@ Multiple React Native apps can connect simultaneously — each is identified by 
 6. For UI-level waits ("wait for a screen to appear", "wait for a spinner to disappear") use \`fiber_tree${MODULE_SEPARATOR}query\` with \`waitFor: { until: "appear" | "disappear", timeout?, interval?, stable? }\` — it polls the same query with cache bypassed until the target state holds. \`stable: <ms>\` requires continuous presence/absence for that many ms to ignore transient matches during screen transitions.
 7. Use \`assert\` for a single-shot checkpoint after actions — same predicate vocabulary as wait_until, returns { pass, actual, expected?, result? }. Natural pair: do action → wait_until / fiber_tree waitFor → assert.
 
+### Outer vs inner args — \`clientId\` is always outer
+
+\`call\` / \`wait_until\` / \`assert\` are wrappers. Each invocation has two argument layers, never mixed:
+
+  • **Outer** — fields on the wrapper itself: \`tool\`, \`args\`, \`clientId\`, plus \`predicate\` / \`timeoutMs\` / \`intervalMs\` (wait_until), \`predicate\` / \`message\` (assert).
+  • **Inner** — what goes inside the wrapper's \`args\` object: ONLY the keys listed in the target tool's own inputSchema (see \`describe_tool\`).
+
+\`clientId\` is wrapper-level. In-app tools (\`fiber_tree__query\`, \`navigation__navigate\`, \`network__get_requests\`, …) do NOT carry \`clientId\` in their own inputSchema — the wrapper resolves the target client before dispatching. Putting \`clientId\` inside \`args\` is a hard error with a remediation hint; don't do it.
+
+  Wrong:  \`call({ tool: "fiber_tree${MODULE_SEPARATOR}query", args: { clientId: "ios-1", scope: "root" } })\`
+  Right:  \`call({ clientId: "ios-1", tool: "fiber_tree${MODULE_SEPARATOR}query", args: { scope: "root" } })\`
+
+Same rule for \`wait_until\` and \`assert\`.
+
 ### Broadcast — same call on several clients
 
 \`call\`, \`wait_until\` and \`assert\` accept \`clientId\` as a string, a \`/body/flags\` regex literal, or an array (literals and regex mixed). A plain string keeps the single-client shape (image content passes through). Regex and array forms switch into broadcast mode — every matching connected client is dispatched in parallel. Same regex slash form as fiber_tree hook filters and log_box ignore patterns.

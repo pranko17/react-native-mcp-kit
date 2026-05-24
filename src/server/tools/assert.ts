@@ -2,6 +2,7 @@ import { type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import {
+  detectShadowedOuterArgs,
   type DispatchResult,
   jsonError,
   parseCallArgs,
@@ -101,6 +102,9 @@ Useful after wait_until as a checkpoint — the pair reads "do action → wait �
     async ({ args, clientId, message, predicate, tool }) => {
       const parsedArgs = parseCallArgs(args);
       if (!parsedArgs.ok) return jsonError(parsedArgs.error);
+
+      const shadowed = detectShadowedOuterArgs(parsedArgs.args, 'assert', tool);
+      if (shadowed) return jsonError(shadowed);
 
       const clients = parseClientIds(clientId, ctx.bridge);
       if (!clients.ok) return jsonError(clients.error);
