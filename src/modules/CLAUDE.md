@@ -1,6 +1,6 @@
 # `src/modules/` — Built-in MCP modules
 
-Each module factory produces an `McpModule` with a fixed `name` and a flat `tools` map. Modules ship with `<McpProvider>` (the always-on batch — `alert`, `console`, `device`, `errors`, `log_box`, `network`, `fiber_tree`) or get registered when the matching provider prop is supplied (`navigation` via `navigationRef`, `i18n` via `i18n`, `query` via `queryClient`, `storage` via `storages`). Custom modules can be slotted in via the `modules` prop, [`useMcpModule`](../client/hooks/useMcpModule.ts), or `McpClient.getInstance().registerModule(...)` directly.
+Each module factory produces an `McpModule` with a fixed `name` and a flat `tools` map. Modules ship with `<McpProvider>` (the always-on batch — `alert`, `console`, `device`, `errors`, `log_box`, `network`, `fiber_tree`) or get registered when the matching provider prop is supplied (`navigation` via `navigationRef`, `i18n` via `i18n`, `query` via `queryClient`, `redux` via `store`, `storage` via `storages`). Custom modules can be slotted in via the `modules` prop, [`useMcpModule`](../client/hooks/useMcpModule.ts), or `McpClient.getInstance().registerModule(...)` directly.
 
 Each module has its own `CLAUDE.md` with the concrete tool list, defaults, edge cases, and gotchas — drill into the relevant one when you need depth.
 
@@ -16,7 +16,7 @@ A few factory names diverge from the registered module name. Agents reach a tool
 
 All other modules use their factory's base name (e.g. `networkModule` → `network`).
 
-## Built-in modules (11)
+## Built-in modules (12)
 
 | Module          | Registered as | Doc                                                    | Provided automatically                                  |
 | --------------- | ------------- | ------------------------------------------------------ | ------------------------------------------------------- |
@@ -30,6 +30,7 @@ All other modules use their factory's base name (e.g. `networkModule` → `netwo
 | `navigationModule`  | `navigation`  | [`navigation/CLAUDE.md`](navigation/CLAUDE.md)     | when `<McpProvider navigationRef={…}>`                  |
 | `networkModule`     | `network`     | [`network/CLAUDE.md`](network/CLAUDE.md)           | always-on (side-effectful capture)                      |
 | `reactQueryModule`  | `query`       | [`reactQuery/CLAUDE.md`](reactQuery/CLAUDE.md)     | when `<McpProvider queryClient={…}>`                    |
+| `reduxModule`       | `redux`       | [`redux/CLAUDE.md`](redux/CLAUDE.md)               | when `<McpProvider store={…}>`                          |
 | `storageModule`     | `storage`     | [`storage/CLAUDE.md`](storage/CLAUDE.md)           | when `<McpProvider storages={…}>`                       |
 
 ## Module interface

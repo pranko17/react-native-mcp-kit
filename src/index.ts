@@ -19,6 +19,7 @@ export {
   navigationModule,
   networkModule,
   reactQueryModule,
+  reduxModule,
   storageModule,
 } from './modules/index';
 

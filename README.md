@@ -62,6 +62,7 @@ export const App = () => {
       navigationRef={navigationRef} // → navigation module
       queryClient={queryClient} // → reactQuery module
       i18n={i18nInstance} // → i18next module
+      store={store} // → redux module
       storages={[{ name: 'mmkv', adapter: mmkvAdapter }]} // → storage module
     >
       <NavigationContainer ref={navigationRef}>{/* your app */}</NavigationContainer>
@@ -162,6 +163,7 @@ interface McpProviderProps {
   navigationRef?: NavigationRef; // → navigationModule
   queryClient?: QueryClientLike; // → reactQueryModule
   i18n?: I18nLike; // → i18nextModule
+  store?: StoreLike; // → reduxModule
   storages?: NamedStorage[]; // → storageModule(...storages)
   modules?: McpModule[]; // arbitrary extra modules
 }
@@ -249,6 +251,7 @@ Reading state is unified through `fiber_tree__query` with `select: ["hooks"]` �
 | [navigation](#navigation) | `navigationModule(ref)`         | React Navigation ref                      |
 | [network](#network)       | `networkModule(options?)`       | —                                         |
 | [query](#query)           | `reactQueryModule(queryClient)` | `QueryClient`                             |
+| [redux](#redux)           | `reduxModule(store)`            | Redux `Store`                             |
 | [storage](#storage)       | `storageModule(...storages)`    | one or more `NamedStorage`                |
 
 The full tool list for every module is always available via `list_tools` at runtime — the sections below describe what each module gives you, not each tool.
@@ -329,6 +332,19 @@ networkModule({
 ### query
 
 React Query cache inspection + mutation: list cached queries, fetch cached data by key, get stats, and run `mutate({ action: 'invalidate' | 'refetch' | 'remove' | 'reset', key? })` against specific keys or the whole cache. `get_data` accepts standard `path` / `depth` / `maxBytes` projection args — heavy `data` collapses to `${obj}`/`${arr}` markers by default; drill via `path: 'data.user.email'`.
+
+### redux
+
+Redux store inspection + dispatch. `get_state` returns the full state tree keyed by slice and accepts standard `path` / `depth` / `maxBytes` projection args — heavy slices collapse to `${obj}`/`${arr}` markers by default (default depth 2 walks each slice one level); drill via `path: 'auth.user.email'`, or pass `depth: 1` for a slice-name overview. `dispatch({ action })` takes the action as a JSON object string with a string `type` — e.g. `'{"type":"cart/addItem","payload":{"id":42}}'` — and works against any Redux Toolkit / vanilla store.
+
+```ts
+interface StoreLike {
+  getState(): unknown;
+  dispatch(action: { type: string; [key: string]: unknown }): unknown;
+}
+
+<McpProvider store={store}>
+```
 
 ### storage
 

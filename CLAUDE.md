@@ -36,7 +36,7 @@ Each subdirectory has its own `CLAUDE.md` with the concrete details. Skim from t
 | [`src/server/`](src/server/CLAUDE.md)                     | MCP server: the 6 static tools (`call`, `wait_until`, `assert`, `list_tools`, `describe_tool`, `connection_status`), bridge, dispatcher. |
 | [`src/server/host/`](src/server/host/CLAUDE.md)           | Host module: OS-level tools (`input`, `capture`, `lifecycle`, `devices`, `tap_fiber`), device resolver, Swift HID, real-iOS CoreDevice tunnel. |
 | [`src/server/metro/`](src/server/metro/CLAUDE.md)         | Metro dev-server control plane: `symbolicate`, `reload`, `status`, `open_in_editor`, `get_events`.                    |
-| [`src/modules/`](src/modules/CLAUDE.md)                   | In-app modules — index + module-interface contract + side-effectful-capture pattern + projection refresher. Each of the 11 modules has its own per-folder `CLAUDE.md` (alert / console / device / errors / fiberTree / i18next / logBox / navigation / network / reactQuery / storage). |
+| [`src/modules/`](src/modules/CLAUDE.md)                   | In-app modules — index + module-interface contract + side-effectful-capture pattern + projection refresher. Each of the 12 modules has its own per-folder `CLAUDE.md` (alert / console / device / errors / fiberTree / i18next / logBox / navigation / network / reactQuery / redux / storage). |
 | [`src/shared/`](src/shared/CLAUDE.md)                     | Code reachable by both sides: WS `protocol.ts`, projection (path drill + `${kind}` markers), RN lazy-require helpers. |
 
 ## Package entry points

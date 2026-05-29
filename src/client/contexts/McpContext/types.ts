@@ -4,6 +4,7 @@ import { type McpModule, type ToolHandler } from '@/client/models/types';
 import { type I18nLike } from '@/modules/i18next/types';
 import { type NavigationRef } from '@/modules/navigation/types';
 import { type QueryClientLike } from '@/modules/reactQuery/types';
+import { type StoreLike } from '@/modules/redux/types';
 import { type NamedStorage } from '@/modules/storage/types';
 
 export interface McpContextValue {
@@ -24,4 +25,5 @@ export interface McpProviderProps {
   navigationRef?: NavigationRef;
   queryClient?: QueryClientLike;
   storages?: NamedStorage[];
+  store?: StoreLike;
 }

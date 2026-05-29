@@ -8,4 +8,5 @@ export { logBoxModule } from './logBox';
 export { navigationModule } from './navigation';
 export { networkModule } from './network';
 export { reactQueryModule } from './reactQuery';
+export { reduxModule } from './redux';
 export { storageModule } from './storage';

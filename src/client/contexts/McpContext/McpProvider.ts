@@ -11,6 +11,7 @@ import { logBoxModule } from '@/modules/logBox';
 import { navigationModule } from '@/modules/navigation';
 import { networkModule } from '@/modules/network';
 import { reactQueryModule } from '@/modules/reactQuery';
+import { reduxModule } from '@/modules/redux';
 import { storageModule } from '@/modules/storage';
 import { getRN } from '@/shared/rn/core';
 
@@ -39,6 +40,7 @@ export const McpProvider = ({
   navigationRef,
   queryClient,
   storages,
+  store,
 }: McpProviderProps) => {
   const client = useMemo(() => {
     return McpClient.initialize({ debug });
@@ -80,6 +82,11 @@ export const McpProvider = ({
     if (!storages || storages.length === 0) return;
     client.registerModule(storageModule(...storages));
   }, [client, storages]);
+
+  useEffect(() => {
+    if (!store) return;
+    client.registerModule(reduxModule(store));
+  }, [client, store]);
 
   useEffect(() => {
     if (!modules || modules.length === 0) return;
