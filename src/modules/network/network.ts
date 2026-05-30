@@ -380,7 +380,7 @@ export const networkModule = (options?: NetworkModuleOptions): McpModule => {
 Each entry carries a numeric \`id\`. Bodies are stored raw up to bodyMaxBytes
 (default 20KB); larger payloads collapse at capture time to a \`\${str}\`
 marker. Sensitive headers (Authorization, Cookie, Set-Cookie, X-Api-Key,
-X-Auth-*) and body keys (password, token, accessToken, refreshToken,
+X-Auth-Token, X-Access-Token) and body keys (password, token, accessToken, refreshToken,
 apiKey, secret, otp, pin) are redacted at capture time. Capture starts at
 module-import time so cold-start traffic is not lost.
 
@@ -436,7 +436,7 @@ redaction lists are configurable via networkModule options.`,
       },
       get_stats: {
         description:
-          'Counts — total, by status, by method — plus duration percentiles (min / p50 / p95 / max) and total bytes stored.',
+          'Counts — total, by status, by method — plus duration percentiles (min / p50 / p95 / max) and total captured body bytes.',
         handler: () => {
           const byMethod: Record<string, number> = {};
           const byStatus: Record<string, number> = { error: 0, pending: 0, success: 0 };

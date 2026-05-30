@@ -25,10 +25,13 @@ export const FIND_SCHEMA = {
     minimum: 0,
     type: 'number',
   },
-  mcpId: { description: 'Stable data-mcp-id to match.', type: 'string' },
-  name: { description: 'Component name to match.', type: 'string' },
-  testID: { description: 'testID to match.', type: 'string' },
-  text: { description: 'Rendered text substring (not prop values).', type: 'string' },
+  mcpId: { description: 'Stable data-mcp-id — exact or `/regex/flags`.', type: 'string' },
+  name: { description: 'Component name — exact or `/regex/flags`.', type: 'string' },
+  testID: { description: 'testID — exact or `/regex/flags`.', type: 'string' },
+  text: {
+    description: 'Rendered text substring or `/regex/flags` (not prop values).',
+    type: 'string',
+  },
   within: {
     description: 'Parent component path. "/" nests, ":N" picks index.',
     examples: ['LoginForm', 'Button:1/Pressable', 'TabBar/TabBarItem:2'],

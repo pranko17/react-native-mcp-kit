@@ -21,7 +21,7 @@ export const registerCallTool = (mcp: McpServer, ctx: ServerContext): void => {
         title: 'Call Tool',
       },
       description:
-        'Call a tool registered by a React Native app client. Use list_tools first to see available tools. When multiple clients are connected, specify clientId; otherwise it is auto-picked. Pass an array (`["ios-1", "android-1"]`) or a `/regex/flags` literal (`"/^ios/"`) to broadcast the same call to several clients in parallel — useful for iOS↔Android parity checks. `args` accepts either a plain object or a JSON string — objects are preferred to avoid escaping quotes.',
+        "Call a tool on a connected RN client (`module__method`; list_tools to discover). `clientId` is optional when one client is connected; pass an array or `/regex/` to broadcast (see the clientId field). `args` is a plain object or JSON string (objects preferred). Returns the tool's result (image content passes through); broadcast returns `{ okCount, failedCount, results: [{ clientId, ok, result | error }] }`.",
       inputSchema: {
         args: z
           .union([z.string(), z.record(z.string(), z.unknown())])

@@ -136,8 +136,8 @@ Each entry carries a monotonic numeric \`id\`. Args are stored raw; the
 shared projection runs at query time. Stack traces captured per level
 (default error+warn+trace). \`trace\` always carries a stack; \`group\` /
 \`groupCollapsed\` / \`groupEnd\` are recorded structurally so the agent
-sees nesting context (RN console may not surface these natively — they
-still land in the buffer). Listing tools accept path / depth / maxBytes
+sees nesting context even when RN's console doesn't surface them. Listing
+tools accept path / depth / maxBytes
 (default depth ${CONSOLE_DEFAULT_DEPTH}). Capture starts at module-import time
 so cold-start logs are not lost. Buffer size and captured levels are
 configurable via consoleModule options.`,
@@ -151,7 +151,7 @@ configurable via consoleModule options.`,
         },
       },
       get_logs: {
-        description: 'Return log entries, optionally filtered by level.',
+        description: 'Captured console entries; filter by level (omit for all).',
         handler: (args) => {
           const level = typeof args.level === 'string' ? (args.level as LogLevel) : undefined;
           const result = level ? filterByLevel(level) : buffer;

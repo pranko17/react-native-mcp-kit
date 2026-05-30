@@ -99,7 +99,8 @@ flat.`,
         },
       },
       search: {
-        description: 'Substring search across keys and values in every namespace.',
+        description:
+          'Substring search across keys and values in every namespace, for one language (`language` arg, defaults to current).',
         handler: (args) => {
           const query = (args.query as string).toLowerCase();
           const lng = (args.language as string) || i18n.language;

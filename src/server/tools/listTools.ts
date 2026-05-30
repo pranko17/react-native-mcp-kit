@@ -19,7 +19,7 @@ export const registerListToolsTool = (mcp: McpServer, ctx: ServerContext): void 
         title: 'List Tools',
       },
       description:
-        'Browse available tools with compact (schema-free) descriptions. Modules with identical shape across multiple clients are deduplicated into a single entry with a clientIds array. Use describe_tool to fetch the full input schema for a specific tool before calling it. Pass `module` to narrow to one module, `clientId` to narrow to one client (string), several clients (array), or by regex (`"/^ios/"`), `compact: true` to drop long module-level descriptions.',
+        "Browse tool names + one-line descriptions (schema-free; modules identical across clients dedupe into one entry with a `clientIds` array). Also returns the connected `clients` and host `hostTools`. Filter with `module` / `clientId` (string, array, or `/regex/`); `compact: true` drops module-level descriptions. Use describe_tool for a tool's full input schema before calling.",
       inputSchema: {
         clientId: z
           .union([z.string(), z.array(z.string())])

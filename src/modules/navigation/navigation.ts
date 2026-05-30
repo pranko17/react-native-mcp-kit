@@ -112,7 +112,6 @@ const getScreenInfoForRouteKey = (routeKey: string | undefined): ScreenInfo | un
 };
 
 export const navigationModule = (navigation: NavigationRef): McpModule => {
-  console.log('Navigation module initialized');
   const history: NavigationHistoryEntry[] = [];
 
   const recordEntry = (rootState: NavigationState) => {
@@ -182,20 +181,15 @@ READS
   get_current_route({ withState? }) — focused route + screen info; pass
   withState:true to also include nested navigator state.
   get_state — full navigation state tree.
-  get_history — last 100 transitions.
+  get_history — last 100 transitions (consecutive same-route entries deduped).
   All reads accept path / depth / maxBytes — defaults: state ${STATE_DEFAULT_DEPTH},
   history ${HISTORY_DEFAULT_DEPTH}, routes ${ROUTE_DEFAULT_DEPTH}.
 
-ACTIONS
-  navigate({ screen, params?, mode? }) — mode: "reuse" (default) | "push"
-  | "replace". reuse jumps to an existing screen, push always adds a new
-  stack entry, replace swaps the current screen.
-  pop({ to?, params? }) — \`to\` undefined → pop 1; number → pop N; screen
-  name → pop back to that name (use \`params\` to override); "top" → pop
-  to the first screen.
-  reset({ routes, index? }) — replace the entire navigator stack.
-  go_back — guarded \`navigation.goBack()\`; returns { success: false,
-  reason } when there's nothing to pop.`,
+ACTIONS (see each tool for arg detail)
+  navigate({ screen, params?, mode? }) — mode reuse (default) / push / replace.
+  pop({ to?, params? }) — to: N / screen name / "top"; omit to pop 1.
+  reset({ routes, index? }) — replace the navigator stack.
+  go_back — guarded goBack; { success: false, reason } when nothing to pop.`,
     name: 'navigation',
     tools: {
       get_current_route: {
@@ -343,7 +337,8 @@ ACTIONS
         },
       },
       reset: {
-        description: 'Reset the current navigator state to a specified routes list.',
+        description:
+          'Replace the navigator stack with `routes` (index defaults to the last route). Returns the new currentRoute.',
         handler: (args) => {
           const routes = args.routes as Array<{ name: string; params?: Record<string, unknown> }>;
           const index = (args.index as number) ?? routes.length - 1;

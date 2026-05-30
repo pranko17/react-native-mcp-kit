@@ -30,7 +30,7 @@ On unmounted: { error: "fiber has no measurable host view", mcpId?, name }.`,
       if (!Array.isArray(steps) || steps.length === 0) {
         return { error: 'tap_fiber requires a non-empty `steps` array.' };
       }
-      const clientId = (args.clientId as string | undefined) ?? ctx.requestedClientId;
+      const clientId = ctx.requestedClientId;
       const index = args.index as number | undefined;
 
       const queryResult = await ctx.dispatch(
@@ -91,10 +91,6 @@ On unmounted: { error: "fiber has no measurable host view", mcpId?, name }.`,
       };
     },
     inputSchema: {
-      clientId: {
-        description: 'Target client ID (optional when one client is connected).',
-        type: 'string',
-      },
       index: {
         description: 'Pick the Nth match when the chain returns multiple (0-based).',
         minimum: 0,

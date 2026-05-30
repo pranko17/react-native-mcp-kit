@@ -11,7 +11,7 @@ export const registerConnectionStatusTool = (mcp: McpServer, ctx: ServerContext)
         title: 'Connection Status',
       },
       description:
-        'List connected React Native clients with their IDs, platforms, labels, registered modules, and lifecycle `status` (active / background / inactive — from the app\'s pushed AppState). `disconnected` lists recently-closed clients still held for the ~1-hour reconnect-id window, each with a `status: "disconnected"` and `expiresInMs` countdown; these are shown for visibility but are NOT callable (tools return "not connected").',
+        'List connected React Native clients — per client: id, platform, label, appName/appVersion, bundleId, deviceId, connectedAt, devServer, registered modules, and a lifecycle `status` (active / background / inactive, from the app\'s pushed AppState). `disconnected` lists recently-closed clients still held for the ~1-hour reconnect-id window, each with `status: "disconnected"` + an `expiresInMs` countdown — shown for visibility but NOT callable (tools return "not connected"). Top-level `hostModules` lists the host-side tool modules.',
     },
     async () => {
       const clients = ctx.bridge.listClients();

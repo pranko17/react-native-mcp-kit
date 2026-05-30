@@ -63,8 +63,8 @@ export const reactQueryModule = (queryClient: QueryClientLike): McpModule => {
     description: `React Query cache inspection + mutation.
 
 Query keys are passed as JSON strings to preserve array structure — e.g.
-'["users","list"]' or '"users"'. Omit \`key\` on invalidate / refetch /
-remove / reset to target every cached query at once.
+'["users","list"]' or '"users"'. Omit \`key\` on \`mutate\` to target every
+cached query at once.
 
 \`get_queries\` returns metadata only (no \`data\`, default depth ${QUERIES_DEFAULT_DEPTH}).
 \`get_data\` returns the full query state for one key (default depth ${DATA_DEFAULT_DEPTH}).
@@ -131,7 +131,11 @@ Both accept path / depth / maxBytes.`,
         },
         inputSchema: {
           ...QUERIES_SCHEMA,
-          key: { description: 'Substring filter on the serialized key.', type: 'string' },
+          key: {
+            description:
+              'Substring filter on the serialized queryHash — NOT an exact key match (unlike get_data / mutate, which take an exact JSON key).',
+            type: 'string',
+          },
           status: {
             description: 'Filter by status.',
             enum: ['pending', 'error', 'success'],
@@ -154,7 +158,7 @@ Both accept path / depth / maxBytes.`,
       },
       mutate: {
         description:
-          'Mutate the cache: `invalidate` marks queries stale (refetches on next use); `refetch` refetches immediately; `remove` drops queries entirely; `reset` clears data + error back to initial state. Omit `key` to target every cached query.',
+          'Run a cache action: `invalidate` (mark stale, refetch on next use) · `refetch` (now) · `remove` (drop) · `reset` (clear data+error to initial). Omit `key` to hit every cached query.',
         handler: async (args) => {
           const action = typeof args.action === 'string' ? args.action : undefined;
           const filters = args.key ? { queryKey: parseKey(args.key as string) } : undefined;

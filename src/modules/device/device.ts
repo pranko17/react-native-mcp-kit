@@ -177,25 +177,16 @@ physical pixel helpers (screenPixels / windowPixels under \`dimensions\`)
 match what host__tap / adb input tap consume.
 
 READS
-  info({ select? }) — one aggregate read. Returns any subset of:
-    RN core: platform, dimensions, pixelRatio, appearance, appState,
-      accessibility, keyboard, initialUrl, dev
-    react-native-device-info (optional dep): identity, app, battery,
-      memoryStorage
-  Pass \`select: ['battery','keyboard']\` to limit fields; omit for the full
-  payload. DI-backed fields gracefully return
-  \`{ unavailable: true, reason }\` when the package isn't installed. Fields
-  already in the handshake (appName / appVersion / bundleId / deviceId /
-  label) are not duplicated.
+  info({ select? }) — one aggregate device/platform read (platform,
+  dimensions, appState, accessibility, keyboard, battery, identity, app, …).
+  DI-backed fields (identity / app / battery / memoryStorage) need
+  react-native-device-info, else return { unavailable: true, reason }.
+  Pass \`select\` to limit; see the tool for the full field list.
 
-ACTIONS
-  open_url({ url, dryRun? }) — opens the URL via Linking. \`dryRun: true\`
-  only checks Linking.canOpenURL without launching anything (returns
-  { canOpen, url }).
-  open_settings — open the app settings page.
-  dismiss_keyboard — Keyboard.dismiss().
-  reload — DevSettings.reload() (dev only).
-  vibrate({ duration? }) — Vibration.vibrate(duration|400).`,
+ACTIONS (see each tool)
+  open_url({ url, dryRun? }) · open_settings · dismiss_keyboard ·
+  reload (dev only) · vibrate({ duration? }) — default 400ms; 0 → 400;
+  iOS ignores duration.`,
     name: 'device',
     tools: {
       dismiss_keyboard: {

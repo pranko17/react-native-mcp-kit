@@ -42,8 +42,7 @@ export const reduxModule = (store: StoreLike): McpModule => {
 level) — drill into a slice via \`path: 'auth.user.email'\`, or pass \`depth: 1\`
 to list slice names only. Accepts path / depth / maxBytes.
 
-\`dispatch\` takes the action as a JSON object string with a string \`type\` —
-e.g. '{"type":"cart/addItem","payload":{"id":42}}'.`,
+\`dispatch\` takes a JSON action string with a string \`type\` (see the tool).`,
     name: 'redux',
     tools: {
       dispatch: {

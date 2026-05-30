@@ -112,8 +112,8 @@ RETURNS
     { ok: false, reason, attempts, elapsedMs, lastResult, lastError? } on timeout.
 
   Broadcast (clientId is an array — polls each client in parallel under the
-  shared timeout): { ok, perClient: [{ clientId, ok, attempts, elapsedMs, matched? | lastResult, lastError? }, ...] }
-  with overall ok = every client matched within its budget.`,
+  shared timeout): { ok, okCount, failedCount, perClient: [{ clientId, ok, attempts, elapsedMs, matched? | lastResult, lastError? }, ...] }
+  with overall ok = every client matched within the shared timeout.`,
       inputSchema: {
         args: z
           .union([z.string(), z.record(z.string(), z.unknown())])

@@ -92,13 +92,14 @@ IGNORE PATTERNS
   e.g. "/^Warning: /" or "/useNativeDriver/i".
 
 LEVELS
-  warn / error / fatal / syntax — clear({ level }) for surgical cleanup,
-  or clear() for all.`,
+  get_logs filters by warn / error / fatal / syntax. clear({ level })
+  takes warn / error / syntax (error also clears fatal — RN has no
+  separate fatal clear); clear() clears all.`,
     name: 'log_box',
     tools: {
       clear: {
         description:
-          'Clear LogBox rows. Pass `level: "warn"` / `"error"` / `"syntax"` for surgical cleanup; omit `level` (or pass `"all"`) to clear every row.',
+          'Clear LogBox rows. Pass `level: "warn"` / `"error"` / `"syntax"` for surgical cleanup (`"error"` also clears fatal rows); omit `level` (or pass `"all"`) to clear every row.',
         handler: (args) => {
           const level = typeof args.level === 'string' ? args.level : undefined;
           const data = getLogBoxData();

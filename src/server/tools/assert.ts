@@ -68,7 +68,7 @@ Single client (clientId omitted or a string):
   Returns { pass: false, error, message? } when the tool dispatch itself threw.
 
 Broadcast (clientId is an array — asserts on each client in parallel):
-  Returns { pass, perClient: [{ clientId, pass, actual?, expected?, op?, path?, message?, result?, error? }, ...] }
+  Returns { pass, passedCount, failedCount, perClient: [{ clientId, pass, actual?, expected?, op?, path?, message?, result?, error? }, ...] }
   with overall pass = every client's assertion passed.
 
 Useful after wait_until as a checkpoint — the pair reads "do action → wait → assert" which produces a clean audit trail in session logs.`,

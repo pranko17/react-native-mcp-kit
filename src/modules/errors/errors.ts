@@ -165,8 +165,7 @@ errorsModule options.`,
         },
       },
       get_errors: {
-        description:
-          'Captured errors; filterable by source / fatal / time range. Use `metro__symbolicate` on stackFrames to resolve bundled paths back to source.',
+        description: 'Captured errors; filter by source / fatal / time range (since / until).',
         handler: (args) => {
           let result = [...buffer];
           if (args.source) {

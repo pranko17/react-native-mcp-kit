@@ -2,9 +2,11 @@ import { MODULE_SEPARATOR } from '@/shared/protocol';
 
 export const BASE_INSTRUCTIONS = `You are connected to a running React Native app via the react-native-mcp-kit bridge.
 
-Multiple React Native apps can connect simultaneously — each is identified by a short ID like "ios-1", "android-1", or "client-1". Use \`connection_status\` or \`list_tools\` to see which clients are connected and their IDs, platforms, and labels.
+Multiple React Native apps can connect simultaneously — each is identified by a short ID like "ios-1", "android-1", or "client-1".
 
 ## How to interact
+
+Core loop: \`connection_status\` (who's connected) → \`list_tools\` / \`describe_tool\` (find the tool + its args) → \`call\` (act) → \`wait_until\` / \`assert\` (verify).
 
 1. Use \`connection_status\` to check connected clients — each has a lifecycle \`status\` (\`active\` / \`background\` / \`inactive\`), plus a \`disconnected\` array of recently-closed clients (held ~1h, with \`expiresInMs\`). Not \`active\`? See "App not \`active\`?" below.
 2. Use \`list_tools\` to browse all available tool names and short descriptions. The response is compact — modules that are structurally identical across multiple clients are deduplicated into a single entry with a \`clientIds\` array, and input schemas are omitted. Narrow the listing with \`{ module }\` or \`{ clientId }\`, or pass \`{ compact: true }\` to drop module-level descriptions.
@@ -48,9 +50,8 @@ Regex form details:
   • A leading \`/\` plus a trailing \`/<flags>\` switches the string into regex mode. Flags from \`[gimsuy]\`. Anything else is treated as a literal client ID.
   • Pattern is matched against connected client IDs (\`ios-1\`, \`android-2\`, …). \`"/./"\` matches every connected client; \`"/^ios/"\` only iOS; \`"/-1$/"\` only the first client per platform.
   • Pattern that matches zero connected clients returns an error up front — broadcasting to nobody is almost always a mistake. Literals that are unconnected still fall through to the per-client error in the broadcast envelope (matches the not-fail-fast contract).
-8. Use \`host${MODULE_SEPARATOR}tap_fiber\` to collapse "fiber_tree__query → host__tap at bounds" into one call. Pass fiber_tree steps; if exactly one fiber matches, its center is tapped. Ambiguous match returns the candidate list so you can add \`index\` or narrow the chain.
 
-Some tools run inline on the MCP server host (e.g. \`host${MODULE_SEPARATOR}screenshot\`, \`host${MODULE_SEPARATOR}list_devices\`, \`host${MODULE_SEPARATOR}launch_app\`, \`host${MODULE_SEPARATOR}terminate_app\`, \`host${MODULE_SEPARATOR}restart_app\`, \`metro${MODULE_SEPARATOR}reload\`, \`metro${MODULE_SEPARATOR}symbolicate\`) and work even when no React Native client is connected. They use xcrun simctl / adb on the dev machine. When \`clientId\` is provided, host tools use that client's platform/label/deviceId as hints to resolve the target device; otherwise they prefer the device of the single connected client, falling back to the single booted sim / online device. \`launch_app\`, \`terminate_app\`, and \`restart_app\` accept an \`appId\` arg (iOS bundle ID / Android package name); omit it to reuse the target client's registered \`bundleId\` from its connection metadata. \`clientId\` resolves even a \`disconnected\` client (within the ~1h window) — relaunch a crashed / closed app by its \`clientId\`.
+Some tools run inline on the MCP server host (e.g. \`host${MODULE_SEPARATOR}screenshot\`, \`host${MODULE_SEPARATOR}list_devices\`, \`host${MODULE_SEPARATOR}launch_app\`, \`host${MODULE_SEPARATOR}terminate_app\`, \`host${MODULE_SEPARATOR}restart_app\`, \`metro${MODULE_SEPARATOR}reload\`, \`metro${MODULE_SEPARATOR}symbolicate\`) and work even when no React Native client is connected. They use xcrun simctl / adb on the dev machine. When \`clientId\` is provided, host tools use that client's platform/label/deviceId as hints to resolve the target device; otherwise they prefer the device of the single connected client, falling back to the single booted sim / online device. \`launch_app\`, \`terminate_app\`, and \`restart_app\` accept an \`appId\` arg (iOS bundle ID / Android package name); omit it to reuse the target client's registered \`bundleId\` from its connection metadata. \`clientId\` resolves even a \`disconnected\` client within the ~1h reconnect window.
 
 ## App not \`active\`? Relaunch, don't hammer
 

@@ -16,7 +16,8 @@ export const alertModule = (): McpModule => {
     name: 'alert',
     tools: {
       show: {
-        description: 'Show an alert dialog; returns { button, index }.',
+        description:
+          'Show a native alert; resolves { button: <text>, index: <0-based position in buttons> } when a button is tapped (waits up to 60s).',
         handler: (args) => {
           const { Alert } = getRN();
           const rawButtons = args.buttons as Array<string | AlertButton> | undefined;
