@@ -90,9 +90,9 @@ In the constructor (`McpClient.ts:157-194`) the client wires three handlers on a
 
 ### Module / tool registration API
 
-- `registerModule(module)` / `registerModules(modules)` (`McpClient.ts:285-302`) → `moduleRunner.registerModules` then `sendRegistration`.
-- `registerTool(name, tool)` (`McpClient.ts:304`) — for dynamic tools from `useMcpTool`. Stores in `moduleRunner.dynamicTools` (no module namespace), then sends a `tool_register` message with `module: "__dynamic"` (i.e. `${MODULE_SEPARATOR}dynamic`). Server-side, the tool becomes callable as `call(tool: "__dynamic__<name>")` — the prefix is `DYNAMIC_PREFIX = "__dynamic__"` from `shared/protocol.ts:15`. They show up in `list_tools` under `(dynamic)`.
-- `unregisterTool(name)` (`McpClient.ts:318`) — symmetric `tool_unregister`.
+- `registerModule(module)` / `registerModules(modules)` (`McpClient.ts:285-329`) → `moduleRunner.registerModules` then `sendRegistration`. **Each returns a disposer** `() => void` that removes the just-registered module(s) from `ModuleRunner` and re-blasts `sendRegistration`; since the server full-replaces its module list on every registration (`bridge.ts:252`), the module drops out of `list_tools` / `call`. `unregisterModule(name)` / `unregisterModules(names)` (`McpClient.ts:314-329`) expose the same removal by name without holding the disposer — symmetric with the dynamic-tool pair.
+- `registerTool(name, tool)` (`McpClient.ts:331`) — for dynamic tools from `useMcpTool`. Stores in `moduleRunner.dynamicTools` (no module namespace), then sends a `tool_register` message with `module: "__dynamic"` (i.e. `${MODULE_SEPARATOR}dynamic`). Server-side, the tool becomes callable as `call(tool: "__dynamic__<name>")` — the prefix is `DYNAMIC_PREFIX = "__dynamic__"` from `shared/protocol.ts:15`. They show up in `list_tools` under `(dynamic)`.
+- `unregisterTool(name)` (`McpClient.ts:345`) — symmetric `tool_unregister`.
 
 ## `useMcpTool` / `useMcpModule`
 
@@ -111,7 +111,7 @@ Calling `useMcpTool` outside `<McpProvider>` is a silent no-op (`ctx` is `null`)
 
 ### [`hooks/useMcpModule.ts`](hooks/useMcpModule.ts)
 
-Same shape as `useMcpTool` but for full modules: `useMemo` on the factory, `useEffect` registers via `McpClient.getInstance().registerModule(module)`. **No cleanup** — there is no "unregister module" on the client. If the module identity changes the next render simply re-registers under the same `module.name`, which overwrites the entry in `ModuleRunner.modules` (`moduleRunner.ts:11`). Designed for stable-named modules that get re-bound when their dependency changes.
+Same shape as `useMcpTool` but for full modules: `useMemo` on the factory, `useEffect` registers via `McpClient.getInstance().registerModule(module)` and returns that call's disposer as the effect cleanup. So the module is **unregistered on unmount**, and on a dependency change React tears down (unregister) then re-registers. Both `registerModule` and the disposer re-blast `sendRegistration`, and the server full-replaces its module list (`bridge.ts:252`) — so for a same-named re-bind the two sends (without → with the module) run synchronously back-to-back and the agent never observes the gap. Earlier versions had no cleanup and the module leaked past unmount; the disposer fixes that, which matters for modules registered from a feature subtree that owns its own `QueryClient` / store.
 
 `useMcpModule` calls `McpClient.getInstance()` at the top of the hook, so it throws if the provider hasn't mounted yet.
 

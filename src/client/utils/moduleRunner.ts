@@ -15,6 +15,13 @@ export class ModuleRunner {
     }
   }
 
+  unregisterModules(names: string[]): void {
+    for (const name of names) {
+      this.modules.delete(name);
+      this.moduleDescriptions.delete(name);
+    }
+  }
+
   registerDynamicTool(name: string, tool: ToolHandler): void {
     this.dynamicTools.set(name, tool);
   }

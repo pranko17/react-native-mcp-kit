@@ -11,6 +11,6 @@ export const useMcpModule = (factory: () => McpModule, deps: DependencyList): vo
   const module = useMemo(factory, deps);
 
   useEffect(() => {
-    client.registerModule(module);
+    return client.registerModule(module);
   }, [client, module]);
 };

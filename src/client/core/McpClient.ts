@@ -282,13 +282,16 @@ export class McpClient {
     this.debug = enabled;
   }
 
-  registerModule(module: McpModule): void {
+  registerModule(module: McpModule): () => void {
     this.log(`Registering module: ${colorModule(module.name)}`, Object.keys(module.tools));
     this.moduleRunner.registerModules([module]);
     this.sendRegistration();
+    return () => {
+      this.unregisterModule(module.name);
+    };
   }
 
-  registerModules(modules: McpModule[]): void {
+  registerModules(modules: McpModule[]): () => void {
     this.log(
       'Registering modules: ' +
         modules
@@ -298,6 +301,30 @@ export class McpClient {
           .join(', ')
     );
     this.moduleRunner.registerModules(modules);
+    this.sendRegistration();
+    return () => {
+      this.unregisterModules(
+        modules.map((m) => {
+          return m.name;
+        })
+      );
+    };
+  }
+
+  unregisterModule(name: string): void {
+    this.unregisterModules([name]);
+  }
+
+  unregisterModules(names: string[]): void {
+    this.log(
+      'Unregistering modules: ' +
+        names
+          .map((n) => {
+            return colorModule(n);
+          })
+          .join(', ')
+    );
+    this.moduleRunner.unregisterModules(names);
     this.sendRegistration();
   }
 
