@@ -4,6 +4,7 @@ import { WebSocketServer } from 'ws';
 import { type WebSocket } from 'ws';
 
 import {
+  type AppLifecycleState,
   type ClientMessage,
   type DevServerInfo,
   MODULE_SEPARATOR,
@@ -18,12 +19,12 @@ import {
 const REQUEST_TIMEOUT = 10_000;
 // When a client's WebSocket drops, we keep its ID slot reserved for this long
 // so a reconnect from the same `(deviceId, bundleId, platform)` triple lands
-// back on the same id (e.g. `ios-1`). 10 minutes covers the long tail —
-// Metro fast-refresh bounces, app backgrounded during a coffee break,
-// Xcode rebuild + relaunch, brief network blips, longer pauses while the
+// back on the same id (e.g. `ios-1`). 1 hour covers the long tail —
+// Metro fast-refresh bounces, app backgrounded during a long break,
+// Xcode rebuild + relaunch, brief network blips, long pauses while the
 // agent thinks. Stale entries are still cheap (just a ClientEntry copy
 // holding a dead socket reference), so a longer window costs little.
-const RECONNECT_GRACE_MS = 10 * 60_000;
+const RECONNECT_GRACE_MS = 60 * 60_000;
 
 export interface DynamicToolEntry {
   description: string;
@@ -38,12 +39,14 @@ export interface ClientEntry {
   modules: ModuleDescriptor[];
   readonly socket: WebSocket;
   readonly appName?: string;
+  appState?: AppLifecycleState;
   readonly appVersion?: string;
   readonly bundleId?: string;
   readonly devServer?: DevServerInfo;
   readonly deviceId?: string;
   readonly isSimulator?: boolean;
   readonly label?: string;
+  lastStateAt?: number;
   readonly platform?: string;
 }
 
@@ -61,6 +64,7 @@ interface PendingRequest {
 // one phone differ by bundleId, two phones differ by deviceId. label /
 // appVersion / devServer can drift between sessions and aren't used to match.
 interface DisconnectedClient {
+  disconnectedAt: number;
   entry: ClientEntry;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -115,7 +119,7 @@ export class Bridge {
             }, RECONNECT_GRACE_MS);
             // Don't keep the event loop alive solely for ghost expiry.
             timer.unref?.();
-            this.disconnectedClients.set(clientId, { entry, timer });
+            this.disconnectedClients.set(clientId, { disconnectedAt: Date.now(), entry, timer });
           }
         });
       });
@@ -185,8 +189,31 @@ export class Bridge {
     return [...this.clients.values()];
   }
 
+  // Clients whose socket dropped but whose ID slot is still reserved (the
+  // 1-hour reconnect grace). Visible for `connection_status` so a closed
+  // app lingers with a status + countdown — but still NOT callable: `call` /
+  // `getClient` / `resolveClient` read only `this.clients`.
+  listDisconnected(): Array<{ disconnectedAt: number; entry: ClientEntry; expiresInMs: number }> {
+    const now = Date.now();
+    return [...this.disconnectedClients.values()].map((ghost) => {
+      return {
+        disconnectedAt: ghost.disconnectedAt,
+        entry: ghost.entry,
+        expiresInMs: Math.max(0, ghost.disconnectedAt + RECONNECT_GRACE_MS - now),
+      };
+    });
+  }
+
   getClient(id: string): ClientEntry | undefined {
     return this.clients.get(id);
+  }
+
+  // The retained `ClientEntry` for a disconnected (ghost) client, if still
+  // inside the reconnect grace. Host tools resolve devices off this so a
+  // recently-closed app is still reachable by its clientId (OS-level launch /
+  // screenshot / tap) — even though it's not callable over the (dead) socket.
+  getDisconnected(id: string): ClientEntry | undefined {
+    return this.disconnectedClients.get(id)?.entry;
   }
 
   resolveClient(explicitId?: string): ClientResolution {
@@ -316,6 +343,14 @@ export class Bridge {
         if (client) {
           const fullName = `${message.module}${MODULE_SEPARATOR}${message.toolName}`;
           client.dynamicTools.delete(fullName);
+        }
+        break;
+      }
+      case 'app_state': {
+        const client = this.clientForSocket(socket);
+        if (client) {
+          client.appState = message.appState;
+          client.lastStateAt = Date.now();
         }
         break;
       }

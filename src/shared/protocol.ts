@@ -127,9 +127,27 @@ export interface ToolUnregisterMessage {
   type: 'tool_unregister';
 }
 
+// === RN App → Server: app lifecycle state ===
+
+/** React Native `AppState` value. `active` = foreground, `background` =
+ * backgrounded (JS may be suspended shortly after), `inactive` = transitioning. */
+export type AppLifecycleState = 'active' | 'background' | 'inactive';
+
+/**
+ * Pushed by the client whenever `AppState` changes (and once on connect), so
+ * the server knows whether a still-connected client is foreground or merely
+ * backgrounded — a backgrounded app keeps its socket open but stops answering
+ * tool requests once iOS suspends its JS.
+ */
+export interface AppStateMessage {
+  appState: AppLifecycleState;
+  type: 'app_state';
+}
+
 // === Union types ===
 
 export type ClientMessage =
+  | AppStateMessage
   | RegistrationMessage
   | ToolRegisterMessage
   | ToolResponse

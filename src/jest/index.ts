@@ -131,6 +131,8 @@ export const storageModule: Api['storageModule'] = () => {
 
 // Types — erased at runtime; keep consumers' type-only imports resolving.
 export {
+  type AppLifecycleState,
+  type AppStateMessage,
   type ClientMessage,
   type McpContextValue,
   type McpModule,

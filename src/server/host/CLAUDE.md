@@ -61,7 +61,7 @@ The whole module flows through one function: `resolveDevice(ctx, options, runner
 Priority order (first match wins):
 
 1. **Explicit `udid` / `serial`** — bypasses everything. Validates against the actual device list; errors if not found or not booted/ready.
-2. **`ctx.requestedClientId`** (from outer `call(clientId:...)`) — looks up the client in the bridge and resolves it to a device. No fallback if the client is unknown.
+2. **`ctx.requestedClientId`** (from outer `call(clientId:...)`) — `getClient` (live) first, else `getDisconnected` (a ghost still inside the reconnect grace), then resolve to a device. The ghost fallback means a recently-closed app stays reachable on its device by `clientId` — `host__launch_app clientId: ios-1` relaunches it even after it disconnected. Errors only if the id is neither live nor a ghost.
 3. **Single matching connected client** (optionally narrowed by `platform`) — auto-picks. iOS clients are routed via `client.isSimulator`: false → `resolveIosRealClient` (uses `xcrun devicectl`), otherwise → simulator path (uses `xcrun simctl`).
 4. **No clients matched** — bare platform scan: exactly one booted iOS sim or one online Android device, otherwise an actionable error listing what's available.
 

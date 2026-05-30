@@ -25,6 +25,8 @@ export {
 
 // Protocol types
 export {
+  type AppLifecycleState,
+  type AppStateMessage,
   type ClientMessage,
   type ModuleDescriptor,
   type ModuleToolDescriptor,

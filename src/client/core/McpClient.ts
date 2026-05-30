@@ -2,6 +2,7 @@ import { type McpModule, type ToolHandler } from '@/client/models/types';
 import { McpConnection } from '@/client/utils/connection';
 import { ModuleRunner } from '@/client/utils/moduleRunner';
 import {
+  type AppLifecycleState,
   DEFAULT_PORT,
   type DevServerInfo,
   MODULE_SEPARATOR,
@@ -149,6 +150,7 @@ const autoDetectIdentity = (): ClientIdentity => {
 export class McpClient {
   private static instance: McpClient | null = null;
 
+  private appStateSub: { remove: () => void } | null = null;
   private connection: McpConnection;
   private debug = false;
   private identity: ClientIdentity;
@@ -161,7 +163,13 @@ export class McpClient {
     this.connection.onOpen(() => {
       this.log('🚀 Connected to MCP server 🚀');
       this.sendRegistration();
+      // Re-blast current lifecycle state on every (re)connect — `send` drops
+      // anything queued before the socket is OPEN, so this is where the server
+      // first learns whether we're foreground or background.
+      this.sendCurrentAppState();
     });
+
+    this.subscribeToAppState();
 
     this.connection.onMessage((message: ServerMessage) => {
       switch (message.type) {
@@ -274,6 +282,8 @@ export class McpClient {
 
   dispose(): void {
     this.log('Disposing MCP client');
+    this.appStateSub?.remove();
+    this.appStateSub = null;
     this.connection.dispose();
     McpClient.instance = null;
   }
@@ -359,6 +369,26 @@ export class McpClient {
     } else {
       originalConsoleLog(`${TAG} ${message}`);
     }
+  }
+
+  private subscribeToAppState(): void {
+    const appState = loadRN()?.AppState;
+    if (!appState?.addEventListener) return;
+    this.appStateSub = appState.addEventListener('change', (next: string) => {
+      this.sendAppState(next as AppLifecycleState);
+    });
+  }
+
+  private sendCurrentAppState(): void {
+    const current = loadRN()?.AppState?.currentState;
+    if (current) {
+      this.sendAppState(current as AppLifecycleState);
+    }
+  }
+
+  private sendAppState(appState: AppLifecycleState): void {
+    this.log(`App state: ${BOLD}${appState}${RESET}`);
+    this.connection.send({ appState, type: 'app_state' });
   }
 
   private sendRegistration(): void {

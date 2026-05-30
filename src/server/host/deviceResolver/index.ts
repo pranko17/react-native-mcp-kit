@@ -25,19 +25,26 @@ export const resolveDevice = async (
     return resolveAndroidBySerial(options.serial, runner);
   }
 
-  // Step 1: explicit clientId — resolve it, no bare-scan fallback
+  // Step 1: explicit clientId — resolve it, no bare-scan fallback. A live
+  // client wins; otherwise fall back to a disconnected (ghost) client still in
+  // the reconnect grace — host tools are OS-level, so a recently-closed app is
+  // still reachable on its device by clientId (e.g. relaunch it).
   if (ctx.requestedClientId) {
-    const client = ctx.bridge.getClient(ctx.requestedClientId);
+    const client =
+      ctx.bridge.getClient(ctx.requestedClientId) ??
+      ctx.bridge.getDisconnected(ctx.requestedClientId);
     if (!client) {
       const available =
-        ctx.bridge
-          .listClients()
-          .map((c) => {
+        [
+          ...ctx.bridge.listClients().map((c) => {
             return c.id;
-          })
-          .join(', ') || '(none)';
+          }),
+          ...ctx.bridge.listDisconnected().map((d) => {
+            return d.entry.id;
+          }),
+        ].join(', ') || '(none)';
       return {
-        error: `Client '${ctx.requestedClientId}' not connected. Available: ${available}`,
+        error: `Client '${ctx.requestedClientId}' not found (neither connected nor in the reconnect window). Known: ${available}`,
         ok: false,
       };
     }

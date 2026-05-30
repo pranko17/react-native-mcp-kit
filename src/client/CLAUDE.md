@@ -75,7 +75,7 @@ Caller-supplied `options` win over auto-detected values for every field except `
 
 In the constructor (`McpClient.ts:157-194`) the client wires three handlers on a new `McpConnection`:
 
-- `onOpen` → log "Connected" and call `sendRegistration`.
+- `onOpen` → log "Connected", call `sendRegistration`, then `sendCurrentAppState` (re-blast lifecycle state — `send` drops anything queued before the socket is OPEN, so this is where the server first learns foreground/background).
 - `onMessage` switches on `message.type`:
   - `server_hello` (`McpClient.ts:168`) — verifies `protocolVersion`. Mismatch logs an error, calls `connection.stopReconnect()` + `dispose()`, and never tries again.
   - `version_mismatch` (`McpClient.ts:180`) — server rejected us; log and stop reconnect.
@@ -83,6 +83,10 @@ In the constructor (`McpClient.ts:157-194`) the client wires three handlers on a
 - Finally, `connection.connect()`.
 
 `handleToolRequest` (`McpClient.ts:196-216`) runs `moduleRunner.handleRequest(message)`, then sends back a `tool_response` with either `result` or `error: error.message`.
+
+### AppState push
+
+`subscribeToAppState` (called from the constructor) lazy-loads `loadRN()?.AppState` and, when present, subscribes to `'change'` → `sendAppState(next)`. On every `onOpen` the client also `sendCurrentAppState()` (`AppState.currentState`), since `send` no-ops before the socket is OPEN. `sendAppState` emits `{ type: 'app_state', appState }` so the server can mark a still-connected client `active` / `background` / `inactive` — a backgrounded app keeps its socket open but stops answering tool requests once the OS suspends its JS, which the socket-close signal can't reveal. The subscription is torn down in `dispose()`. No-op when RN isn't loadable (server/test contexts).
 
 ### `sendRegistration`
 
