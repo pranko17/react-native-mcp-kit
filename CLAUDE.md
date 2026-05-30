@@ -48,6 +48,7 @@ Multiple bundles ship from one `package.json`:
 | `react-native-mcp-kit`   | `src/index.ts`          | App code — re-exports client + modules (RN-safe).              |
 | `…/client`               | `src/client/index.ts`   | Just the client subset (`<McpProvider>`, hooks, `McpClient`).  |
 | `…/modules`              | `src/modules/index.ts`  | Module factories only.                                         |
+| `…/jest`                 | `src/jest/index.ts`     | Jest mock — no-op, type-compliant stubs of the whole public API (RN/Node-safe, no react import). |
 | `…/server`               | `src/server/index.ts`   | Node-side `createServer` — **not** bundled into RN.            |
 | `…/babel`                | `src/babel/index.ts`    | Both Babel plugins.                                            |
 | `…/babel/test-id-plugin` | `src/babel/testIdPlugin/index.ts` | Direct plugin import.                                 |

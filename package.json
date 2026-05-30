@@ -59,7 +59,8 @@
     "./babel": "./dist/babel/index.js",
     "./babel/test-id-plugin": "./dist/babel/testIdPlugin/index.js",
     "./babel/strip-plugin": "./dist/babel/stripPlugin.js",
-    "./server": "./dist/server/index.js"
+    "./server": "./dist/server/index.js",
+    "./jest": "./dist/jest/index.js"
   },
   "scripts": {
     "build": "rm -rf dist && tsc && tsc-alias && ./scripts/build-ios-hid.sh",

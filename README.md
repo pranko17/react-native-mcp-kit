@@ -395,6 +395,24 @@ useMcpModule(() => myModule(), []);
 
 Agents see the module + its tools in `list_tools` and call them via `call(tool: "myModule__greet")`.
 
+## Testing
+
+Unit tests shouldn't load the real client — it opens a WebSocket and lazy-requires react-native. The package ships a no-op mock at `react-native-mcp-kit/jest`: full type-compliance, every export stubbed (the provider renders its children, the hooks no-op, factories return empty modules, `registerModule` hands back a disposer). Wire it once:
+
+```js
+// jest setup file
+jest.mock('react-native-mcp-kit', () => require('react-native-mcp-kit/jest'));
+
+// …or via jest config
+moduleNameMapper: { '^react-native-mcp-kit$': 'react-native-mcp-kit/jest' }
+```
+
+That's all an npm-installed consumer needs. If you consume the package via a local `link:` / symlink during development, its real path is outside `node_modules`, so jest babel-transforms its compiled `dist` and then can't resolve `@babel/runtime` from the lib's folder. Tell jest to leave the already-compiled dist alone (path matches your symlink target):
+
+```js
+transformIgnorePatterns: ['node_modules/(?!(…))', 'react-native-mcp-kit/dist/']
+```
+
 ## Dev vs production
 
 - **Development** — test-id plugin on, strip plugin off. The `McpProvider` boots, tries to connect to `ws://localhost:8347`; if the server isn't running, no harm done — the bridge just stays disconnected and retries.
