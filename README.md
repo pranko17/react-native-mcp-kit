@@ -407,12 +407,6 @@ jest.mock('react-native-mcp-kit', () => require('react-native-mcp-kit/jest'));
 moduleNameMapper: { '^react-native-mcp-kit$': 'react-native-mcp-kit/jest' }
 ```
 
-That's all an npm-installed consumer needs. If you consume the package via a local `link:` / symlink during development, its real path is outside `node_modules`, so jest babel-transforms its compiled `dist` and then can't resolve `@babel/runtime` from the lib's folder. Tell jest to leave the already-compiled dist alone (path matches your symlink target):
-
-```js
-transformIgnorePatterns: ['node_modules/(?!(…))', 'react-native-mcp-kit/dist/']
-```
-
 ## Dev vs production
 
 - **Development** — test-id plugin on, strip plugin off. The `McpProvider` boots, tries to connect to `ws://localhost:8347`; if the server isn't running, no harm done — the bridge just stays disconnected and retries.
@@ -426,26 +420,6 @@ Pass `debug` to the provider to print every incoming request and outgoing respon
 
 ```tsx
 <McpProvider debug>{…}</McpProvider>
-```
-
-## Local development (symlink / portal)
-
-If you're developing the library next to an app and symlinking it in, Metro needs to know about the extra path:
-
-```js
-// metro.config.js
-const path = require('path');
-const mcpPath = path.resolve(__dirname, '../path-to/react-native-mcp-kit');
-
-module.exports = {
-  watchFolders: [mcpPath],
-  resolver: {
-    nodeModulesPaths: [
-      path.resolve(__dirname, 'node_modules'),
-      path.resolve(mcpPath, 'node_modules'),
-    ],
-  },
-};
 ```
 
 ## API reference
