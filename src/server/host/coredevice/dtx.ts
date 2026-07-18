@@ -177,7 +177,7 @@ const buildDtxMessage = (msg: DtxMessage): Buffer => {
 // out. Multi-fragment messages are buffered per-identifier until the
 // last body fragment lands.
 class DtxReader {
-  private buffer = Buffer.alloc(0);
+  private buffer: Buffer = Buffer.alloc(0);
   private pending = new Map<number, { fragments: Buffer[]; header: DtxFragmentHeader }>();
 
   push(chunk: Buffer): void {

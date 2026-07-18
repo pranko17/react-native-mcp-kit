@@ -7,7 +7,7 @@ export const useMcpModule = (factory: () => McpModule, deps: DependencyList): vo
   const client = useMemo(() => {
     return McpClient.getInstance();
   }, []);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps, react-hooks/use-memo
   const module = useMemo(factory, deps);
 
   useEffect(() => {

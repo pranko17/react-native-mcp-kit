@@ -21,10 +21,7 @@ export interface LeafPredicate {
   value?: unknown;
 }
 export type Predicate =
-  | LeafPredicate
-  | { all: Predicate[] }
-  | { any: Predicate[] }
-  | { not: Predicate };
+  LeafPredicate | { all: Predicate[] } | { any: Predicate[] } | { not: Predicate };
 
 /**
  * Drill into a value by dot-path. Arrays accept numeric indices and also

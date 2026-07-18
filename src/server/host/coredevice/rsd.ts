@@ -91,7 +91,7 @@ interface H2Frame {
 }
 
 class H2FrameReader {
-  private buffer = Buffer.alloc(0);
+  private buffer: Buffer = Buffer.alloc(0);
 
   push(chunk: Buffer): void {
     this.buffer = this.buffer.length === 0 ? chunk : Buffer.concat([this.buffer, chunk]);
@@ -137,7 +137,7 @@ class RsdHandshakeError extends Error {
 // re-walk the prefix on every socket chunk. The peer_info reply can span
 // many DATA frames; without this we'd be O(N²) in total stream-1 bytes.
 class PeerInfoParser {
-  private buffer = Buffer.alloc(0);
+  private buffer: Buffer = Buffer.alloc(0);
   private offset = 0;
 
   push(chunk: Buffer): Record<string, XpcValue> | null {

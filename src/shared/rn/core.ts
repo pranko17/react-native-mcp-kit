@@ -70,8 +70,7 @@ const RN_INTERNAL_LOADERS: Record<RNInternalPath, () => unknown> = {
  * alongside any new path — keeps Metro's static analyser happy.
  */
 export type RNInternalPath =
-  | 'Libraries/Core/Devtools/getDevServer'
-  | 'Libraries/LogBox/Data/LogBoxData';
+  'Libraries/Core/Devtools/getDevServer' | 'Libraries/LogBox/Data/LogBoxData';
 
 /**
  * Try-load a private RN sub-module by path. RN doesn't promise these paths

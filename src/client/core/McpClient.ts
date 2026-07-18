@@ -79,8 +79,7 @@ const isUsefulString = (value: unknown): value is string => {
 // the field in that case so Metro-facing tools fail fast.
 const detectDevServer = (): DevServerInfo | undefined => {
   const getDevServer = loadRNInternal('Libraries/Core/Devtools/getDevServer') as
-    | (() => { bundleLoadedFromServer: boolean; url: string })
-    | null;
+    (() => { bundleLoadedFromServer: boolean; url: string }) | null;
   if (typeof getDevServer !== 'function') return undefined;
   try {
     const info = getDevServer();

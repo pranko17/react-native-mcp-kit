@@ -272,9 +272,7 @@ ACTIONS (see each tool for arg detail)
           const screen = args.screen as string;
           const params = args.params as Record<string, unknown> | undefined;
           const mode = (typeof args.mode === 'string' ? args.mode : 'reuse') as
-            | 'reuse'
-            | 'push'
-            | 'replace';
+            'reuse' | 'push' | 'replace';
           if (mode === 'reuse') {
             navigation.navigate(screen, params);
           } else if (mode === 'push') {

@@ -2,12 +2,10 @@
   "compilerOptions": {
     "rootDir": "./src",
     "outDir": "./dist",
-    "module": "commonjs",
+    "module": "node18",
     "target": "es2022",
     "lib": ["es2022"],
     "types": ["node"],
-    "moduleResolution": "node10",
-    "baseUrl": "./",
     "paths": {
       "@/*": ["./src/*"]
     },

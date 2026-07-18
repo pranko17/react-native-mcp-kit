@@ -9,7 +9,7 @@ export const useMcpTool = (
   deps: DependencyList
 ): void => {
   const ctx = useContext(McpContext);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps, react-hooks/use-memo
   const tool = useMemo(factory, deps);
 
   useEffect(() => {

@@ -29,14 +29,7 @@ const ARCHIVER_VERSION = 100000;
 const NULL_PLACEHOLDER = '$null';
 
 export type NskaValue =
-  | null
-  | boolean
-  | bigint
-  | number
-  | string
-  | Buffer
-  | NskaValue[]
-  | { [key: string]: NskaValue };
+  null | boolean | bigint | number | string | Buffer | NskaValue[] | { [key: string]: NskaValue };
 
 // `bplist-creator` recognises this exact shape as the UID type tag.
 interface BplistUID {

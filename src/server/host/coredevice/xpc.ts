@@ -130,14 +130,7 @@ class Writer {
 }
 
 export type XpcValue =
-  | null
-  | boolean
-  | bigint
-  | number
-  | string
-  | Buffer
-  | XpcValue[]
-  | { [key: string]: XpcValue };
+  null | boolean | bigint | number | string | Buffer | XpcValue[] | { [key: string]: XpcValue };
 
 const decodeObject = (reader: Reader): XpcValue => {
   const type = reader.u32();
