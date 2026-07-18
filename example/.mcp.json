@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "react-native-mcp-kit": {
+      "command": "node",
+      "args": ["node_modules/react-native-mcp-kit/dist/server/cli.js"]
+    }
+  }
+}
