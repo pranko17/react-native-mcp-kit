@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import { type McpModule } from '@/client/models/types';
 import {
   applyProjection,
@@ -97,15 +99,14 @@ Both accept path / depth / maxBytes.`,
             DATA_DEFAULT_DEPTH
           );
         },
-        inputSchema: {
+        inputSchema: z.looseObject({
           ...DATA_SCHEMA,
-          key: {
-            description: 'Query key (JSON string).',
-            examples: ['["users"]', '["users","list"]', '"users"'],
-            minLength: 1,
-            type: 'string',
-          },
-        },
+          key: z
+            .string()
+            .min(1)
+            .describe('Query key (JSON string).')
+            .meta({ examples: ['["users"]', '["users","list"]', '"users"'] }),
+        }),
       },
       get_queries: {
         description: 'List cached queries (status/fetchStatus/timestamps, no data).',
@@ -129,19 +130,16 @@ Both accept path / depth / maxBytes.`,
             QUERIES_DEFAULT_DEPTH
           );
         },
-        inputSchema: {
+        inputSchema: z.looseObject({
           ...QUERIES_SCHEMA,
-          key: {
-            description:
-              'Substring filter on the serialized queryHash — NOT an exact key match (unlike get_data / mutate, which take an exact JSON key).',
-            type: 'string',
-          },
-          status: {
-            description: 'Filter by status.',
-            enum: ['pending', 'error', 'success'],
-            type: 'string',
-          },
-        },
+          key: z
+            .string()
+            .describe(
+              'Substring filter on the serialized queryHash — NOT an exact key match (unlike get_data / mutate, which take an exact JSON key).'
+            )
+            .optional(),
+          status: z.enum(['pending', 'error', 'success']).describe('Filter by status.').optional(),
+        }),
       },
       get_stats: {
         description: 'Cache counts — total, by status, by fetchStatus.',
@@ -155,6 +153,7 @@ Both accept path / depth / maxBytes.`,
           }
           return { byFetchStatus, byStatus, total: queries.length };
         },
+        inputSchema: z.looseObject({}),
       },
       mutate: {
         description:
@@ -181,18 +180,16 @@ Both accept path / depth / maxBytes.`,
               };
           }
         },
-        inputSchema: {
-          action: {
-            description: 'Mutation kind to perform on the cache.',
-            enum: ['invalidate', 'refetch', 'remove', 'reset'],
-            type: 'string',
-          },
-          key: {
-            description: 'Query key (JSON string). Omit to target every cached query.',
-            examples: ['["users"]', '["users","list"]'],
-            type: 'string',
-          },
-        },
+        inputSchema: z.looseObject({
+          action: z
+            .enum(['invalidate', 'refetch', 'remove', 'reset'])
+            .describe('Mutation kind to perform on the cache.'),
+          key: z
+            .string()
+            .describe('Query key (JSON string). Omit to target every cached query.')
+            .meta({ examples: ['["users"]', '["users","list"]'] })
+            .optional(),
+        }),
       },
     },
   };

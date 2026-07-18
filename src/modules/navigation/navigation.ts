@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import { type McpModule } from '@/client/models/types';
 import { findScreenFiberByRouteKey, getComponentName, getFiberRoot } from '@/modules/fiberTree';
 import {
@@ -194,7 +196,7 @@ ACTIONS (see each tool for arg detail)
     tools: {
       get_current_route: {
         description:
-          "Focused route info — name, params, and a `screen` field for the rendering component. Pass `withState: true` to also include the focused route's full state (`key`, nested navigator state under `focusedChild`); default `false` returns the lean route summary.",
+          "Focused route info — name, params, and a `screen` field for the rendering component. Pass `withState: true` to also include the focused route's full state (`key`, nested navigator state under `focusedChild`); otherwise returns the lean route summary.",
         handler: (args) => {
           const withState = args.withState === true;
           if (withState) {
@@ -216,14 +218,14 @@ ACTIONS (see each tool for arg detail)
             ROUTE_DEFAULT_DEPTH
           );
         },
-        inputSchema: {
+        inputSchema: z.looseObject({
           ...ROUTE_SCHEMA,
-          withState: {
-            default: false,
-            description: "Include the focused route's full state (key, nested navigator state).",
-            type: 'boolean',
-          },
-        },
+          withState: z
+            .boolean()
+            .describe("Include the focused route's full state (key, nested navigator state).")
+            .meta({ default: false })
+            .optional(),
+        }),
       },
       get_history: {
         description:
@@ -237,7 +239,7 @@ ACTIONS (see each tool for arg detail)
             HISTORY_DEFAULT_DEPTH
           );
         },
-        inputSchema: HISTORY_SCHEMA,
+        inputSchema: z.looseObject(HISTORY_SCHEMA),
       },
       get_state: {
         description: 'Full navigation state tree.',
@@ -250,7 +252,7 @@ ACTIONS (see each tool for arg detail)
             STATE_DEFAULT_DEPTH
           );
         },
-        inputSchema: STATE_SCHEMA,
+        inputSchema: z.looseObject(STATE_SCHEMA),
       },
       go_back: {
         description: 'Go back to the previous screen.',
@@ -261,10 +263,11 @@ ACTIONS (see each tool for arg detail)
           }
           return { reason: 'Cannot go back', success: false };
         },
+        inputSchema: z.looseObject({}),
       },
       navigate: {
         description:
-          'Move to a screen. `mode` controls how the stack changes:\n  · "reuse" (default) — reuse the existing screen if it\'s already in the stack (`navigation.navigate`).\n  · "push" — always add a new stack entry, even for duplicates (`dispatch PUSH`).\n  · "replace" — replace the current screen with the new one (`dispatch REPLACE`).\nReturns the new currentRoute on success.',
+          'Move to a screen. `mode` controls how the stack changes:\n  · "reuse" — reuse the existing screen if it\'s already in the stack (`navigation.navigate`).\n  · "push" — always add a new stack entry, even for duplicates (`dispatch PUSH`).\n  · "replace" — replace the current screen with the new one (`dispatch REPLACE`).\nReturns the new currentRoute on success.',
         handler: (args) => {
           const screen = args.screen as string;
           const params = args.params as Record<string, unknown> | undefined;
@@ -287,16 +290,15 @@ ACTIONS (see each tool for arg detail)
             success: true,
           };
         },
-        inputSchema: {
-          mode: {
-            default: 'reuse',
-            description: 'How to enter the stack.',
-            enum: ['reuse', 'push', 'replace'],
-            type: 'string',
-          },
-          params: { description: 'Optional route params.', type: 'object' },
-          screen: { description: 'Screen name to enter.', minLength: 1, type: 'string' },
-        },
+        inputSchema: z.looseObject({
+          mode: z
+            .enum(['reuse', 'push', 'replace'])
+            .describe('How to enter the stack.')
+            .meta({ default: 'reuse' })
+            .optional(),
+          params: z.looseObject({}).describe('Route params.').optional(),
+          screen: z.string().min(1).describe('Screen name to enter.'),
+        }),
       },
       pop: {
         description:
@@ -324,17 +326,19 @@ ACTIONS (see each tool for arg detail)
             success: true,
           };
         },
-        inputSchema: {
-          params: {
-            description: 'Optional route params (only used when `to` is a screen name).',
-            type: 'object',
-          },
-          to: {
-            description:
-              'Number of screens to pop, OR a screen name to pop back to, OR "top" to pop to the first screen. Omit to pop one.',
-            examples: [1, 2, 'Home', 'top'],
-          },
-        },
+        inputSchema: z.looseObject({
+          params: z
+            .looseObject({})
+            .describe('Route params (only used when `to` is a screen name).')
+            .optional(),
+          to: z
+            .union([z.number(), z.string()])
+            .describe(
+              'Number of screens to pop, OR a screen name to pop back to, OR "top" to pop to the first screen. Omit to pop one.'
+            )
+            .meta({ examples: [1, 2, 'Home', 'top'] })
+            .optional(),
+        }),
       },
       reset: {
         description:
@@ -356,27 +360,23 @@ ACTIONS (see each tool for arg detail)
             success: true,
           };
         },
-        inputSchema: {
-          index: {
-            description: 'Active route index. Defaults to last route.',
-            minimum: 0,
-            type: 'number',
-          },
-          routes: {
-            description: 'Routes list.',
-            examples: [[{ name: 'Home' }, { name: 'Profile', params: { id: 42 } }]],
-            items: {
-              properties: {
-                name: { type: 'string' },
-                params: { type: 'object' },
-              },
-              required: ['name'],
-              type: 'object',
-            },
-            minItems: 1,
-            type: 'array',
-          },
-        },
+        inputSchema: z.looseObject({
+          index: z
+            .number()
+            .min(0)
+            .describe('Active route index. Defaults to last route.')
+            .optional(),
+          routes: z
+            .array(
+              z.looseObject({
+                name: z.string(),
+                params: z.looseObject({}).optional(),
+              })
+            )
+            .min(1)
+            .describe('Routes list.')
+            .meta({ examples: [[{ name: 'Home' }, { name: 'Profile', params: { id: 42 } }]] }),
+        }),
       },
     },
   };

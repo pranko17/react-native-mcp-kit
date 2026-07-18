@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import { resolveDevice } from '@/server/host/deviceResolver';
 import {
   NATIVE_ID_SCHEMA,
@@ -21,7 +23,7 @@ import {
 export const swipeTool = (runner: ProcessRunner): HostToolHandler => {
   return {
     description:
-      'Primary way to deliver a swipe / scroll gesture, from (x1, y1) to (x2, y2) in physical pixels. Runs through the OS gesture pipeline — Pan responders, scroll momentum, and gesture handlers all behave as under a finger. durationMs default 300, clamped 50..5000.',
+      'Primary way to deliver a swipe / scroll gesture, from (x1, y1) to (x2, y2) in physical pixels. Runs through the OS gesture pipeline — Pan responders, scroll momentum, and gesture handlers all behave as under a finger.',
     handler: async (args, ctx) => {
       const resolved = await resolveDevice(ctx, parseResolveOptions(args), runner);
       if (!resolved.ok) {
@@ -67,29 +69,21 @@ export const swipeTool = (runner: ProcessRunner): HostToolHandler => {
         to: { x: x2.value, y: y2.value },
       };
     },
-    inputSchema: {
-      durationMs: {
-        default: SWIPE_DURATION_DEFAULT_MS,
-        description: 'Total swipe duration in milliseconds.',
-        maximum: SWIPE_DURATION_MAX_MS,
-        minimum: SWIPE_DURATION_MIN_MS,
-        type: 'number',
-      },
+    inputSchema: z.looseObject({
+      durationMs: z
+        .number()
+        .min(SWIPE_DURATION_MIN_MS)
+        .max(SWIPE_DURATION_MAX_MS)
+        .describe('Total swipe duration in milliseconds.')
+        .meta({ default: SWIPE_DURATION_DEFAULT_MS })
+        .optional(),
       platform: PLATFORM_ARG_SCHEMA,
-      x1: {
-        description: 'Start x pixel coordinate (top-left origin).',
-        minimum: 0,
-        type: 'number',
-      },
-      x2: { description: 'End x pixel coordinate (top-left origin).', minimum: 0, type: 'number' },
-      y1: {
-        description: 'Start y pixel coordinate (top-left origin).',
-        minimum: 0,
-        type: 'number',
-      },
-      y2: { description: 'End y pixel coordinate (top-left origin).', minimum: 0, type: 'number' },
+      x1: z.number().min(0).describe('Start x pixel coordinate (top-left origin).'),
+      x2: z.number().min(0).describe('End x pixel coordinate (top-left origin).'),
+      y1: z.number().min(0).describe('Start y pixel coordinate (top-left origin).'),
+      y2: z.number().min(0).describe('End y pixel coordinate (top-left origin).'),
       ...NATIVE_ID_SCHEMA,
-    },
+    }),
     timeout: INPUT_TIMEOUT_MS + SWIPE_DURATION_MAX_MS,
   };
 };

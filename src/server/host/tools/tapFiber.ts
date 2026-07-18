@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import { type HostToolHandler } from '@/server/host/types';
 import { MODULE_SEPARATOR } from '@/shared/protocol';
 
@@ -90,19 +92,23 @@ On unmounted: { error: "fiber has no measurable host view", mcpId?, name }.`,
         testID: pick.testID,
       };
     },
-    inputSchema: {
-      index: {
-        description: 'Pick the Nth match when the chain returns multiple (0-based).',
-        minimum: 0,
-        type: 'number',
-      },
-      steps: {
-        description: 'Same shape as fiber_tree__query steps — ordered criteria + optional scope.',
-        examples: [[{ testID: 'searchBar' }], [{ name: 'HomeScreen' }, { testID: 'addToCartBtn' }]],
-        minItems: 1,
-        type: 'array',
-      },
-    },
+    inputSchema: z.looseObject({
+      index: z
+        .number()
+        .min(0)
+        .describe('Pick the Nth match when the chain returns multiple (0-based).')
+        .optional(),
+      steps: z
+        .array(z.record(z.string(), z.unknown()))
+        .min(1)
+        .describe('Same shape as fiber_tree__query steps — ordered criteria + optional scope.')
+        .meta({
+          examples: [
+            [{ testID: 'searchBar' }],
+            [{ name: 'HomeScreen' }, { testID: 'addToCartBtn' }],
+          ],
+        }),
+    }),
     timeout: TAP_FIBER_TIMEOUT_MS,
   };
 };

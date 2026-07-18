@@ -123,12 +123,13 @@ RETURNS
           .union([z.string(), z.array(z.string())])
           .optional()
           .describe(
-            'Target client ID(s). String polls one client; `/body/flags` literal ("/^ios/") expands to every matching connected client; array mixes literals and regex strings. Broadcast forms poll each matched client in parallel under the shared timeoutMs and report per-client outcomes. Same auto-resolution semantics as `call`.'
+            'Target client ID(s). String polls one client; `/body/flags` literal ("/^ios/") expands to every matching connected client; array mixes literals and regex strings. Broadcast forms poll each matched client in parallel under the shared timeoutMs and report per-client outcomes. Omitted: auto-resolves to the single connected client. Full forms: server instructions § clientId.'
           ),
         intervalMs: z
           .number()
           .optional()
-          .describe('Delay between poll attempts. Default 300, min 50, max 5000.'),
+          .describe('Delay between poll attempts. Out-of-range values are clamped to 50..5000.')
+          .meta({ default: 300 }),
         predicate: z
           .looseObject({})
           .describe(
@@ -137,7 +138,8 @@ RETURNS
         timeoutMs: z
           .number()
           .optional()
-          .describe('Total wait budget. Default 10000, min 500, max 60000.'),
+          .describe('Total wait budget. Out-of-range values are clamped to 500..60000.')
+          .meta({ default: 10_000 }),
         tool: z
           .string()
           .describe(`Tool name to poll (e.g. "navigation${MODULE_SEPARATOR}get_current_route").`),

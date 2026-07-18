@@ -1,26 +1,30 @@
+import { z } from 'zod';
+
 export interface AppTargetError {
   error: string;
 }
 
 export const NATIVE_ID_SCHEMA = {
-  serial: {
-    description:
-      'Optional explicit adb serial of the target Android device (e.g. "emulator-5554"). Highest priority — bypasses clientId and platform-based device selection. Use values from host__list_devices output.',
-    type: 'string',
-  },
-  udid: {
-    description:
-      'Optional explicit simctl UDID of the target iOS simulator. Highest priority — bypasses clientId and platform-based device selection. Use values from host__list_devices output.',
-    type: 'string',
-  },
-} as const;
+  serial: z
+    .string()
+    .describe(
+      'Explicit adb serial of the target Android device (e.g. "emulator-5554"). Highest priority — bypasses clientId and platform-based device selection. Use values from host__list_devices output.'
+    )
+    .optional(),
+  udid: z
+    .string()
+    .describe(
+      'Explicit simctl UDID of the target iOS simulator. Highest priority — bypasses clientId and platform-based device selection. Use values from host__list_devices output.'
+    )
+    .optional(),
+};
 
-export const PLATFORM_ARG_SCHEMA = {
-  description:
-    'Optional platform filter: "ios" or "android". Ignored when clientId is provided on the outer call tool (the client\'s own platform is used instead).',
-  enum: ['android', 'ios'],
-  type: 'string',
-} as const;
+export const PLATFORM_ARG_SCHEMA = z
+  .enum(['android', 'ios'])
+  .describe(
+    "Platform filter for device resolution. Ignored when clientId is provided (the client's own platform is used instead)."
+  )
+  .optional();
 
 export const parsePlatformArg = (value: unknown): 'android' | 'ios' | undefined => {
   return value === 'ios' || value === 'android' ? value : undefined;

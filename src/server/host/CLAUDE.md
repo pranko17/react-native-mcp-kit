@@ -34,7 +34,7 @@ type HostDispatch = (
 interface HostToolHandler {
   description: string;
   handler: (args, ctx: HostContext) => unknown | Promise<unknown>;
-  inputSchema?: Record<string, unknown>;
+  inputSchema?: ZodType;
   timeout?: number;
 }
 ```

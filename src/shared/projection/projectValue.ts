@@ -1,3 +1,5 @@
+import { z, type ZodType } from 'zod';
+
 import { compileRedact, matchesRedact, type RedactPatterns } from './redact';
 import { resolvePath } from './resolvePath';
 
@@ -52,66 +54,64 @@ export interface ProjectResult {
 
 /**
  * Standard `path` / `depth` / `maxBytes` arg shape for any tool that returns
- * heavy JSON. Modules call `makeProjectionSchema(defaultDepth)` to get a
- * description string that reflects their per-tool default, and spread the
- * result into their inputSchema. Args are then funnelled through
- * `applyProjection` at the handler exit.
+ * heavy JSON. Modules call `makeProjectionSchema(defaultDepth)` to get a Zod
+ * raw shape whose descriptions reflect their per-tool default, and spread the
+ * result into their `z.looseObject({...})` inputSchema. Args are then
+ * funnelled through `applyProjection` at the handler exit. Defaults are
+ * advertised via `.meta({ default })` only — the handler applies them, the
+ * schema must not.
  */
 // Reusable description shared across all tools: full path/depth/maxBytes
 // semantics live in the server BASE_INSTRUCTIONS — schemas just reference it
-// to keep `describe_tool` payloads small.
+// to keep catalog payloads small.
 export const makeProjectionSchema = (
   defaultDepth: number = DEFAULT_DEPTH
-): Record<
-  string,
-  {
-    description: string;
-    type: string;
-    default?: unknown;
-    examples?: unknown[];
-    maximum?: number;
-    minimum?: number;
-  }
-> => {
+): Record<string, ZodType> => {
   return {
-    arrayCap: {
-      default: DEFAULT_ARRAY_CAP,
-      description: `Width cap for arrays inside the response. Arrays wider than this get a \`\${truncated}\` sentinel as their first item with the original \`total\` and the kept \`slice\`. Bump for wide fiber children / route stacks; lower for noisy logs.`,
-      minimum: 1,
-      type: 'number',
-    },
-    depth: {
-      default: defaultDepth,
-      description: 'Expansion depth. See server instructions § Path-based drill.',
-      examples: [1, 3, 8],
-      maximum: MAX_DEPTH,
-      minimum: 0,
-      type: 'number',
-    },
-    maxBytes: {
-      default: DEFAULT_MAX_BYTES,
-      description: 'Soft byte cap. See server instructions § Path-based drill.',
-      minimum: 1,
-      type: 'number',
-    },
-    objectCap: {
-      default: DEFAULT_OBJECT_CAP,
-      description: `Width cap for plain objects inside the response. Objects with more keys get a \`\${truncated}\` sentinel; the rest of the keys collapse. Bump for wide prop bags / state objects.`,
-      minimum: 1,
-      type: 'number',
-    },
-    path: {
-      description:
-        'Path drill into response (`.key`, `[N]`, `[a:b]`). `[N]` / `[a:b]` work on arrays, objects (Nth key / key slice) and strings (Nth char / substring). End the path with a slice on a string (`stack[0:500]`) to bypass previewCap — slice = explicit truncation request. See server instructions § Path-based drill for full syntax.',
-      examples: ['items[0].body', 'items[0:3].id', 'errors[-1].stack[0:500]'],
-      type: 'string',
-    },
-    previewCap: {
-      default: DEFAULT_PREVIEW_CAP,
-      description: `Per-string preview length. Strings longer than this collapse to \`{"\${str}":{len,preview}}\` showing the full \`len\` and the first \`previewCap\` chars. Bump when previews are getting cut mid-content; lower when you only need to confirm a value exists.`,
-      minimum: 1,
-      type: 'number',
-    },
+    arrayCap: z
+      .number()
+      .min(1)
+      .describe(
+        `Width cap for arrays inside the response. Arrays wider than this get a \`\${truncated}\` sentinel as their first item with the original \`total\` and the kept \`slice\`. Bump for wide fiber children / route stacks; lower for noisy logs.`
+      )
+      .meta({ default: DEFAULT_ARRAY_CAP })
+      .optional(),
+    depth: z
+      .number()
+      .min(0)
+      .max(MAX_DEPTH)
+      .describe('Expansion depth. See server instructions § Path-based drill.')
+      .meta({ default: defaultDepth, examples: [1, 3, 8] })
+      .optional(),
+    maxBytes: z
+      .number()
+      .min(1)
+      .describe('Soft byte cap. See server instructions § Path-based drill.')
+      .meta({ default: DEFAULT_MAX_BYTES })
+      .optional(),
+    objectCap: z
+      .number()
+      .min(1)
+      .describe(
+        `Width cap for plain objects inside the response. Objects with more keys get a \`\${truncated}\` sentinel; the rest of the keys collapse. Bump for wide prop bags / state objects.`
+      )
+      .meta({ default: DEFAULT_OBJECT_CAP })
+      .optional(),
+    path: z
+      .string()
+      .describe(
+        'Path drill into response (`.key`, `[N]`, `[a:b]`). `[N]` / `[a:b]` work on arrays, objects (Nth key / key slice) and strings (Nth char / substring). End the path with a slice on a string (`stack[0:500]`) to bypass previewCap — slice = explicit truncation request. See server instructions § Path-based drill for full syntax.'
+      )
+      .meta({ examples: ['items[0].body', 'items[0:3].id', 'errors[-1].stack[0:500]'] })
+      .optional(),
+    previewCap: z
+      .number()
+      .min(1)
+      .describe(
+        `Per-string preview length. Strings longer than this collapse to \`{"\${str}":{len,preview}}\` showing the full \`len\` and the first \`previewCap\` chars. Bump when previews are getting cut mid-content; lower when you only need to confirm a value exists.`
+      )
+      .meta({ default: DEFAULT_PREVIEW_CAP })
+      .optional(),
   };
 };
 

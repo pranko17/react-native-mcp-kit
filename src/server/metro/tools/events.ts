@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import { type HostToolHandler } from '@/server/host/types';
 import { getEventCapture } from '@/server/metro/eventCapture';
 import { resolveMetroUrl } from '@/server/metro/resolveMetroUrl';
@@ -23,7 +25,7 @@ Metro emits events for the whole bundler lifecycle — \`bundle_build_started\` 
 
 The capture is lazy (connects on first call) and auto-reconnects. Buffer holds the last 200 events. Pass \`since: <msEpoch>\` to get only what arrived after a known checkpoint. \`type\` filters to one or several event types.
 
-Each event: \`{ id, receivedAt, type, data }\`; \`data\` is the raw Metro payload minus the \`type\` field. Response accepts path / depth / maxBytes (default depth ${EVENTS_DEFAULT_DEPTH}).`,
+Each event: \`{ id, receivedAt, type, data }\`; \`data\` is the raw Metro payload minus the \`type\` field. Response accepts path / depth / maxBytes.`,
     handler: async (args, ctx) => {
       const metroUrl = resolveMetroUrl(args, ctx);
       const capture = getEventCapture(metroUrl);
@@ -39,27 +41,35 @@ Each event: \`{ id, receivedAt, type, data }\`; \`data\` is the raw Metro payloa
         EVENTS_DEFAULT_DEPTH
       );
     },
-    inputSchema: {
+    inputSchema: z.looseObject({
       ...PROJECTION_SCHEMA,
-      clientId: {
-        description:
-          'Target client ID — used to pick up the Metro URL the app was loaded from (falls back to `metroUrl` or the hardcoded default).',
-        type: 'string',
-      },
-      metroUrl: {
-        description: `Base URL of the Metro dev server. Overrides the URL reported by the connected client. Default "http://localhost:8081".`,
-        type: 'string',
-      },
-      since: {
-        description: 'Only return events with `receivedAt >= since` (ms since epoch).',
-        minimum: 0,
-        type: 'number',
-      },
-      type: {
-        description:
-          'Filter by event type. Accepts a single string or an array of types (OR semantics).',
-        examples: ['bundling_error', ['bundling_error', 'hmr_client_error', 'bundle_build_failed']],
-      },
-    },
+      clientId: z
+        .string()
+        .describe(
+          'Target client ID — used to pick up the Metro URL the app was loaded from (falls back to `metroUrl` or the hardcoded default).'
+        )
+        .optional(),
+      metroUrl: z
+        .string()
+        .describe(
+          'Base URL of the Metro dev server. Overrides the URL auto-detected from the connected client; last-resort fallback "http://localhost:8081".'
+        )
+        .optional(),
+      since: z
+        .number()
+        .min(0)
+        .describe('Only return events with `receivedAt >= since` (ms since epoch).')
+        .optional(),
+      type: z
+        .union([z.string(), z.array(z.string())])
+        .describe('Filter by event type — an array matches any of the listed types (OR).')
+        .meta({
+          examples: [
+            'bundling_error',
+            ['bundling_error', 'hmr_client_error', 'bundle_build_failed'],
+          ],
+        })
+        .optional(),
+    }),
   };
 };

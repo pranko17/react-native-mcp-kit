@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import { resolveDevice, type ResolvedDevice } from '@/server/host/deviceResolver';
 import {
   type AppTargetError,
@@ -231,12 +233,13 @@ const resolveLaunchTarget = async (
   return { bundleId, device: resolved.device, ok: true };
 };
 
-const APPID_SCHEMA = {
-  description:
-    'iOS bundle ID or Android package name. Optional when a connected client already registered its bundleId.',
-  examples: ['com.example.app', 'com.example.android'],
-  type: 'string',
-} as const;
+const APPID_SCHEMA = z
+  .string()
+  .describe(
+    'iOS bundle ID or Android package name. Optional when a connected client already registered its bundleId.'
+  )
+  .meta({ examples: ['com.example.app', 'com.example.android'] })
+  .optional();
 
 export const launchAppTool = (runner: ProcessRunner): HostToolHandler => {
   return {
@@ -260,11 +263,11 @@ export const launchAppTool = (runner: ProcessRunner): HostToolHandler => {
       };
       return success;
     },
-    inputSchema: {
+    inputSchema: z.looseObject({
       appId: APPID_SCHEMA,
       platform: PLATFORM_ARG_SCHEMA,
       ...NATIVE_ID_SCHEMA,
-    },
+    }),
     timeout: LAUNCH_TIMEOUT_MS,
   };
 };
@@ -291,11 +294,11 @@ export const terminateAppTool = (runner: ProcessRunner): HostToolHandler => {
       };
       return success;
     },
-    inputSchema: {
+    inputSchema: z.looseObject({
       appId: APPID_SCHEMA,
       platform: PLATFORM_ARG_SCHEMA,
       ...NATIVE_ID_SCHEMA,
-    },
+    }),
     timeout: LAUNCH_TIMEOUT_MS,
   };
 };
@@ -336,11 +339,11 @@ export const restartAppTool = (runner: ProcessRunner): HostToolHandler => {
       };
       return success;
     },
-    inputSchema: {
+    inputSchema: z.looseObject({
       appId: APPID_SCHEMA,
       platform: PLATFORM_ARG_SCHEMA,
       ...NATIVE_ID_SCHEMA,
-    },
+    }),
     timeout: LAUNCH_TIMEOUT_MS * 2 + RESTART_TEARDOWN_DELAY_MS + 500,
   };
 };

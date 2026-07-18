@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import { resolveDevice } from '@/server/host/deviceResolver';
 import { NATIVE_ID_SCHEMA, parseResolveOptions, PLATFORM_ARG_SCHEMA } from '@/server/host/helpers';
 import { typeTextIos } from '@/server/host/iosInput';
@@ -35,20 +37,20 @@ export const typeTextTool = (runner: ProcessRunner): HostToolHandler => {
         typed: true,
       };
     },
-    inputSchema: {
+    inputSchema: z.looseObject({
       platform: PLATFORM_ARG_SCHEMA,
-      submit: {
-        default: false,
-        description: 'Press ENTER after typing (e.g. to submit a search).',
-        type: 'boolean',
-      },
-      text: {
-        description:
-          'Text to type into the currently focused input field. Whitespace and shell metacharacters are escaped automatically.',
-        type: 'string',
-      },
+      submit: z
+        .boolean()
+        .describe('Press ENTER after typing (e.g. to submit a search).')
+        .meta({ default: false })
+        .optional(),
+      text: z
+        .string()
+        .describe(
+          'Text to type into the currently focused input field. Whitespace and shell metacharacters are escaped automatically.'
+        ),
       ...NATIVE_ID_SCHEMA,
-    },
+    }),
     timeout: INPUT_TIMEOUT_MS,
   };
 };

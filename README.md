@@ -375,6 +375,8 @@ Write your own module by returning an `McpModule`:
 ```ts
 import { type McpModule } from 'react-native-mcp-kit';
 
+import { z } from 'zod';
+
 const myModule = (): McpModule => ({
   name: 'myModule',
   description: 'Custom tools exposed to AI agents',
@@ -382,7 +384,7 @@ const myModule = (): McpModule => ({
     greet: {
       description: 'Returns a greeting',
       handler: async (args) => ({ message: `Hello, ${args.name}!` }),
-      inputSchema: { name: { type: 'string' } },
+      inputSchema: z.looseObject({ name: z.string() }),
       timeout: 5000, // optional per-tool timeout, default 10s
     },
   },
@@ -394,6 +396,8 @@ useMcpModule(() => myModule(), []);
 ```
 
 Agents see `myModule__greet` in their tool catalog and call it directly.
+
+`inputSchema` is a Zod schema (serialized to JSON Schema for the wire via `z.toJSONSchema`). Prefer `z.looseObject` so undeclared args still reach your handler, and advertise defaults with `.meta({ default })` rather than `.default()` — the schema guides the agent, your handler stays the source of truth.
 
 ## Testing
 

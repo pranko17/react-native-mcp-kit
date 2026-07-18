@@ -22,7 +22,7 @@ Every tool's \`clientId\` accepts a string, a \`/body/flags\` regex literal, or 
 
   \`host${MODULE_SEPARATOR}screenshot({ clientId: ["ios-1", "android-1"] })\`   — two screenshots in one response
   \`host${MODULE_SEPARATOR}screenshot({ clientId: "/^ios/" })\`                — broadcast to every connected iOS client
-  \`fiber_tree${MODULE_SEPARATOR}query({ clientId: "/./", mcpId: "checkout:button:submit" })\` — query every connected client
+  \`fiber_tree${MODULE_SEPARATOR}query({ clientId: "/./", steps: [{ mcpId: "checkout:button:submit" }] })\` — query every connected client
 
 Broadcast result shape — text-only: \`{ okCount, failedCount, results: [{ clientId, ok, result | error }] }\`; image results: a summary text block \`Broadcast: N ok, M failed (T clients).\` precedes per-client \`## <clientId>\` headers + blocks.
 
@@ -38,8 +38,8 @@ Regex form details:
   • **Outer** — fields on the wrapper itself: \`tool\`, \`args\`, \`clientId\`, plus \`predicate\` / \`timeoutMs\` / \`intervalMs\` (wait_until), \`predicate\` / \`message\` (assert). \`clientId\` accepts the same broadcast forms as direct invocation; overall \`ok\`/\`pass\` is true only when every targeted client matches.
   • **Inner** — what goes inside the wrapper's \`args\` object: the target tool's own args WITHOUT \`clientId\` (the wrapper resolves the client before dispatch; \`clientId\` inside \`args\` is a hard error with a remediation hint).
 
-  Wrong:  \`wait_until({ tool: "fiber_tree${MODULE_SEPARATOR}query", args: { clientId: "ios-1", scope: "root" }, predicate: ... })\`
-  Right:  \`wait_until({ clientId: "ios-1", tool: "fiber_tree${MODULE_SEPARATOR}query", args: { scope: "root" }, predicate: ... })\`
+  Wrong:  \`wait_until({ tool: "fiber_tree${MODULE_SEPARATOR}query", args: { clientId: "ios-1", steps: [{ scope: "root" }] }, predicate: ... })\`
+  Right:  \`wait_until({ clientId: "ios-1", tool: "fiber_tree${MODULE_SEPARATOR}query", args: { steps: [{ scope: "root" }] }, predicate: ... })\`
 
 Some tools run inline on the MCP server host (e.g. \`host${MODULE_SEPARATOR}screenshot\`, \`host${MODULE_SEPARATOR}list_devices\`, \`host${MODULE_SEPARATOR}launch_app\`, \`host${MODULE_SEPARATOR}terminate_app\`, \`host${MODULE_SEPARATOR}restart_app\`, \`metro${MODULE_SEPARATOR}reload\`, \`metro${MODULE_SEPARATOR}symbolicate\`) and work even when no React Native client is connected. They use xcrun simctl / adb on the dev machine. When \`clientId\` is provided, host tools use that client's platform/label/deviceId as hints to resolve the target device; otherwise they prefer the device of the single connected client, falling back to the single booted sim / online device. \`launch_app\`, \`terminate_app\`, and \`restart_app\` accept an \`appId\` arg (iOS bundle ID / Android package name); omit it to reuse the target client's registered \`bundleId\` from its connection metadata. \`clientId\` resolves even a \`disconnected\` client within the ~1h reconnect window.
 

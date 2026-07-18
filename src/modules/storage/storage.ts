@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import { type McpModule } from '@/client/models/types';
 import {
   applyProjection,
@@ -63,13 +65,13 @@ key→value object (default depth ${ALL_DEFAULT_DEPTH}). Both accept path / dept
           await storage.delete(args.key as string);
           return { key: args.key, success: true };
         },
-        inputSchema: {
-          key: { description: 'Key to delete.', minLength: 1, type: 'string' },
-          storage: {
-            description: 'Storage name. Defaults to the first registered storage.',
-            type: 'string',
-          },
-        },
+        inputSchema: z.looseObject({
+          key: z.string().min(1).describe('Key to delete.'),
+          storage: z
+            .string()
+            .describe('Storage name. Defaults to the first registered storage.')
+            .optional(),
+        }),
       },
       get_all: {
         description: 'All key-value pairs; values JSON-parsed when possible.',
@@ -89,13 +91,13 @@ key→value object (default depth ${ALL_DEFAULT_DEPTH}). Both accept path / dept
             ALL_DEFAULT_DEPTH
           );
         },
-        inputSchema: {
+        inputSchema: z.looseObject({
           ...ALL_SCHEMA,
-          storage: {
-            description: 'Storage name. Defaults to the first registered storage.',
-            type: 'string',
-          },
-        },
+          storage: z
+            .string()
+            .describe('Storage name. Defaults to the first registered storage.')
+            .optional(),
+        }),
       },
       get_item: {
         description: 'Value for one key; JSON-parsed when possible.',
@@ -111,14 +113,14 @@ key→value object (default depth ${ALL_DEFAULT_DEPTH}). Both accept path / dept
             ITEM_DEFAULT_DEPTH
           );
         },
-        inputSchema: {
+        inputSchema: z.looseObject({
           ...ITEM_SCHEMA,
-          key: { description: 'Key to read.', minLength: 1, type: 'string' },
-          storage: {
-            description: 'Storage name. Defaults to the first registered storage.',
-            type: 'string',
-          },
-        },
+          key: z.string().min(1).describe('Key to read.'),
+          storage: z
+            .string()
+            .describe('Storage name. Defaults to the first registered storage.')
+            .optional(),
+        }),
       },
       list_keys: {
         description: 'All keys in a storage.',
@@ -128,12 +130,12 @@ key→value object (default depth ${ALL_DEFAULT_DEPTH}). Both accept path / dept
           if (!storage.getAllKeys) return { error: 'This storage does not support getAllKeys' };
           return { keys: await storage.getAllKeys() };
         },
-        inputSchema: {
-          storage: {
-            description: 'Storage name. Defaults to the first registered storage.',
-            type: 'string',
-          },
-        },
+        inputSchema: z.looseObject({
+          storage: z
+            .string()
+            .describe('Storage name. Defaults to the first registered storage.')
+            .optional(),
+        }),
       },
       list_storages: {
         description: 'Registered storages with key counts.',
@@ -147,6 +149,7 @@ key→value object (default depth ${ALL_DEFAULT_DEPTH}). Both accept path / dept
           }
           return result;
         },
+        inputSchema: z.looseObject({}),
       },
       set_item: {
         description: 'Write a value. Objects/arrays are stringified as JSON.',
@@ -158,14 +161,19 @@ key→value object (default depth ${ALL_DEFAULT_DEPTH}). Both accept path / dept
           await storage.set(args.key as string, value as string);
           return { key: args.key, success: true };
         },
-        inputSchema: {
-          key: { description: 'Key to set.', minLength: 1, type: 'string' },
-          storage: {
-            description: 'Storage name. Defaults to the first registered storage.',
-            type: 'string',
-          },
-          value: { description: 'Value (string or JSON-serializable).', type: 'string' },
-        },
+        inputSchema: z.looseObject({
+          key: z.string().min(1).describe('Key to set.'),
+          storage: z
+            .string()
+            .describe('Storage name. Defaults to the first registered storage.')
+            .optional(),
+          value: z
+            .unknown()
+            .describe(
+              'Value (string or JSON-serializable). Non-string values are stored via JSON.stringify.'
+            )
+            .optional(),
+        }),
       },
     },
   };

@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import { type McpModule } from '@/client/models/types';
 import {
   applyProjection,
@@ -99,7 +101,7 @@ LEVELS
     tools: {
       clear: {
         description:
-          'Clear LogBox rows. Pass `level: "warn"` / `"error"` / `"syntax"` for surgical cleanup (`"error"` also clears fatal rows); omit `level` (or pass `"all"`) to clear every row.',
+          'Clear LogBox rows. Pass `level` for surgical cleanup (`"error"` also clears fatal rows); omit `level` (or pass `"all"`) to clear every row.',
         handler: (args) => {
           const level = typeof args.level === 'string' ? args.level : undefined;
           const data = getLogBoxData();
@@ -116,13 +118,13 @@ LEVELS
           }
           return { cleared: true, level: level ?? 'all' };
         },
-        inputSchema: {
-          level: {
-            description: 'Optional level filter. Omit (or pass "all") to clear every row.',
-            enum: ['all', 'warn', 'error', 'syntax'],
-            type: 'string',
-          },
-        },
+        inputSchema: z.looseObject({
+          level: z
+            .enum(['all', 'warn', 'error', 'syntax'])
+            .describe('Level filter. Omit (or pass "all") to clear every row.')
+            .meta({ default: 'all' })
+            .optional(),
+        }),
       },
       dismiss: {
         description: 'Dismiss a single row by index (from get_logs).',
@@ -139,17 +141,13 @@ LEVELS
           data.dismiss(log);
           return { dismissed: index };
         },
-        inputSchema: {
-          index: {
-            description: '0-based row index from get_logs.',
-            minimum: 0,
-            type: 'number',
-          },
-        },
+        inputSchema: z.looseObject({
+          index: z.number().min(0).describe('0-based row index from get_logs.'),
+        }),
       },
       get_logs: {
         description:
-          'Current LogBox rows — { index, level, category, message, count, stack? }. Index feeds dismiss. Filter by level.',
+          'Current LogBox rows — { index, level, category, message, count, stack? }. Index feeds dismiss.',
         handler: (args) => {
           let rows = getLogsArray().map((log, i) => {
             return serializeLog(log, i);
@@ -167,14 +165,13 @@ LEVELS
             LOGBOX_DEFAULT_DEPTH
           );
         },
-        inputSchema: {
+        inputSchema: z.looseObject({
           ...PROJECTION_SCHEMA,
-          level: {
-            description: 'Filter by level.',
-            enum: ['warn', 'error', 'fatal', 'syntax'],
-            type: 'string',
-          },
-        },
+          level: z
+            .enum(['warn', 'error', 'fatal', 'syntax'])
+            .describe('Filter by level.')
+            .optional(),
+        }),
       },
       ignore: {
         description:
@@ -188,19 +185,20 @@ LEVELS
           getLogBox()?.ignoreLogs?.(parsed);
           return { added: patterns.length };
         },
-        inputSchema: {
-          patterns: {
-            description:
-              'Substrings or /regex/flags strings to add to the ignore list. /.../flags compiles to RegExp; everything else matches as a substring.',
-            examples: [
-              ['VirtualizedLists should never be nested'],
-              ['/^Warning: /', '/useNativeDriver/i'],
-            ],
-            items: { type: 'string' },
-            minItems: 1,
-            type: 'array',
-          },
-        },
+        inputSchema: z.looseObject({
+          patterns: z
+            .array(z.string())
+            .min(1)
+            .describe(
+              'Substrings or /regex/flags strings to add to the ignore list. /.../flags compiles to RegExp; everything else matches as a substring.'
+            )
+            .meta({
+              examples: [
+                ['VirtualizedLists should never be nested'],
+                ['/^Warning: /', '/useNativeDriver/i'],
+              ],
+            }),
+        }),
       },
       ignore_all: {
         description: 'Globally mute or unmute LogBox. Leaves console logging intact.',
@@ -209,13 +207,13 @@ LEVELS
           getLogBox()?.ignoreAllLogs?.(value);
           return { ignoreAll: value };
         },
-        inputSchema: {
-          value: {
-            default: true,
-            description: 'true to mute all logs, false to unmute.',
-            type: 'boolean',
-          },
-        },
+        inputSchema: z.looseObject({
+          value: z
+            .boolean()
+            .describe('true to mute all logs, false to unmute.')
+            .meta({ default: true })
+            .optional(),
+        }),
       },
       set_installed: {
         description:
@@ -230,12 +228,13 @@ LEVELS
           }
           return { installed: enabled };
         },
-        inputSchema: {
-          enabled: {
-            description: 'true → install (enable); false → uninstall (disable).',
-            type: 'boolean',
-          },
-        },
+        inputSchema: z.looseObject({
+          enabled: z
+            .boolean()
+            .describe('true → install (enable); false → uninstall (disable).')
+            .meta({ default: false })
+            .optional(),
+        }),
       },
       status: {
         description: 'LogBox state — installed, disabled, current log count, ignore patterns.',
@@ -251,6 +250,7 @@ LEVELS
             logCount: getLogsArray().length,
           };
         },
+        inputSchema: z.looseObject({}),
       },
     },
   };

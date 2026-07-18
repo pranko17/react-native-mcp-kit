@@ -304,8 +304,8 @@ export class McpServerWrapper {
    * work on every directly-registered tool.
    */
   private makeToolHandler(fullName: string) {
-    return async (rawArgs: Record<string, unknown> | undefined) => {
-      const args = { ...(rawArgs ?? {}) };
+    return async (rawArgs: unknown) => {
+      const args = { ...((rawArgs as Record<string, unknown> | undefined) ?? {}) };
       const rawClientId = args.clientId;
       delete args.clientId;
 

@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import { type McpModule } from '@/client/models/types';
 import {
   applyProjection,
@@ -153,8 +155,8 @@ Deduplicates within a 100ms window. Capture starts at module-import
 time so early fatal crashes are visible. Each entry carries a monotonic
 numeric \`id\`, parsed \`stackFrames\` (V8 + Hermes formats, ready for
 metro__symbolicate), and the raw \`stack\` string. Listing tools accept
-path / depth / maxBytes (default depth ${ERRORS_DEFAULT_DEPTH}). Buffer size configurable via
-errorsModule options.`,
+path / depth / maxBytes. Buffer size configurable via errorsModule
+options.`,
     name: 'errors',
     tools: {
       clear_errors: {
@@ -196,26 +198,21 @@ errorsModule options.`,
           }
           return project(result, args as ProjectionArgs);
         },
-        inputSchema: {
+        inputSchema: z.looseObject({
           ...PROJECTION_SCHEMA,
-          fatal: { description: 'Filter by fatal flag.', type: 'boolean' },
-          since: {
-            description: 'ISO timestamp — only entries at or after this point.',
-            examples: ['2026-04-19T22:00:00.000Z'],
-            format: 'date-time',
-            type: 'string',
-          },
-          source: {
-            description: 'Filter by source.',
-            enum: ['global', 'promise'],
-            type: 'string',
-          },
-          until: {
-            description: 'ISO timestamp — only entries at or before this point.',
-            format: 'date-time',
-            type: 'string',
-          },
-        },
+          fatal: z.boolean().describe('Filter by fatal flag.').optional(),
+          since: z
+            .string()
+            .describe('ISO timestamp — only entries at or after this point.')
+            .meta({ examples: ['2026-04-19T22:00:00.000Z'], format: 'date-time' })
+            .optional(),
+          source: z.enum(['global', 'promise']).describe('Filter by source.').optional(),
+          until: z
+            .string()
+            .describe('ISO timestamp — only entries at or before this point.')
+            .meta({ format: 'date-time' })
+            .optional(),
+        }),
       },
       get_stats: {
         description: 'Error counts — total, by source, fatal.',

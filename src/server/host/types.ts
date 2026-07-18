@@ -1,3 +1,5 @@
+import { type ZodType } from 'zod';
+
 import { type Bridge } from '@/server/bridge';
 
 /**
@@ -21,7 +23,7 @@ export interface HostContext {
 export interface HostToolHandler {
   description: string;
   handler: (args: Record<string, unknown>, ctx: HostContext) => unknown | Promise<unknown>;
-  inputSchema?: Record<string, unknown>;
+  inputSchema?: ZodType;
   timeout?: number;
 }
 

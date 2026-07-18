@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import sharp from 'sharp';
+import { z } from 'zod';
 
 import { captureScreenshot } from '@/server/host/coredevice/screenshot';
 import { resolveDevice } from '@/server/host/deviceResolver';
@@ -317,8 +318,8 @@ export const screenshotTool = (runner: ProcessRunner): HostToolHandler => {
     description: `WebP screenshot, resized to save vision tokens. Response is [image, metadata] where metadata is JSON with { width, height, originalWidth, originalHeight, scale, bytes, hash, region? }.
 
 TOKEN BUDGETING
-  • Vision tokens are driven by image area. Default width ${SCREENSHOT_DEFAULT_WIDTH} gives a readable full-screen view at ~300 tokens. Bump only to read small text.
-  • Pass \`region: { x, y, width, height }\` (physical device pixels) to crop to a single element — typical tap-target shrinks to ~20-60 vision tokens. Grab the rect from fiber_tree__query bounds.
+  • Vision tokens are driven by image area. The default width gives a readable full-screen view at ~300 tokens. Bump only to read small text.
+  • Pass \`region\` (physical device pixels) to crop to a single element — typical tap-target shrinks to ~20-60 vision tokens. Grab the rect from fiber_tree__query bounds.
   • \`{ unchanged: true, lastMeta }\` is returned when the resized bytes are identical to the previous capture — cheap polling. \`lastMeta\` is the meta of the previously-returned image (same shape, including \`hash\`) so you don't need to re-query.
 
 Use fiber_tree bounds for tap targeting; screenshots are for visual verification of what the UI looks like right now.`,
@@ -340,31 +341,31 @@ Use fiber_tree bounds for tap targeting; screenshots are for visual verification
       }
       return captureAndroid(resolved.device.nativeId, runner, width, region);
     },
-    inputSchema: {
+    inputSchema: z.looseObject({
       platform: PLATFORM_ARG_SCHEMA,
-      region: {
-        description:
-          'Crop rectangle in original device pixels (top-left origin). Out-of-bounds values are clipped. Typical use: pass fiber_tree bounds ({ x, y, width, height }) to snapshot just one component. Omitted = full screen.',
-        examples: [{ height: 128, width: 900, x: 60, y: 200 }],
-        properties: {
-          height: { exclusiveMinimum: 0, type: 'number' },
-          width: { exclusiveMinimum: 0, type: 'number' },
-          x: { minimum: 0, type: 'number' },
-          y: { minimum: 0, type: 'number' },
-        },
-        required: ['x', 'y', 'width', 'height'],
-        type: 'object',
-      },
-      width: {
-        default: SCREENSHOT_DEFAULT_WIDTH,
-        description:
-          'Output width in px (aspect preserved, applied AFTER cropping). Default reads normal UI at ~300 vision tokens; bump only to read small text.',
-        maximum: SCREENSHOT_MAX_WIDTH,
-        minimum: SCREENSHOT_MIN_WIDTH,
-        type: 'number',
-      },
+      region: z
+        .looseObject({
+          height: z.number().gt(0),
+          width: z.number().gt(0),
+          x: z.number().min(0),
+          y: z.number().min(0),
+        })
+        .describe(
+          'Crop rectangle in original device pixels (top-left origin). Out-of-bounds values are clipped. Typical use: pass fiber_tree bounds to snapshot just one component. Omitted = full screen.'
+        )
+        .meta({ examples: [{ height: 128, width: 900, x: 60, y: 200 }] })
+        .optional(),
+      width: z
+        .number()
+        .min(SCREENSHOT_MIN_WIDTH)
+        .max(SCREENSHOT_MAX_WIDTH)
+        .describe(
+          'Output width in px (aspect preserved, applied AFTER cropping). Default reads normal UI at ~300 vision tokens; bump only to read small text.'
+        )
+        .meta({ default: SCREENSHOT_DEFAULT_WIDTH })
+        .optional(),
       ...NATIVE_ID_SCHEMA,
-    },
+    }),
     timeout: SCREENSHOT_TIMEOUT_MS,
   };
 };

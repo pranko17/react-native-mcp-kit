@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import { type McpModule } from '@/client/models/types';
 import {
   applyProjection,
@@ -395,6 +397,7 @@ redaction lists are configurable via networkModule options.`,
           buffer.length = 0;
           return { success: true };
         },
+        inputSchema: z.looseObject({}),
       },
       get_requests: {
         description: 'All captured requests; filterable by method / status / URL substring.',
@@ -419,20 +422,16 @@ redaction lists are configurable via networkModule options.`,
           }
           return project(result, args as ProjectionArgs);
         },
-        inputSchema: {
+        inputSchema: z.looseObject({
           ...PROJECTION_SCHEMA,
-          method: {
-            description: 'HTTP method filter.',
-            examples: ['GET', 'POST', 'PUT', 'DELETE'],
-            type: 'string',
-          },
-          status: {
-            description: 'Status filter.',
-            enum: ['pending', 'success', 'error'],
-            type: 'string',
-          },
-          url: { description: 'URL substring filter.', type: 'string' },
-        },
+          method: z
+            .string()
+            .describe('HTTP method filter.')
+            .meta({ examples: ['GET', 'POST', 'PUT', 'DELETE'] })
+            .optional(),
+          status: z.enum(['pending', 'success', 'error']).describe('Status filter.').optional(),
+          url: z.string().describe('URL substring filter.').optional(),
+        }),
       },
       get_stats: {
         description:
@@ -468,6 +467,7 @@ redaction lists are configurable via networkModule options.`,
             total: buffer.length,
           };
         },
+        inputSchema: z.looseObject({}),
       },
     },
   };

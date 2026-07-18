@@ -1,103 +1,102 @@
-import { z } from 'zod';
+import { z, type ZodType } from 'zod';
 
 import { canonicalize } from './helpers';
-
-/**
- * Mini-schema shape used by every module's `inputSchema` today — flat dict
- * where each value carries `{ type, description?, examples? }`. Not full JSON
- * Schema; modules validate handler args themselves so every field is
- * effectively optional.
- */
-interface FieldSpec {
-  description?: string;
-  examples?: unknown[];
-  type?: 'array' | 'boolean' | 'number' | 'object' | 'string';
-}
-
-const baseFor = (type: FieldSpec['type']): z.ZodType => {
-  switch (type) {
-    case 'string':
-      return z.string();
-    case 'number':
-      return z.number();
-    case 'boolean':
-      return z.boolean();
-    case 'array':
-      return z.array(z.unknown());
-    case 'object':
-      return z.record(z.string(), z.unknown());
-    default:
-      return z.unknown();
-  }
-};
-
-const buildDescription = (spec: FieldSpec): string | undefined => {
-  if (!spec.description && !spec.examples?.length) return undefined;
-  if (!spec.examples?.length) return spec.description;
-  // Zod has no first-class examples — fold them into the description so the
-  // catalog still surfaces them to the agent.
-  const ex = spec.examples
-    .map((e) => {
-      return JSON.stringify(e);
-    })
-    .join(', ');
-  return spec.description ? `${spec.description} Examples: ${ex}` : `Examples: ${ex}`;
-};
 
 // Same forms as the legacy `call` meta-tool accepted — literal, `/regex/flags`,
 // or a mixed array — so broadcast semantics carry over to direct registration
 // unchanged (parseClientIds handles the parsing at dispatch time).
+const CLIENT_ID_DESCRIPTION =
+  'Target client ID ("ios-1"); a `/regex/` literal or an array broadcasts to every match. Auto-picks when exactly one client is connected. Full forms: server instructions § clientId.';
+
 const CLIENT_ID_FIELD = z
   .union([z.string(), z.array(z.string())])
   .optional()
-  .describe(
-    'Target client ID(s). Plain string ("ios-1") selects one client. `/body/flags` literal ("/^ios/") matches connected IDs by regex and broadcasts to every match. Array ([ "ios-1", "/^android/" ]) accepts literals and regex strings mixed. Optional when exactly one client is connected — it auto-picks.'
-  );
+  .describe(CLIENT_ID_DESCRIPTION);
 
-/**
- * Converts a module's wire-format `inputSchema` (flat `Record<string, FieldSpec>`)
- * into a Zod object schema suitable for `McpServer.registerTool`. Always injects
- * an optional `clientId` so multi-client routing has a uniform escape hatch.
- *
- * Loose object, deliberately: module handlers accept args beyond their declared
- * schema (the wire schema is advisory — handlers validate themselves). A default
- * zod object would silently strip undeclared keys before dispatch.
- */
-export const convertInputSchema = (schema: Record<string, unknown> | undefined) => {
-  const shape: Record<string, z.ZodType> = {};
-  if (schema) {
-    for (const [key, raw] of Object.entries(schema)) {
-      const spec = (raw ?? {}) as FieldSpec;
-      let zType = baseFor(spec.type);
-      const desc = buildDescription(spec);
-      if (desc) zType = zType.describe(desc);
-      shape[key] = zType.optional();
-    }
+// Derived from CLIENT_ID_FIELD so the two forms can't drift apart. `$schema`
+// is stripped — the node is embedded into another schema's `properties`.
+const CLIENT_ID_JSON_SCHEMA = ((): Record<string, unknown> => {
+  const json = z.toJSONSchema(CLIENT_ID_FIELD, { io: 'input' }) as Record<string, unknown>;
+  delete json.$schema;
+  return json;
+})();
+
+const jsonSchemaToZod = (json: Record<string, unknown>): ZodType => {
+  const withClientId = {
+    ...json,
+    // Root stays loose regardless of how the author declared it — handlers
+    // accept undeclared args, and `clientId` must never be rejected.
+    additionalProperties: {},
+    properties: {
+      ...((json.properties as Record<string, unknown> | undefined) ?? {}),
+      clientId: CLIENT_ID_JSON_SCHEMA,
+    },
+  };
+  try {
+    return z.fromJSONSchema(withClientId as never);
+  } catch (err) {
+    process.stderr.write(
+      `[mcp-kit] Failed to build validator from JSON Schema (${(err as Error).message}) — registering with a permissive schema.\n`
+    );
+    return z.looseObject({ clientId: CLIENT_ID_FIELD });
   }
-  shape.clientId = CLIENT_ID_FIELD;
-  return z.looseObject(shape);
 };
 
 /**
- * Stable canonical hash of a tool descriptor for dedup across clients. Strips
- * `examples` from each field — examples are documentation, not contract, and
- * should not break dedup if two builds happen to reorder them.
+ * Converts a tool's `inputSchema` into a Zod object schema suitable for
+ * `McpServer.registerTool`. Always injects an optional `clientId` so
+ * multi-client routing has a uniform escape hatch. Two forms:
+ *   - a Zod schema (host tools authored in Zod) — serialized and re-parsed so
+ *     both forms flow through one JSON-Schema path;
+ *   - a JSON Schema object node — the wire form every client produces by
+ *     serializing its Zod schemas with `z.toJSONSchema`.
+ *
+ * Root object is forced loose, deliberately: module handlers accept args
+ * beyond their declared schema (the schema is advisory — handlers validate
+ * themselves), so undeclared keys must never be stripped or rejected before
+ * dispatch.
+ */
+export const convertInputSchema = (schema: Record<string, unknown> | ZodType | undefined) => {
+  if (!schema) {
+    return z.looseObject({ clientId: CLIENT_ID_FIELD });
+  }
+  if ('_zod' in schema) {
+    return jsonSchemaToZod(
+      z.toJSONSchema(schema as ZodType, { io: 'input', unrepresentable: 'any' }) as Record<
+        string,
+        unknown
+      >
+    );
+  }
+  return jsonSchemaToZod(schema);
+};
+
+/**
+ * Recursively drops every `examples` key — examples are documentation, not
+ * contract, and should not break cross-client dedup if two builds happen to
+ * reorder them.
+ */
+const stripExamples = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map(stripExamples);
+  }
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) {
+      if (k === 'examples') continue;
+      out[k] = stripExamples(v);
+    }
+    return out;
+  }
+  return value;
+};
+
+/**
+ * Stable canonical hash of a tool descriptor for dedup across clients.
  */
 export const hashInputSchema = (
   description: string,
   schema: Record<string, unknown> | undefined
 ): string => {
-  const stripped: Record<string, unknown> = {};
-  if (schema) {
-    for (const [k, v] of Object.entries(schema)) {
-      if (v && typeof v === 'object' && !Array.isArray(v)) {
-        const copy = { ...(v as Record<string, unknown>) };
-        delete copy.examples;
-        stripped[k] = copy;
-      } else {
-        stripped[k] = v;
-      }
-    }
-  }
-  return canonicalize({ description, schema: stripped });
+  return canonicalize({ description, schema: schema ? stripExamples(schema) : {} });
 };

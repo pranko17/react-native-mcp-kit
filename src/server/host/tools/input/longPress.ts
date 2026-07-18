@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import { resolveDevice } from '@/server/host/deviceResolver';
 import {
   NATIVE_ID_SCHEMA,
@@ -21,7 +23,7 @@ import {
 export const longPressTool = (runner: ProcessRunner): HostToolHandler => {
   return {
     description:
-      'Primary way to deliver a long-press: hold a touch at (x, y) for durationMs through the OS gesture pipeline. Default 700ms — above the RN Pressable long-press threshold (~500ms) with margin. Internally a zero-distance swipe kept alive for the full duration on both platforms.',
+      'Primary way to deliver a long-press: hold a touch at (x, y) for durationMs through the OS gesture pipeline. The default duration clears the RN Pressable long-press threshold (~500ms) with margin. Internally a zero-distance swipe kept alive for the full duration on both platforms.',
     handler: async (args, ctx) => {
       const resolved = await resolveDevice(ctx, parseResolveOptions(args), runner);
       if (!resolved.ok) {
@@ -57,19 +59,19 @@ export const longPressTool = (runner: ProcessRunner): HostToolHandler => {
       }
       return { device: resolved.device, durationMs, longPressed: true, x: x.value, y: y.value };
     },
-    inputSchema: {
-      durationMs: {
-        default: LONG_PRESS_DURATION_DEFAULT_MS,
-        description: 'Hold duration in milliseconds.',
-        maximum: SWIPE_DURATION_MAX_MS,
-        minimum: SWIPE_DURATION_MIN_MS,
-        type: 'number',
-      },
+    inputSchema: z.looseObject({
+      durationMs: z
+        .number()
+        .min(SWIPE_DURATION_MIN_MS)
+        .max(SWIPE_DURATION_MAX_MS)
+        .describe('Hold duration in milliseconds.')
+        .meta({ default: LONG_PRESS_DURATION_DEFAULT_MS })
+        .optional(),
       platform: PLATFORM_ARG_SCHEMA,
-      x: { description: 'Absolute x pixel coordinate.', minimum: 0, type: 'number' },
-      y: { description: 'Absolute y pixel coordinate.', minimum: 0, type: 'number' },
+      x: z.number().min(0).describe('Absolute x pixel coordinate.'),
+      y: z.number().min(0).describe('Absolute y pixel coordinate.'),
       ...NATIVE_ID_SCHEMA,
-    },
+    }),
     timeout: INPUT_TIMEOUT_MS + SWIPE_DURATION_MAX_MS,
   };
 };

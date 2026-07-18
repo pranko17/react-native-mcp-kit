@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import { resolveDevice } from '@/server/host/deviceResolver';
 import {
   NATIVE_ID_SCHEMA,
@@ -34,20 +36,12 @@ export const tapTool = (runner: ProcessRunner): HostToolHandler => {
       }
       return { device: resolved.device, tapped: true, x: x.value, y: y.value };
     },
-    inputSchema: {
+    inputSchema: z.looseObject({
       platform: PLATFORM_ARG_SCHEMA,
-      x: {
-        description: 'Absolute x pixel coordinate (top-left origin).',
-        minimum: 0,
-        type: 'number',
-      },
-      y: {
-        description: 'Absolute y pixel coordinate (top-left origin).',
-        minimum: 0,
-        type: 'number',
-      },
+      x: z.number().min(0).describe('Absolute x pixel coordinate (top-left origin).'),
+      y: z.number().min(0).describe('Absolute y pixel coordinate (top-left origin).'),
       ...NATIVE_ID_SCHEMA,
-    },
+    }),
     timeout: INPUT_TIMEOUT_MS,
   };
 };

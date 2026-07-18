@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import { type HostToolHandler } from '@/server/host/types';
 import { resolveMetroUrl } from '@/server/metro/resolveMetroUrl';
 
@@ -125,7 +127,7 @@ Pass either a raw stack string (from errors__get_errors.stack) or a parsed array
 
 TOKEN-SAVING DEFAULTS
   - node_modules / RN-internal frames (collapse: true from Metro) are dropped.
-  - Only the top ${DEFAULT_MAX_FRAMES} frames returned.
+  - Trimmed to the top maxFrames frames (the top is where the actual cause lives).
   - Absolute paths are shortened relative to the MCP server's cwd.
   Opt-out via includeFrameworkFrames / maxFrames / fullPaths.`,
     handler: async (args, ctx) => {
@@ -203,54 +205,70 @@ TOKEN-SAVING DEFAULTS
         };
       }
     },
-    inputSchema: {
-      clientId: {
-        description:
-          'Target client ID — used to pick up the Metro URL the app was actually loaded from (falls back to `metroUrl` or the hardcoded default).',
-        type: 'string',
-      },
-      frames: {
-        description:
-          'Parsed stack frames: [{ file, lineNumber, column, methodName? }]. Takes precedence over `stack` when both are provided.',
-        examples: [
-          [
-            {
-              column: 42,
-              file: 'http://localhost:8081/index.bundle',
-              lineNumber: 1234,
-              methodName: 'render',
-            },
+    inputSchema: z.looseObject({
+      clientId: z
+        .string()
+        .describe(
+          'Target client ID — used to pick up the Metro URL the app was actually loaded from (falls back to `metroUrl` or the hardcoded default).'
+        )
+        .optional(),
+      frames: z
+        .array(
+          z.looseObject({
+            column: z.number().optional(),
+            file: z.string().optional(),
+            lineNumber: z.number().optional(),
+            methodName: z.string().optional(),
+          })
+        )
+        .describe(
+          'Parsed stack frames. One of `stack` / `frames` is required; `frames` takes precedence when both are provided.'
+        )
+        .meta({
+          examples: [
+            [
+              {
+                column: 42,
+                file: 'http://localhost:8081/index.bundle',
+                lineNumber: 1234,
+                methodName: 'render',
+              },
+            ],
           ],
-        ],
-        type: 'array',
-      },
-      fullPaths: {
-        default: false,
-        description: 'Return absolute file paths instead of ones relative to the MCP server cwd.',
-        type: 'boolean',
-      },
-      includeFrameworkFrames: {
-        default: false,
-        description:
-          'Keep node_modules / React Native internal frames (marked collapse: true by Metro). Framework noise is dropped by default to save tokens.',
-        type: 'boolean',
-      },
-      maxFrames: {
-        default: DEFAULT_MAX_FRAMES,
-        description: 'Max frames to return after filtering (top-down).',
-        maximum: MAX_FRAMES_CEILING,
-        minimum: 1,
-        type: 'number',
-      },
-      metroUrl: {
-        description: `Base URL of the Metro dev server. Overrides the URL reported by the connected client. Default "http://localhost:8081".`,
-        type: 'string',
-      },
-      stack: {
-        description: 'Raw stack trace string (e.g. from an Error.stack). Parsed into frames.',
-        type: 'string',
-      },
-    },
+        })
+        .optional(),
+      fullPaths: z
+        .boolean()
+        .describe('Return absolute file paths instead of ones relative to the MCP server cwd.')
+        .meta({ default: false })
+        .optional(),
+      includeFrameworkFrames: z
+        .boolean()
+        .describe(
+          'Keep node_modules / React Native internal frames (marked collapse: true by Metro). Framework noise is dropped by default to save tokens.'
+        )
+        .meta({ default: false })
+        .optional(),
+      maxFrames: z
+        .number()
+        .min(1)
+        .max(MAX_FRAMES_CEILING)
+        .describe('Max frames to return after filtering (top-down).')
+        .meta({ default: DEFAULT_MAX_FRAMES })
+        .optional(),
+      metroUrl: z
+        .string()
+        .describe(
+          'Base URL of the Metro dev server. Overrides the URL auto-detected from the connected client; last-resort fallback "http://localhost:8081".'
+        )
+        .optional(),
+      stack: z
+        .string()
+        .describe(
+          'Raw stack trace string (e.g. from an Error.stack). Parsed into frames. One of `stack` / `frames` is required.'
+        )
+        .optional(),
+    }),
     timeout: METRO_TIMEOUT_MS + 1_000,
   };
 };

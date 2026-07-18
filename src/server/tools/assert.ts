@@ -81,14 +81,12 @@ Useful after wait_until as a checkpoint — the pair reads "do action → wait �
           .union([z.string(), z.array(z.string())])
           .optional()
           .describe(
-            'Target client ID(s). String asserts on one client; `/body/flags` literal ("/^ios/") expands to every matching connected client; array mixes literals and regex strings. Broadcast forms run the assertion on each matched client in parallel. Same auto-resolution semantics as `call`.'
+            'Target client ID(s). String asserts on one client; `/body/flags` literal ("/^ios/") expands to every matching connected client; array mixes literals and regex strings. Broadcast forms run the assertion on each matched client in parallel. Omitted: auto-resolves to the single connected client. Full forms: server instructions § clientId.'
           ),
         message: z
           .string()
           .optional()
-          .describe(
-            'Optional human-readable description of the check; echoed in the failure payload.'
-          ),
+          .describe('Human-readable description of the check; echoed in the failure payload.'),
         predicate: z
           .looseObject({})
           .describe(

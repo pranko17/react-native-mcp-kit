@@ -1,4 +1,5 @@
 import { type McpModule, type ToolHandler } from '@/client/models/types';
+import { serializeInputSchema } from '@/client/utils/serializeInputSchema';
 import { type ModuleDescriptor, type ToolRequest } from '@/shared/protocol';
 
 export class ModuleRunner {
@@ -61,7 +62,7 @@ export class ModuleRunner {
         tools: Object.entries(tools).map(([toolName, tool]) => {
           return {
             description: tool.description,
-            inputSchema: tool.inputSchema,
+            inputSchema: serializeInputSchema(tool.inputSchema),
             name: toolName,
             timeout: tool.timeout,
           };

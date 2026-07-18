@@ -1,6 +1,7 @@
 import { type McpModule, type ToolHandler } from '@/client/models/types';
 import { McpConnection } from '@/client/utils/connection';
 import { ModuleRunner } from '@/client/utils/moduleRunner';
+import { serializeInputSchema } from '@/client/utils/serializeInputSchema';
 import {
   type AppLifecycleState,
   DEFAULT_PORT,
@@ -345,7 +346,7 @@ export class McpClient {
       module: `${MODULE_SEPARATOR}dynamic`,
       tool: {
         description: tool.description,
-        inputSchema: tool.inputSchema,
+        inputSchema: serializeInputSchema(tool.inputSchema),
         name,
       },
       type: 'tool_register',

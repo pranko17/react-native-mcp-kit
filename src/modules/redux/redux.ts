@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import { type McpModule } from '@/client/models/types';
 import {
   applyProjection,
@@ -58,14 +60,15 @@ to list slice names only. Accepts path / depth / maxBytes.
           store.dispatch(action);
           return { action, success: true };
         },
-        inputSchema: {
-          action: {
-            description: 'Action as a JSON object string. Must include a string `type`.',
-            examples: ['{"type":"cart/clear"}', '{"type":"auth/setToken","payload":"abc123"}'],
-            minLength: 1,
-            type: 'string',
-          },
-        },
+        inputSchema: z.looseObject({
+          action: z
+            .string()
+            .min(1)
+            .describe('Action as a JSON object string. Must include a string `type`.')
+            .meta({
+              examples: ['{"type":"cart/clear"}', '{"type":"auth/setToken","payload":"abc123"}'],
+            }),
+        }),
       },
       get_state: {
         description: 'The full Redux state tree, keyed by slice.',
@@ -77,7 +80,7 @@ to list slice names only. Accepts path / depth / maxBytes.
             STATE_DEFAULT_DEPTH
           );
         },
-        inputSchema: { ...STATE_SCHEMA },
+        inputSchema: z.looseObject(STATE_SCHEMA),
       },
     },
   };

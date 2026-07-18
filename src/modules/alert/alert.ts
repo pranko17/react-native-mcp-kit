@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import { type McpModule } from '@/client/models/types';
 import { getRN } from '@/shared/rn/core';
 
@@ -43,30 +45,27 @@ export const alertModule = (): McpModule => {
             );
           });
         },
-        inputSchema: {
-          buttons: {
-            default: [{ text: 'OK' }],
-            description: 'Buttons — string or { text, style? }.',
-            examples: [['OK'], ['Cancel', 'OK'], [{ style: 'destructive', text: 'Delete' }]],
-            items: {
-              oneOf: [
-                { type: 'string' },
-                {
-                  properties: {
-                    style: { enum: ['default', 'cancel', 'destructive'], type: 'string' },
-                    text: { type: 'string' },
-                  },
-                  required: ['text'],
-                  type: 'object',
-                },
-              ],
-            },
-            minItems: 1,
-            type: 'array',
-          },
-          message: { default: '', description: 'Alert body.', type: 'string' },
-          title: { default: 'Alert', description: 'Alert title.', type: 'string' },
-        },
+        inputSchema: z.looseObject({
+          buttons: z
+            .array(
+              z.union([
+                z.string(),
+                z.looseObject({
+                  style: z.enum(['default', 'cancel', 'destructive']).optional(),
+                  text: z.string(),
+                }),
+              ])
+            )
+            .min(1)
+            .describe('A bare string is shorthand for { text }.')
+            .meta({
+              default: [{ text: 'OK' }],
+              examples: [['OK'], ['Cancel', 'OK'], [{ style: 'destructive', text: 'Delete' }]],
+            })
+            .optional(),
+          message: z.string().describe('Alert body.').meta({ default: '' }).optional(),
+          title: z.string().describe('Alert title.').meta({ default: 'Alert' }).optional(),
+        }),
         timeout: ALERT_TIMEOUT,
       },
     },

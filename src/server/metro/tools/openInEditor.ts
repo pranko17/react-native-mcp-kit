@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import { type HostToolHandler } from '@/server/host/types';
 import { resolveMetroUrl } from '@/server/metro/resolveMetroUrl';
 
@@ -57,34 +59,31 @@ Returns { ok: true, file, lineNumber, metroUrl } on success.`,
         };
       }
     },
-    inputSchema: {
-      clientId: {
-        description:
-          'Target client ID — used to pick up the Metro URL the app was loaded from (falls back to `metroUrl` or the hardcoded default).',
-        type: 'string',
-      },
-      column: {
-        description: 'Column number (1-based).',
-        minimum: 1,
-        type: 'number',
-      },
-      file: {
-        description:
-          'Absolute or repo-relative path to the source file. Paths from metro__symbolicate output plug in directly.',
-        examples: ['src/screens/HomeScreen/HomeScreen.tsx', '/Users/me/project/src/Foo.tsx'],
-        minLength: 1,
-        type: 'string',
-      },
-      lineNumber: {
-        description: 'Line number (1-based).',
-        minimum: 1,
-        type: 'number',
-      },
-      metroUrl: {
-        description: `Base URL of the Metro dev server. Overrides the URL reported by the connected client. Default "http://localhost:8081".`,
-        type: 'string',
-      },
-    },
+    inputSchema: z.looseObject({
+      clientId: z
+        .string()
+        .describe(
+          'Target client ID — used to pick up the Metro URL the app was loaded from (falls back to `metroUrl` or the hardcoded default).'
+        )
+        .optional(),
+      column: z.number().min(1).describe('Column number (1-based).').optional(),
+      file: z
+        .string()
+        .min(1)
+        .describe(
+          'Absolute or repo-relative path to the source file. Paths from metro__symbolicate output plug in directly.'
+        )
+        .meta({
+          examples: ['src/screens/HomeScreen/HomeScreen.tsx', '/Users/me/project/src/Foo.tsx'],
+        }),
+      lineNumber: z.number().min(1).describe('Line number (1-based).'),
+      metroUrl: z
+        .string()
+        .describe(
+          'Base URL of the Metro dev server. Overrides the URL auto-detected from the connected client; last-resort fallback "http://localhost:8081".'
+        )
+        .optional(),
+    }),
     timeout: METRO_TIMEOUT_MS + 1_000,
   };
 };

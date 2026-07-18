@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import { type HostToolHandler } from '@/server/host/types';
 import { resolveMetroUrl } from '@/server/metro/resolveMetroUrl';
 
@@ -34,17 +36,20 @@ Cheap, side-effect-free sanity check. Useful before a chain of Metro-facing oper
         };
       }
     },
-    inputSchema: {
-      clientId: {
-        description:
-          'Target client ID — used to pick up the Metro URL the app was loaded from (falls back to `metroUrl` or the hardcoded default).',
-        type: 'string',
-      },
-      metroUrl: {
-        description: `Base URL of the Metro dev server. Overrides the URL reported by the connected client. Default "http://localhost:8081".`,
-        type: 'string',
-      },
-    },
+    inputSchema: z.looseObject({
+      clientId: z
+        .string()
+        .describe(
+          'Target client ID — used to pick up the Metro URL the app was loaded from (falls back to `metroUrl` or the hardcoded default).'
+        )
+        .optional(),
+      metroUrl: z
+        .string()
+        .describe(
+          'Base URL of the Metro dev server. Overrides the URL auto-detected from the connected client; last-resort fallback "http://localhost:8081".'
+        )
+        .optional(),
+    }),
     timeout: METRO_TIMEOUT_MS + 1_000,
   };
 };

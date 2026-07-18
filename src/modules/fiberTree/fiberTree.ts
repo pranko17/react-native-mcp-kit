@@ -1,4 +1,5 @@
 import { type RefObject } from 'react';
+import { z } from 'zod';
 
 import { type McpModule } from '@/client/models/types';
 import {
@@ -114,8 +115,7 @@ export const fiberTreeModule = (options?: FiberTreeModuleOptions): McpModule => 
     description: `React fiber tree inspection and interaction.
 
 SCOPES (query steps)
-  descendants (default) / children / parent / ancestors / siblings / self
-  / root / screen / nearest_host.
+  Standard tree relations, plus three that need explanation:
     · root — the React fiber root, regardless of the previous step's
       match. Use as the first step to start from the top of the tree
       (e.g. dump the whole tree via select: [{ children: 5 }]).
@@ -146,8 +146,8 @@ STEP CRITERIA
   index — pick N-th match from this step; otherwise all matches fan out into the next step.
 
 SELECT (output fields)
-  Default ["mcpId", "name", "testID"] — props, bounds, hooks,
-  refMethods, children are opt-in.
+  props, bounds, hooks, refMethods, children are opt-in beyond the
+  default light fields.
   bounds: { x, y, width, height, centerX, centerY } in PHYSICAL pixels,
   top-left origin. null when the fiber has no mounted host view. centerX/
   centerY feed straight into host__tap.
@@ -170,9 +170,9 @@ SELECT (output fields)
 
 RESPONSE
   { matches: [...], total, truncated? } — total is the unrestricted match
-  count; when the result exceeds limit (default 50, max 500) truncated:
-  true is added and matches contains the first limit items in DFS order.
-  Narrow the query rather than cranking limit.
+  count; when the result exceeds limit, truncated: true is added and
+  matches contains the first limit items in DFS order. Narrow the query
+  rather than cranking limit.
 
   By default wrapper cascades are deduped: a fiber is hidden when any of
   its ancestors is also a match, so PressableView → Pressable → View →
@@ -258,25 +258,25 @@ TIPS
             };
           }
         },
-        inputSchema: {
+        inputSchema: z.looseObject({
           ...FIND_SCHEMA,
           ...PROJECTION_SCHEMA,
-          args: {
-            description: 'Arguments passed to the callback / method.',
-            examples: [[true], ['text']],
-            type: 'array',
-          },
-          method: {
-            description: 'Native-ref method name. Mutually exclusive with `prop`.',
-            examples: ['focus', 'blur', 'measure', 'scrollTo'],
-            type: 'string',
-          },
-          prop: {
-            description: 'Callback prop name. Mutually exclusive with `method`.',
-            examples: ['onPress', 'onSkip', 'onChangeText'],
-            type: 'string',
-          },
-        },
+          args: z
+            .array(z.unknown())
+            .describe('Arguments passed to the callback / method.')
+            .meta({ examples: [[true], ['text']] })
+            .optional(),
+          method: z
+            .string()
+            .describe('Native-ref method name. Mutually exclusive with `prop`.')
+            .meta({ examples: ['focus', 'blur', 'measure', 'scrollTo'] })
+            .optional(),
+          prop: z
+            .string()
+            .describe('Callback prop name. Mutually exclusive with `method`.')
+            .meta({ examples: ['onPress', 'onSkip', 'onChangeText'] })
+            .optional(),
+        }),
       },
       query: {
         description:
@@ -430,100 +430,166 @@ TIPS
           // and tree-shape navigation via `select.children`.
           return inner();
         },
-        inputSchema: {
-          cache: {
-            default: true,
-            description:
-              'Reuse the match set when the React tree has not committed since the previous identical steps — detected via fiber root pointer equality. Pass false to force a fresh traversal.',
-            type: 'boolean',
-          },
-          dedup: {
-            default: true,
-            description:
-              'Drop wrapper cascades — a fiber is removed when any of its ancestors is also in the match set (PressableView → Pressable → View → RCTView collapses to the topmost). Independent siblings with overlapping bounds are kept. Pass false to keep every match.',
-            type: 'boolean',
-          },
-          limit: {
-            default: QUERY_LIMIT_DEFAULT,
-            description:
-              'Max matches to return. truncated: true is added when total exceeds limit.',
-            maximum: QUERY_LIMIT_MAX,
-            minimum: 1,
-            type: 'number',
-          },
-          onlyVisible: {
-            default: false,
-            description:
-              'Drop matches whose measured bounds do not intersect the current window rectangle (physical pixels). Also drops fibers with no measurable host view — usually virtualized or unmounted. Halves results on long lists.',
-            type: 'boolean',
-          },
-          select: {
-            description: `Output fields: mcpId, name, testID, props, bounds, hooks, refMethods, children. Default ${JSON.stringify(QUERY_DEFAULT_FIELDS)}. Each entry is either a string ("mcpId" — include with defaults) or an object whose keys are field names. Object values are \`true\` / \`false\` / per-field options.\n\nLight fields (mcpId, name, testID, bounds, refMethods) — no options, just toggle. refMethods is the list of native-ref methods (focus, blur, measure, scrollTo, ...) available on the fiber's host instance; null when the fiber has no native instance. Feeds directly into \`fiber_tree__call({ method })\`.\n\nHeavy fields (props, hooks) — per-field projection via shared \`projectValue\` so nested heavy values become \`\${...}\`-keyed markers. Each takes its own \`path\` / \`depth\` / \`maxBytes\`.\n\nprops options: \`{ path?, depth?, maxBytes? }\`.\n\nhooks options: \`{ kinds?, names?, mcpIds?, withValues?, expansionDepth?, format?, path?, depth?, maxBytes? }\`. \`kinds\`: State | Reducer | Memo | Callback | Ref | Effect | LayoutEffect | InsertionEffect | Context | Transition | DeferredValue | Id | SyncExternalStore | ImperativeHandle | Optimistic | ActionState | Use | DebugValue | Custom. \`names\` / \`mcpIds\`: exact or \`/regex/flags\` (mcpIds filter targets a specific call-site via the \`<name>:<shortFile>:<line>\` value the babel plugin stamps on every entry). \`withValues:true\` adds resolved values. \`expansionDepth\` caps custom-hook recursion (default Infinity). \`format:"tree"\` returns nested children instead of flat \`via\`.\n\nchildren — recursive light-only walker for tree-of-tree dumps.\n  Short form: \`{ children: 5 }\` → treeDepth=5, default fields ['mcpId','name'].\n  Object form: \`{ children: { treeDepth?, select?, itemsCap? } }\`.\n  treeDepth max 16; itemsCap default 50; overflow inserts \`\${truncated}\` as the first item.\n  select inside children may include only mcpId / name / testID / bounds / nested children. props/hooks throw at parse time — run a second query against a child's mcpId to inspect them.\n\nEach hook entry carries \`{ kind, name, hook?, mcpId?, via?, expanded?, value? }\` (\`value\` only with \`withValues\`). \`mcpId\` is the call-site identity in the same shape as a JSX \`data-mcp-id\` (\`<name>:<shortFile>:<line>\`) — drop it into Read() to jump to the call.`,
-            examples: [
-              ['mcpId', 'name', 'bounds'],
-              ['mcpId', 'refMethods'],
-              ['mcpId', { props: { path: 'style' } }],
-              ['mcpId', { props: { depth: 3 } }],
-              [{ hooks: { kinds: ['State'], withValues: true }, mcpId: true }],
-              [{ children: 5 }],
-              [
-                'mcpId',
-                'name',
-                { children: { select: ['mcpId', 'name', 'testID'], treeDepth: 3 } },
+        inputSchema: z.looseObject({
+          cache: z
+            .boolean()
+            .describe(
+              'Reuse the match set when the React tree has not committed since the previous identical steps — detected via fiber root pointer equality. Pass false to force a fresh traversal.'
+            )
+            .meta({ default: true })
+            .optional(),
+          dedup: z
+            .boolean()
+            .describe(
+              'Drop wrapper cascades — a fiber is removed when any of its ancestors is also in the match set (PressableView → Pressable → View → RCTView collapses to the topmost). Independent siblings with overlapping bounds are kept. Pass false to keep every match.'
+            )
+            .meta({ default: true })
+            .optional(),
+          limit: z
+            .number()
+            .min(1)
+            .max(QUERY_LIMIT_MAX)
+            .describe('Max matches to return. truncated: true is added when total exceeds limit.')
+            .meta({ default: QUERY_LIMIT_DEFAULT })
+            .optional(),
+          onlyVisible: z
+            .boolean()
+            .describe(
+              'Drop matches whose measured bounds do not intersect the current window rectangle (physical pixels). Also drops fibers with no measurable host view — usually virtualized or unmounted. Halves results on long lists.'
+            )
+            .meta({ default: false })
+            .optional(),
+          select: z
+            .array(z.unknown())
+            .describe(
+              `Output fields: mcpId, name, testID, props, bounds, hooks, refMethods, children. Each entry is either a string ("mcpId" — include with defaults) or an object whose keys are field names. Object values are \`true\` / \`false\` / per-field options.\n\nLight fields (mcpId, name, testID, bounds, refMethods) — no options, just toggle. refMethods is the list of native-ref methods (focus, blur, measure, scrollTo, ...) available on the fiber's host instance; null when the fiber has no native instance. Feeds directly into \`fiber_tree__call({ method })\`.\n\nHeavy fields (props, hooks) — per-field projection via shared \`projectValue\` so nested heavy values become \`\${...}\`-keyed markers. Each takes its own \`path\` / \`depth\` / \`maxBytes\`.\n\nprops options: \`{ path?, depth?, maxBytes? }\`.\n\nhooks options: \`{ kinds?, names?, mcpIds?, withValues?, expansionDepth?, format?, path?, depth?, maxBytes? }\`. \`kinds\`: State | Reducer | Memo | Callback | Ref | Effect | LayoutEffect | InsertionEffect | Context | Transition | DeferredValue | Id | SyncExternalStore | ImperativeHandle | Optimistic | ActionState | Use | DebugValue | Custom. \`names\` / \`mcpIds\`: exact or \`/regex/flags\` (mcpIds filter targets a specific call-site via the \`<name>:<shortFile>:<line>\` value the babel plugin stamps on every entry). \`withValues:true\` adds resolved values. \`expansionDepth\` caps custom-hook recursion (default Infinity). \`format:"tree"\` returns nested children instead of flat \`via\`.\n\nchildren — recursive light-only walker for tree-of-tree dumps.\n  Short form: \`{ children: 5 }\` → treeDepth=5, default fields ['mcpId','name'].\n  Object form: \`{ children: { treeDepth?, select?, itemsCap? } }\`.\n  treeDepth max 16; itemsCap default 50; overflow inserts \`\${truncated}\` as the first item.\n  select inside children may include only mcpId / name / testID / bounds / nested children. props/hooks throw at parse time — run a second query against a child's mcpId to inspect them.\n\nEach hook entry carries \`{ kind, name, hook?, mcpId?, via?, expanded?, value? }\` (\`value\` only with \`withValues\`). \`mcpId\` is the call-site identity in the same shape as a JSX \`data-mcp-id\` (\`<name>:<shortFile>:<line>\`) — drop it into Read() to jump to the call.`
+            )
+            .meta({
+              default: [...QUERY_DEFAULT_FIELDS],
+              examples: [
+                ['mcpId', 'name', 'bounds'],
+                ['mcpId', 'refMethods'],
+                ['mcpId', { props: { path: 'style' } }],
+                ['mcpId', { props: { depth: 3 } }],
+                [{ hooks: { kinds: ['State'], withValues: true }, mcpId: true }],
+                [{ children: 5 }],
+                [
+                  'mcpId',
+                  'name',
+                  { children: { select: ['mcpId', 'name', 'testID'], treeDepth: 3 } },
+                ],
               ],
-            ],
-            type: 'array',
-          },
-          steps: {
-            description:
-              'Ordered steps: [{ scope?, name?, mcpId?, testID?, text?, hasProps?, props?, any?, not?, index? }]. See module description for full semantics.',
-            examples: [
-              [{ hasProps: ['onPress'] }],
-              [{ name: 'HomeScreen' }, { name: 'ProductCard' }],
-              [{ testID: 'favorite-icon' }, { index: 0, name: 'ProductCard', scope: 'ancestors' }],
-              [{ props: { placeholder: { contains: 'Search' } } }],
-            ],
-            minItems: 1,
-            type: 'array',
-          },
-          waitFor: {
-            description: `Poll the query until a predicate holds, instead of reading once. \`until\` selects the target state: "appear" waits for \`total >= 1\`, "disappear" waits for \`total === 0\`. \`timeout\` caps the wait. \`interval\` is the gap between polls. \`stable\` requires the predicate to hold continuously for this many ms before returning — useful to ignore transient matches during screen transitions. Cache is always bypassed while polling. On success the response carries the usual query fields plus \`{ waited: true, until, attempts, elapsedMs, timedOut: false, stableFor? }\`; on timeout \`timedOut: true\` with the last observed matches.`,
-            examples: [
-              { until: 'appear' },
-              { timeout: 5000, until: 'disappear' },
-              { interval: 200, stable: 500, until: 'appear' },
-            ],
-            properties: {
-              interval: {
-                default: WAIT_INTERVAL_DEFAULT,
-                description: 'Gap between polls in milliseconds.',
-                minimum: WAIT_INTERVAL_MIN,
-                type: 'number',
-              },
-              stable: {
-                default: 0,
-                description:
-                  'Require the predicate to hold continuously for this many ms before returning.',
-                minimum: 0,
-                type: 'number',
-              },
-              timeout: {
-                default: WAIT_TIMEOUT_DEFAULT,
-                description: 'Max wait in milliseconds.',
-                maximum: WAIT_TIMEOUT_MAX,
-                minimum: 1,
-                type: 'number',
-              },
-              until: {
-                description: 'Target state to wait for.',
-                enum: ['appear', 'disappear'],
-                type: 'string',
-              },
-            },
-            required: ['until'],
-            type: 'object',
-          },
-        },
+            })
+            .optional(),
+          steps: z
+            .array(
+              z.looseObject({
+                any: z
+                  .array(z.looseObject({}))
+                  .describe('OR of sub-criteria; each entry is the same step-criteria shape.')
+                  .optional(),
+                hasProps: z
+                  .array(z.string())
+                  .describe('Prop names that must all exist on the fiber.')
+                  .optional(),
+                index: z
+                  .number()
+                  .min(0)
+                  .describe('Pick the N-th match from this step; omit to fan out every match.')
+                  .optional(),
+                mcpId: z
+                  .string()
+                  .describe('Stable data-mcp-id — exact or `/regex/flags`.')
+                  .optional(),
+                name: z.string().describe('Component name — exact or `/regex/flags`.').optional(),
+                not: z
+                  .union([z.record(z.string(), z.unknown()), z.array(z.unknown())])
+                  .describe(
+                    'Negation — criteria object (or array of them) that matched fibers must NOT satisfy.'
+                  )
+                  .optional(),
+                props: z
+                  .record(z.string(), z.unknown())
+                  .describe(
+                    'Map of prop name → matcher: primitive (strict equality) or { contains } / { regex } (+ deep: true for serialized objects).'
+                  )
+                  .optional(),
+                scope: z
+                  .enum([
+                    'ancestors',
+                    'children',
+                    'descendants',
+                    'nearest_host',
+                    'parent',
+                    'root',
+                    'screen',
+                    'self',
+                    'siblings',
+                  ])
+                  .describe('Fibers considered relative to the previous step matches.')
+                  .meta({ default: 'descendants' })
+                  .optional(),
+                testID: z.string().describe('testID — exact or `/regex/flags`.').optional(),
+                text: z
+                  .string()
+                  .describe('Rendered text substring or `/regex/flags` (not prop values).')
+                  .optional(),
+              })
+            )
+            .min(1)
+            .describe('Ordered step chain. See the module description for full criteria semantics.')
+            .meta({
+              examples: [
+                [{ hasProps: ['onPress'] }],
+                [{ name: 'HomeScreen' }, { name: 'ProductCard' }],
+                [
+                  { testID: 'favorite-icon' },
+                  { index: 0, name: 'ProductCard', scope: 'ancestors' },
+                ],
+                [{ props: { placeholder: { contains: 'Search' } } }],
+              ],
+            }),
+          waitFor: z
+            .looseObject({
+              interval: z
+                .number()
+                .min(WAIT_INTERVAL_MIN)
+                .describe('Gap between polls in milliseconds.')
+                .meta({ default: WAIT_INTERVAL_DEFAULT })
+                .optional(),
+              stable: z
+                .number()
+                .min(0)
+                .describe(
+                  'Require the predicate to hold continuously for this many ms before returning — useful to ignore transient matches during screen transitions.'
+                )
+                .meta({ default: 0 })
+                .optional(),
+              timeout: z
+                .number()
+                .min(1)
+                .max(WAIT_TIMEOUT_MAX)
+                .describe('Max wait in milliseconds.')
+                .meta({ default: WAIT_TIMEOUT_DEFAULT })
+                .optional(),
+              until: z
+                .enum(['appear', 'disappear'])
+                .describe(
+                  'Target state: "appear" waits for `total >= 1`, "disappear" for `total === 0`.'
+                ),
+            })
+            .describe(
+              `Poll the query until a predicate holds, instead of reading once. Cache is always bypassed while polling. On success the response carries the usual query fields plus \`{ waited: true, until, attempts, elapsedMs, timedOut: false, stableFor? }\`; on timeout \`timedOut: true\` with the last observed matches.`
+            )
+            .meta({
+              examples: [
+                { until: 'appear' },
+                { timeout: 5000, until: 'disappear' },
+                { interval: 200, stable: 500, until: 'appear' },
+              ],
+            })
+            .optional(),
+        }),
       },
     },
   };

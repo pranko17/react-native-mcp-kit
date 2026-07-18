@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import { type McpModule } from '@/client/models/types';
 import {
   applyProjection,
@@ -137,8 +139,7 @@ shared projection runs at query time. Stack traces captured per level
 (default error+warn+trace). \`trace\` always carries a stack; \`group\` /
 \`groupCollapsed\` / \`groupEnd\` are recorded structurally so the agent
 sees nesting context even when RN's console doesn't surface them. Listing
-tools accept path / depth / maxBytes
-(default depth ${CONSOLE_DEFAULT_DEPTH}). Capture starts at module-import time
+tools accept path / depth / maxBytes. Capture starts at module-import time
 so cold-start logs are not lost. Buffer size and captured levels are
 configurable via consoleModule options.`,
     name: 'console',
@@ -157,14 +158,13 @@ configurable via consoleModule options.`,
           const result = level ? filterByLevel(level) : buffer;
           return project(result, args as ProjectionArgs);
         },
-        inputSchema: {
+        inputSchema: z.looseObject({
           ...PROJECTION_SCHEMA,
-          level: {
-            description: 'Filter by level. Omit for all levels.',
-            enum: ALL_LEVELS,
-            type: 'string',
-          },
-        },
+          level: z
+            .enum(ALL_LEVELS as [LogLevel, ...LogLevel[]])
+            .describe('Filter by level. Omit for all levels.')
+            .optional(),
+        }),
       },
     },
   };

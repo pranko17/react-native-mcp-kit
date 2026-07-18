@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import { type McpModule } from '@/client/models/types';
 import { getRN } from '@/shared/rn/core';
 import {
@@ -185,8 +187,8 @@ READS
 
 ACTIONS (see each tool)
   open_url({ url, dryRun? }) · open_settings · dismiss_keyboard ·
-  reload (dev only) · vibrate({ duration? }) — default 400ms; 0 → 400;
-  iOS ignores duration.`,
+  reload (dev only) · vibrate({ duration? }) — duration 0 falls back to
+  the default; iOS ignores duration.`,
     name: 'device',
     tools: {
       dismiss_keyboard: {
@@ -198,7 +200,7 @@ ACTIONS (see each tool)
         },
       },
       info: {
-        description: `Aggregate device / platform introspection. Returns any subset of: ${INFO_FIELDS.join(' / ')}. Pass \`select: ['battery','keyboard']\` to limit to specific fields; omit for the full payload. Fields backed by react-native-device-info (identity / app / battery / memoryStorage) return \`{ unavailable: true, reason }\` when the package isn't installed.`,
+        description: `Aggregate device / platform introspection. Pass \`select\` to limit to specific fields; omit for the full payload. Fields backed by react-native-device-info (identity / app / battery / memoryStorage) return \`{ unavailable: true, reason }\` when the package isn't installed.`,
         handler: async (args) => {
           const requested = Array.isArray(args.select)
             ? (args.select as string[]).filter((f): f is InfoField => {
@@ -220,15 +222,16 @@ ACTIONS (see each tool)
           for (const [key, value] of entries) out[key] = value;
           return out;
         },
-        inputSchema: {
-          select: {
-            description: `Optional list of fields to return. Omit for all. identity / app / battery / memoryStorage require react-native-device-info; they return { unavailable: true, reason } when the package isn't installed.`,
-            examples: [['battery'], ['identity', 'app'], ['platform', 'dimensions']],
-            items: { enum: INFO_FIELDS, type: 'string' },
-            minItems: 1,
-            type: 'array',
-          },
-        },
+        inputSchema: z.looseObject({
+          select: z
+            .array(z.enum(INFO_FIELDS))
+            .min(1)
+            .describe(
+              `Fields to return. Omit for all. identity / app / battery / memoryStorage require react-native-device-info; they return { unavailable: true, reason } when the package isn't installed.`
+            )
+            .meta({ examples: [['battery'], ['identity', 'app'], ['platform', 'dimensions']] })
+            .optional(),
+        }),
       },
       open_settings: {
         description: 'Open the app settings page in device settings.',
@@ -251,20 +254,20 @@ ACTIONS (see each tool)
           await Linking.openURL(url);
           return { success: true, url };
         },
-        inputSchema: {
-          dryRun: {
-            default: false,
-            description:
-              'When true, only check Linking.canOpenURL and return `{ canOpen, url }` without opening.',
-            type: 'boolean',
-          },
-          url: {
-            description: 'URL to open (or check, when dryRun:true).',
-            examples: ['https://example.com', 'myapp://settings'],
-            minLength: 1,
-            type: 'string',
-          },
-        },
+        inputSchema: z.looseObject({
+          dryRun: z
+            .boolean()
+            .describe(
+              'When true, only check Linking.canOpenURL and return `{ canOpen, url }` without opening.'
+            )
+            .meta({ default: false })
+            .optional(),
+          url: z
+            .string()
+            .min(1)
+            .describe('URL to open (or check, when dryRun:true).')
+            .meta({ examples: ['https://example.com', 'myapp://settings'] }),
+        }),
       },
       reload: {
         description: 'Reload the app (dev mode only — like pressing R in Metro).',
@@ -282,14 +285,9 @@ ACTIONS (see each tool)
           Vibration.vibrate(duration);
           return { success: true };
         },
-        inputSchema: {
-          duration: {
-            default: 400,
-            description: 'Duration in ms.',
-            minimum: 0,
-            type: 'number',
-          },
-        },
+        inputSchema: z.looseObject({
+          duration: z.number().min(0).describe('Duration in ms.').meta({ default: 400 }).optional(),
+        }),
       },
     },
   };

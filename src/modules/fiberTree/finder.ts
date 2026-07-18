@@ -10,6 +10,8 @@
  * with mcpId / testID).
  */
 
+import { z, type ZodType } from 'zod';
+
 import { type Fiber } from './types';
 import { findAllByQuery, getFiberRoot } from './utils';
 
@@ -18,25 +20,25 @@ import { findAllByQuery, getFiberRoot } from './utils';
  * inputSchema. Re-spread (`...FIND_SCHEMA`) alongside tool-specific
  * args.
  */
-export const FIND_SCHEMA = {
-  index: {
-    default: 0,
-    description: '0-based index when several components match.',
-    minimum: 0,
-    type: 'number',
-  },
-  mcpId: { description: 'Stable data-mcp-id — exact or `/regex/flags`.', type: 'string' },
-  name: { description: 'Component name — exact or `/regex/flags`.', type: 'string' },
-  testID: { description: 'testID — exact or `/regex/flags`.', type: 'string' },
-  text: {
-    description: 'Rendered text substring or `/regex/flags` (not prop values).',
-    type: 'string',
-  },
-  within: {
-    description: 'Parent component path. "/" nests, ":N" picks index.',
-    examples: ['LoginForm', 'Button:1/Pressable', 'TabBar/TabBarItem:2'],
-    type: 'string',
-  },
+export const FIND_SCHEMA: Record<string, ZodType> = {
+  index: z
+    .number()
+    .min(0)
+    .describe('0-based index when several components match.')
+    .meta({ default: 0 })
+    .optional(),
+  mcpId: z.string().describe('Stable data-mcp-id — exact or `/regex/flags`.').optional(),
+  name: z.string().describe('Component name — exact or `/regex/flags`.').optional(),
+  testID: z.string().describe('testID — exact or `/regex/flags`.').optional(),
+  text: z
+    .string()
+    .describe('Rendered text substring or `/regex/flags` (not prop values).')
+    .optional(),
+  within: z
+    .string()
+    .describe('Parent component path. "/" nests, ":N" picks index.')
+    .meta({ examples: ['LoginForm', 'Button:1/Pressable', 'TabBar/TabBarItem:2'] })
+    .optional(),
 };
 
 // Resolve a single `Name:N` segment of a `within` path. Tries mcpId →

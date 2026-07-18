@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import { type HostToolHandler } from '@/server/host/types';
 
 /**
@@ -45,6 +47,6 @@ export const connectionStatusTool = (): HostToolHandler => {
         }),
       };
     },
-    inputSchema: {},
+    inputSchema: z.looseObject({}),
   };
 };

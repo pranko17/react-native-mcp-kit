@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import {
   type EnrichedAndroidDevice,
   type EnrichedDeviceList,
@@ -32,14 +34,15 @@ export const listDevicesTool = (runner: ProcessRunner): HostToolHandler => {
       const all = await enrichDevicesWithClientStatus(ctx.bridge, runner);
       return args.connected === true ? filterConnected(all) : all;
     },
-    inputSchema: {
-      connected: {
-        default: false,
-        description:
-          'When true, drop devices without an attached MCP client. Error envelopes for each platform are preserved.',
-        type: 'boolean',
-      },
-    },
+    inputSchema: z.looseObject({
+      connected: z
+        .boolean()
+        .describe(
+          'When true, drop devices without an attached MCP client. Error envelopes for each platform are preserved.'
+        )
+        .meta({ default: false })
+        .optional(),
+    }),
     timeout: SCREENSHOT_TIMEOUT_MS,
   };
 };

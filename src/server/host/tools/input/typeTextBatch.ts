@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import { resolveDevice } from '@/server/host/deviceResolver';
 import {
   NATIVE_ID_SCHEMA,
@@ -25,9 +27,9 @@ interface BatchField {
 
 export const typeTextBatchTool = (runner: ProcessRunner): HostToolHandler => {
   return {
-    description: `Primary way to fill multiple text fields in one call. Each field: { x, y, text, submit? }. For each entry — tap to focus, wait focusDelayMs, then type via the same semantics as host__type_text (select-all → paste on iOS; adb input text on Android). Stops on the first error and returns { filled, failedAt, error? }.
+    description: `Primary way to fill multiple text fields in one call. For each entry — tap to focus, wait focusDelayMs, then type via the same semantics as host__type_text (select-all → paste on iOS; adb input text on Android). Stops on the first error and returns { filled, failedAt, error? }.
 
-focusDelayMs default is ${BATCH_FOCUS_DELAY_DEFAULT_MS}ms — tuned for in-place TextInputs (login / signup forms, already-mounted fields). When the tap triggers a screen transition (e.g. searchBar → SearchScreen) the target input won't be mounted yet and the typed text is lost; bump focusDelayMs to 700-800. Set to 0 when the input is already focused.`,
+The default focusDelayMs is tuned for in-place TextInputs (login / signup forms, already-mounted fields). When the tap triggers a screen transition (e.g. searchBar → SearchScreen) the target input won't be mounted yet and the typed text is lost; bump focusDelayMs to 700-800. Set to 0 when the input is already focused.`,
     handler: async (args, ctx) => {
       const resolved = await resolveDevice(ctx, parseResolveOptions(args), runner);
       if (!resolved.ok) {
@@ -93,39 +95,38 @@ focusDelayMs default is ${BATCH_FOCUS_DELAY_DEFAULT_MS}ms — tuned for in-place
 
       return { device: resolved.device, fields: results, filled: results.length };
     },
-    inputSchema: {
-      fields: {
-        description:
-          'Ordered list of { x, y, text, submit? } entries. Each entry taps the coordinate to focus the input, waits focusDelayMs, then types the text.',
-        examples: [
-          [
-            { text: 'alice@example.com', x: 120, y: 400 },
-            { submit: true, text: 'pa55word', x: 120, y: 520 },
+    inputSchema: z.looseObject({
+      fields: z
+        .array(
+          z.looseObject({
+            submit: z.boolean().meta({ default: false }).optional(),
+            text: z.string(),
+            x: z.number().min(0),
+            y: z.number().min(0),
+          })
+        )
+        .min(1)
+        .describe(
+          'Ordered list of fields to fill. Each entry taps the coordinate to focus the input, waits focusDelayMs, then types the text.'
+        )
+        .meta({
+          examples: [
+            [
+              { text: 'alice@example.com', x: 120, y: 400 },
+              { submit: true, text: 'pa55word', x: 120, y: 520 },
+            ],
           ],
-        ],
-        items: {
-          properties: {
-            submit: { default: false, type: 'boolean' },
-            text: { type: 'string' },
-            x: { minimum: 0, type: 'number' },
-            y: { minimum: 0, type: 'number' },
-          },
-          required: ['x', 'y', 'text'],
-          type: 'object',
-        },
-        minItems: 1,
-        type: 'array',
-      },
-      focusDelayMs: {
-        default: BATCH_FOCUS_DELAY_DEFAULT_MS,
-        description: 'Delay between tap and type. Use 0 to skip when the input is already focused.',
-        maximum: BATCH_FOCUS_DELAY_MAX_MS,
-        minimum: 0,
-        type: 'number',
-      },
+        }),
+      focusDelayMs: z
+        .number()
+        .min(0)
+        .max(BATCH_FOCUS_DELAY_MAX_MS)
+        .describe('Delay between tap and type. Use 0 to skip when the input is already focused.')
+        .meta({ default: BATCH_FOCUS_DELAY_DEFAULT_MS })
+        .optional(),
       platform: PLATFORM_ARG_SCHEMA,
       ...NATIVE_ID_SCHEMA,
-    },
+    }),
     timeout: INPUT_TIMEOUT_MS * 6,
   };
 };

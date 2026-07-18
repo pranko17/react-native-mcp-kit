@@ -47,7 +47,7 @@ interface McpModule {
 interface ToolHandler {
   description: string;
   handler: (args: Record<string, unknown>) => unknown | Promise<unknown>;
-  inputSchema?: Record<string, unknown>;
+  inputSchema?: ZodType;
   timeout?: number;   // per-tool timeout in ms (default: 10s)
 }
 ```

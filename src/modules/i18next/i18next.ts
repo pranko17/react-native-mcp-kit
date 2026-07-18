@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import { type McpModule } from '@/client/models/types';
 
 import { type I18nLike } from './types';
@@ -39,14 +41,14 @@ flat.`,
           await i18n.changeLanguage(args.language as string);
           return { language: i18n.language, success: true };
         },
-        inputSchema: {
-          language: {
-            description: 'Language code.',
-            examples: ['en', 'de', 'fr'],
-            minLength: 1,
-            type: 'string',
-          },
-        },
+        inputSchema: z.looseObject({
+          language: z
+            .string()
+            .min(1)
+            .describe('Language code.')
+            .meta({ examples: ['en', 'de', 'fr'] })
+            .optional(),
+        }),
       },
       get_info: {
         description: 'Current language + available languages + registered namespaces.',
@@ -67,16 +69,16 @@ flat.`,
           if (!resource) return { error: `No resource for ${lng}/${ns}` };
           return { keys: flattenKeys(resource), language: lng, namespace: ns };
         },
-        inputSchema: {
-          language: {
-            description: 'Language code. Defaults to the current language.',
-            type: 'string',
-          },
-          namespace: {
-            description: 'Namespace. Defaults to the first registered namespace.',
-            type: 'string',
-          },
-        },
+        inputSchema: z.looseObject({
+          language: z
+            .string()
+            .describe('Language code. Defaults to the current language.')
+            .optional(),
+          namespace: z
+            .string()
+            .describe('Namespace. Defaults to the first registered namespace.')
+            .optional(),
+        }),
       },
       get_resource: {
         description: 'Full translation resource object for a language + namespace.',
@@ -87,16 +89,16 @@ flat.`,
           if (!resource) return { error: `No resource for ${lng}/${ns}` };
           return { language: lng, namespace: ns, resource };
         },
-        inputSchema: {
-          language: {
-            description: 'Language code. Defaults to the current language.',
-            type: 'string',
-          },
-          namespace: {
-            description: 'Namespace. Defaults to the first registered namespace.',
-            type: 'string',
-          },
-        },
+        inputSchema: z.looseObject({
+          language: z
+            .string()
+            .describe('Language code. Defaults to the current language.')
+            .optional(),
+          namespace: z
+            .string()
+            .describe('Namespace. Defaults to the first registered namespace.')
+            .optional(),
+        }),
       },
       search: {
         description:
@@ -119,17 +121,13 @@ flat.`,
           }
           return results;
         },
-        inputSchema: {
-          language: {
-            description: 'Language code. Defaults to the current language.',
-            type: 'string',
-          },
-          query: {
-            description: 'Substring to match against keys and values.',
-            minLength: 1,
-            type: 'string',
-          },
-        },
+        inputSchema: z.looseObject({
+          language: z
+            .string()
+            .describe('Language code. Defaults to the current language.')
+            .optional(),
+          query: z.string().min(1).describe('Substring to match against keys and values.'),
+        }),
       },
       translate: {
         description: 'Translate a key, with optional interpolation.',
@@ -145,19 +143,19 @@ flat.`,
           }
           return { key, value: i18n.t(key, options) };
         },
-        inputSchema: {
-          key: {
-            description: 'Translation key.',
-            examples: ['auth:login.title', 'common:ok'],
-            minLength: 1,
-            type: 'string',
-          },
-          options: {
-            description: 'Interpolation options (JSON string).',
-            examples: ['{"name":"John"}'],
-            type: 'string',
-          },
-        },
+        inputSchema: z.looseObject({
+          key: z
+            .string()
+            .min(1)
+            .describe('Translation key.')
+            .meta({ examples: ['auth:login.title', 'common:ok'] })
+            .optional(),
+          options: z
+            .string()
+            .describe('Interpolation options (JSON string).')
+            .meta({ examples: ['{"name":"John"}'] })
+            .optional(),
+        }),
       },
     },
   };

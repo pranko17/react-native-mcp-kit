@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import { resolveDevice } from '@/server/host/deviceResolver';
 import {
   NATIVE_ID_SCHEMA,
@@ -14,7 +16,8 @@ import { INPUT_TIMEOUT_MS, KEY_NAMES } from './constants';
 
 export const pressKeyTool = (runner: ProcessRunner): HostToolHandler => {
   return {
-    description: `Primary way to press a hardware / semantic key — routes through the OS so native handlers (back, home, volume, etc.) fire. Accepted: ${KEY_NAMES.join(', ')}. iOS lacks back / menu / power / volume_up / volume_down.`,
+    description:
+      'Primary way to press a hardware / semantic key — routes through the OS so native handlers (back, home, volume, etc.) fire. iOS lacks back / menu / power / volume_up / volume_down.',
     handler: async (args, ctx) => {
       const resolved = await resolveDevice(ctx, parseResolveOptions(args), runner);
       if (!resolved.ok) {
@@ -33,15 +36,13 @@ export const pressKeyTool = (runner: ProcessRunner): HostToolHandler => {
       }
       return { device: resolved.device, key, pressed: true };
     },
-    inputSchema: {
-      key: {
-        description: `Semantic key name. Mapped to the target platform's native key code internally. Supported: ${KEY_NAMES.join(', ')}.`,
-        enum: KEY_NAMES,
-        type: 'string',
-      },
+    inputSchema: z.looseObject({
+      key: z
+        .enum(KEY_NAMES as [string, ...string[]])
+        .describe("Semantic key name. Mapped to the target platform's native key code internally."),
       platform: PLATFORM_ARG_SCHEMA,
       ...NATIVE_ID_SCHEMA,
-    },
+    }),
     timeout: INPUT_TIMEOUT_MS,
   };
 };

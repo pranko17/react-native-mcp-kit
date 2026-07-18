@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import { resolveDevice } from '@/server/host/deviceResolver';
 import {
   NATIVE_ID_SCHEMA,
@@ -75,28 +77,28 @@ export const dragTool = (runner: ProcessRunner): HostToolHandler => {
         totalMs: total,
       };
     },
-    inputSchema: {
-      durationMs: {
-        default: DRAG_MOVE_DEFAULT_MS,
-        description: 'Move portion in milliseconds.',
-        maximum: SWIPE_DURATION_MAX_MS,
-        minimum: SWIPE_DURATION_MIN_MS,
-        type: 'number',
-      },
-      holdMs: {
-        default: DRAG_HOLD_DEFAULT_MS,
-        description: 'Hold time near start before the motion. 0 to skip hold.',
-        maximum: SWIPE_DURATION_MAX_MS,
-        minimum: 0,
-        type: 'number',
-      },
+    inputSchema: z.looseObject({
+      durationMs: z
+        .number()
+        .min(SWIPE_DURATION_MIN_MS)
+        .max(SWIPE_DURATION_MAX_MS)
+        .describe('Move portion in milliseconds.')
+        .meta({ default: DRAG_MOVE_DEFAULT_MS })
+        .optional(),
+      holdMs: z
+        .number()
+        .min(0)
+        .max(SWIPE_DURATION_MAX_MS)
+        .describe('Hold time near start before the motion. 0 to skip hold.')
+        .meta({ default: DRAG_HOLD_DEFAULT_MS })
+        .optional(),
       platform: PLATFORM_ARG_SCHEMA,
-      x1: { description: 'Start x pixel coordinate.', minimum: 0, type: 'number' },
-      x2: { description: 'End x pixel coordinate.', minimum: 0, type: 'number' },
-      y1: { description: 'Start y pixel coordinate.', minimum: 0, type: 'number' },
-      y2: { description: 'End y pixel coordinate.', minimum: 0, type: 'number' },
+      x1: z.number().min(0).describe('Start x pixel coordinate.'),
+      x2: z.number().min(0).describe('End x pixel coordinate.'),
+      y1: z.number().min(0).describe('Start y pixel coordinate.'),
+      y2: z.number().min(0).describe('End y pixel coordinate.'),
       ...NATIVE_ID_SCHEMA,
-    },
+    }),
     timeout: INPUT_TIMEOUT_MS + SWIPE_DURATION_MAX_MS,
   };
 };
