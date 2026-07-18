@@ -11,7 +11,7 @@ The in-app side of the bridge. Owns the singleton `McpClient`, the `<McpProvider
 - `useMcpTool`, `useMcpModule` — registration hooks.
 - Types: `McpContextValue`, `McpProviderProps`, `McpModule`, `ToolHandler`.
 
-`McpModule` / `ToolHandler` ([`models/types.ts`](models/types.ts)) is the contract every module fulfils — `{ name, tools: Record<string, ToolHandler>, description? }` with `ToolHandler = { description, handler, inputSchema?, timeout? }`. The optional `description` is markdown and surfaces in `list_tools`.
+`McpModule` / `ToolHandler` ([`models/types.ts`](models/types.ts)) is the contract every module fulfils — `{ name, tools: Record<string, ToolHandler>, description? }` with `ToolHandler = { description, handler, inputSchema?, timeout? }`. The optional `description` is markdown; per-tool `description` + `inputSchema` surface directly in the agent's MCP catalog.
 
 ## `<McpProvider>` — the entry point
 
@@ -94,8 +94,8 @@ In the constructor (`McpClient.ts:157-194`) the client wires three handlers on a
 
 ### Module / tool registration API
 
-- `registerModule(module)` / `registerModules(modules)` (`McpClient.ts:285-329`) → `moduleRunner.registerModules` then `sendRegistration`. **Each returns a disposer** `() => void` that removes the just-registered module(s) from `ModuleRunner` and re-blasts `sendRegistration`; since the server full-replaces its module list on every registration (`bridge.ts:252`), the module drops out of `list_tools` / `call`. `unregisterModule(name)` / `unregisterModules(names)` (`McpClient.ts:314-329`) expose the same removal by name without holding the disposer — symmetric with the dynamic-tool pair.
-- `registerTool(name, tool)` (`McpClient.ts:331`) — for dynamic tools from `useMcpTool`. Stores in `moduleRunner.dynamicTools` (no module namespace), then sends a `tool_register` message with `module: "__dynamic"` (i.e. `${MODULE_SEPARATOR}dynamic`). Server-side, the tool becomes callable as `call(tool: "__dynamic__<name>")` — the prefix is `DYNAMIC_PREFIX = "__dynamic__"` from `shared/protocol.ts:15`. They show up in `list_tools` under `(dynamic)`.
+- `registerModule(module)` / `registerModules(modules)` (`McpClient.ts:285-329`) → `moduleRunner.registerModules` then `sendRegistration`. **Each returns a disposer** `() => void` that removes the just-registered module(s) from `ModuleRunner` and re-blasts `sendRegistration`; since the server full-replaces its module list on every registration (`bridge.ts:252`), the module's tools drop out of the MCP catalog. `unregisterModule(name)` / `unregisterModules(names)` (`McpClient.ts:314-329`) expose the same removal by name without holding the disposer — symmetric with the dynamic-tool pair.
+- `registerTool(name, tool)` (`McpClient.ts:331`) — for dynamic tools from `useMcpTool`. Stores in `moduleRunner.dynamicTools` (no module namespace), then sends a `tool_register` message with `module: "__dynamic"` (i.e. `${MODULE_SEPARATOR}dynamic`). Server-side, the tool registers in the MCP catalog under `__dynamic__<name>` — the prefix is `DYNAMIC_PREFIX = "__dynamic__"` from `shared/protocol.ts:15`.
 - `unregisterTool(name)` (`McpClient.ts:345`) — symmetric `tool_unregister`.
 
 ## `useMcpTool` / `useMcpModule`

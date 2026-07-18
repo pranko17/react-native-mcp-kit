@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 
 import { WebSocketServer } from 'ws';
 import { type WebSocket } from 'ws';
@@ -69,7 +70,32 @@ interface DisconnectedClient {
   timer: ReturnType<typeof setTimeout>;
 }
 
-export class Bridge {
+/**
+ * Lifecycle events emitted by `Bridge`. The `McpServerWrapper` subscribes to
+ * these to keep its top-level tool registry in sync with connected RN clients
+ * and their `useMcpTool`-driven dynamic tools.
+ *
+ * Snapshots are captured before the corresponding mutation so subscribers can
+ * diff or release deterministically (`clientReregistered` carries the
+ * pre-mutation module list, `clientRemoved` carries the modules + dynamics
+ * that existed at disconnect time). A sticky reconnect re-emits `clientAdded`
+ * with the reused ID and a fresh (empty) dynamicTools map — the app re-sends
+ * its `tool_register` messages after reconnecting.
+ */
+export interface BridgeEvents {
+  bridgeStopping: [];
+  clientAdded: [client: ClientEntry];
+  clientRemoved: [
+    clientId: string,
+    modulesSnapshot: ModuleDescriptor[],
+    dynamicSnapshot: Map<string, DynamicToolEntry>,
+  ];
+  clientReregistered: [client: ClientEntry, prevModules: ModuleDescriptor[]];
+  dynamicToolAdded: [client: ClientEntry, fullName: string, entry: DynamicToolEntry];
+  dynamicToolRemoved: [client: ClientEntry, fullName: string];
+}
+
+export class Bridge extends EventEmitter<BridgeEvents> {
   private wss: WebSocketServer | null = null;
   private clients = new Map<string, ClientEntry>();
   private disconnectedClients = new Map<string, DisconnectedClient>();
@@ -77,7 +103,9 @@ export class Bridge {
   private platformSequences = new Map<string, number>();
   private pendingRequests = new Map<string, PendingRequest>();
 
-  constructor(private readonly port: number) {}
+  constructor(private readonly port: number) {
+    super();
+  }
 
   async start(): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -114,6 +142,12 @@ export class Bridge {
           const clientId = this.socketToClientId.get(ws);
           if (!clientId) return;
           const entry = this.clients.get(clientId);
+          // Snapshot modules + dynamic tools BEFORE the maps mutate so
+          // subscribers can release their per-tool refcounts deterministically.
+          const modulesSnapshot = entry ? [...entry.modules] : [];
+          const dynamicSnapshot = entry
+            ? new Map(entry.dynamicTools)
+            : new Map<string, DynamicToolEntry>();
           this.clients.delete(clientId);
           this.socketToClientId.delete(ws);
           this.rejectPendingForClient(clientId, `Client '${clientId}' disconnected`);
@@ -130,6 +164,7 @@ export class Bridge {
             timer.unref?.();
             this.disconnectedClients.set(clientId, { disconnectedAt: Date.now(), entry, timer });
           }
+          this.emit('clientRemoved', clientId, modulesSnapshot, dynamicSnapshot);
         });
       });
 
@@ -146,6 +181,7 @@ export class Bridge {
   }
 
   async stop(): Promise<void> {
+    this.emit('bridgeStopping');
     this.rejectAllPending('Server stopping');
     for (const ghost of this.disconnectedClients.values()) {
       clearTimeout(ghost.timer);
@@ -291,7 +327,9 @@ export class Bridge {
           // Identity metadata is fixed for the lifetime of the connection.
           const existing = this.clients.get(existingId);
           if (existing) {
+            const prevModules = [...existing.modules];
             existing.modules = message.modules;
+            this.emit('clientReregistered', existing, prevModules);
           }
           break;
         }
@@ -326,6 +364,7 @@ export class Bridge {
         };
         this.clients.set(id, entry);
         this.socketToClientId.set(socket, id);
+        this.emit('clientAdded', entry);
         break;
       }
       case 'tool_response': {
@@ -345,11 +384,13 @@ export class Bridge {
         const client = this.clientForSocket(socket);
         if (client) {
           const fullName = `${message.module}${MODULE_SEPARATOR}${message.tool.name}`;
-          client.dynamicTools.set(fullName, {
+          const entry: DynamicToolEntry = {
             description: message.tool.description,
             inputSchema: message.tool.inputSchema,
             module: message.module,
-          });
+          };
+          client.dynamicTools.set(fullName, entry);
+          this.emit('dynamicToolAdded', client, fullName, entry);
         }
         break;
       }
@@ -357,7 +398,9 @@ export class Bridge {
         const client = this.clientForSocket(socket);
         if (client) {
           const fullName = `${message.module}${MODULE_SEPARATOR}${message.toolName}`;
-          client.dynamicTools.delete(fullName);
+          if (client.dynamicTools.delete(fullName)) {
+            this.emit('dynamicToolRemoved', client, fullName);
+          }
         }
         break;
       }

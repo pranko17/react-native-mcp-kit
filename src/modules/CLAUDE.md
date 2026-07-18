@@ -8,11 +8,11 @@ Each module has its own `CLAUDE.md` with the concrete tool list, defaults, edge 
 
 A few factory names diverge from the registered module name. Agents reach a tool through the **registered** name:
 
-| Factory             | Registered name | Example call                          |
-| ------------------- | --------------- | ------------------------------------- |
-| `i18nextModule`     | `i18n`          | `call(tool: "i18n__translate")`       |
-| `reactQueryModule`  | `query`         | `call(tool: "query__get_data")`       |
-| `logBoxModule`      | `log_box`       | `call(tool: "log_box__get_logs")`     |
+| Factory             | Registered name | Example tool           |
+| ------------------- | --------------- | ---------------------- |
+| `i18nextModule`     | `i18n`          | `i18n__translate`      |
+| `reactQueryModule`  | `query`         | `query__get_data`      |
+| `logBoxModule`      | `log_box`       | `log_box__get_logs`    |
 
 All other modules use their factory's base name (e.g. `networkModule` → `network`).
 
@@ -52,7 +52,7 @@ interface ToolHandler {
 }
 ```
 
-The module `description` is markdown and surfaces in `list_tools` output. Use it for any non-obvious behaviour (defaults, mode flags, output shape) — see `fiberTreeModule` for the most elaborate example. Per-tool `description` shows up in `describe_tool`.
+The module `description` is markdown. Per-tool `description` + `inputSchema` surface directly in the agent's MCP catalog (tools are registered top-level) — use them for any non-obvious behaviour (defaults, mode flags, output shape); see `fiberTreeModule` for the most elaborate example.
 
 Returning `null` / `undefined` is fine. Throwing turns into a `tool_response` with `error: error.message`. Tools that need more than 10s for the agent to wait should set an explicit `timeout` (e.g. `alert.show` uses 60s).
 

@@ -1,7 +1,5 @@
-import { MODULE_SEPARATOR } from '@/shared/protocol';
-
-import { type Bridge, type ClientEntry } from './bridge';
-import { type HostModule, type HostToolHandler } from './host/types';
+import { type Bridge } from './bridge';
+import { type HostToolHandler } from './host/types';
 
 export type TextContent = { text: string; type: 'text' };
 export type ImageContent = { data: string; mimeType: string; type: 'image' };
@@ -13,28 +11,13 @@ export interface HostToolEntry {
   timeout?: number;
 }
 
-export interface ToolDescriptorShape {
-  description: string;
-  name: string;
-  inputSchema?: Record<string, unknown>;
-}
-
-export interface ToolGroup {
-  description: string | undefined;
-  module: string;
-  tools: Array<{
-    description: string;
-    name: string;
-    inputSchema?: Record<string, unknown>;
-  }>;
-}
-
 export type DispatchResult = { ok: true; result: unknown } | { error: string; ok: false };
 
 /**
- * Shared state passed to every MCP tool registration in `src/server/tools/`.
- * The McpServerWrapper constructs one and hands it to each `register<Tool>`
- * function so the tool files stay decoupled from the class.
+ * Shared state passed to the MCP tool registrations in `src/server/tools/`
+ * (`wait_until`, `assert`). The McpServerWrapper constructs one and hands it
+ * to each `register<Tool>` function so the tool files stay decoupled from the
+ * class.
  */
 export interface ServerContext {
   bridge: Bridge;
@@ -43,10 +26,6 @@ export interface ServerContext {
     args: Record<string, unknown>,
     clientId?: string
   ) => Promise<DispatchResult>;
-  formatResult: (result: unknown) => Array<TextContent | ImageContent>;
-  hostModules: HostModule[];
-  hostToolMap: Map<string, HostToolEntry>;
-  listToolGroups: (client: ClientEntry) => ToolGroup[];
 }
 
 export const jsonError = (msg: string): { content: TextContent[] } => {
@@ -243,11 +222,11 @@ export const buildBroadcastContent = (
  */
 export const detectShadowedOuterArgs = (
   args: Record<string, unknown>,
-  outer: 'call' | 'wait_until' | 'assert',
+  outer: 'wait_until' | 'assert',
   tool: string
 ): string | null => {
   if ('clientId' in args) {
-    return `clientId belongs to the outer ${outer}() argument, not to args. Use ${outer}({ clientId: "...", tool: "${tool}", args: { ...the tool's own args } }). The tool's inputSchema (see describe_tool) never includes clientId — it's resolved by ${outer} itself before dispatch.`;
+    return `clientId belongs to the outer ${outer}() argument, not to args. Use ${outer}({ clientId: "...", tool: "${tool}", args: { ...the tool's own args } }). The clientId field you see in the tool's own catalog schema applies only to direct invocation — when wrapping with ${outer}, the wrapper resolves the client before dispatch.`;
   }
   return null;
 };
@@ -296,106 +275,6 @@ export const canonicalize = (value: unknown): string => {
     }
     return v;
   });
-};
-
-/**
- * Produces a canonical key for a ToolGroup that's independent of tool
- * registration order. Two modules with the same name + tools (regardless of
- * order) + descriptions + schemas produce the same key.
- */
-export const canonicalizeGroup = (group: ToolGroup): string => {
-  const normalized = {
-    description: group.description,
-    module: group.module,
-    tools: [...group.tools].sort((a, b) => {
-      return a.name.localeCompare(b.name);
-    }),
-  };
-  return canonicalize(normalized);
-};
-
-/**
- * Looks up a full tool descriptor on a client by its full name
- * (`module__method`). Checks both static modules and dynamic tools registered
- * via useMcpTool. Returns null if the tool is not on this client.
- */
-export const findToolInClient = (
-  client: ClientEntry,
-  toolFullName: string
-): ToolDescriptorShape | null => {
-  for (const mod of client.modules) {
-    const prefix = `${mod.name}${MODULE_SEPARATOR}`;
-    if (toolFullName.startsWith(prefix)) {
-      const methodName = toolFullName.slice(prefix.length);
-      const toolDef = mod.tools.find((t) => {
-        return t.name === methodName;
-      });
-      if (toolDef) {
-        return {
-          description: toolDef.description,
-          inputSchema: toolDef.inputSchema,
-          name: toolFullName,
-        };
-      }
-    }
-  }
-
-  const dynamicEntry = client.dynamicTools.get(toolFullName);
-  if (dynamicEntry) {
-    return {
-      description: dynamicEntry.description,
-      inputSchema: dynamicEntry.inputSchema,
-      name: toolFullName,
-    };
-  }
-
-  return null;
-};
-
-/**
- * Builds the per-client list of ToolGroup entries that `list_tools` deduplicates
- * across clients. Static modules are passed through; dynamic tools are grouped
- * under a synthetic `<module> (dynamic)` group per source module.
- */
-export const buildToolGroups = (client: ClientEntry): ToolGroup[] => {
-  const groups: ToolGroup[] = client.modules.map((mod) => {
-    return {
-      description: mod.description,
-      module: mod.name,
-      tools: mod.tools.map((t) => {
-        return {
-          description: t.description,
-          inputSchema: t.inputSchema,
-          name: `${mod.name}${MODULE_SEPARATOR}${t.name}`,
-        };
-      }),
-    };
-  });
-
-  if (client.dynamicTools.size > 0) {
-    const dynamicByModule = new Map<
-      string,
-      Array<{ description: string; name: string; inputSchema?: Record<string, unknown> }>
-    >();
-    for (const [fullName, info] of client.dynamicTools) {
-      const existing = dynamicByModule.get(info.module) ?? [];
-      existing.push({
-        description: info.description,
-        inputSchema: info.inputSchema,
-        name: fullName,
-      });
-      dynamicByModule.set(info.module, existing);
-    }
-    for (const [module, dynTools] of dynamicByModule) {
-      groups.push({
-        description: 'Dynamically registered tools from useMcpTool hooks',
-        module: `${module} (dynamic)`,
-        tools: dynTools,
-      });
-    }
-  }
-
-  return groups;
 };
 
 /**

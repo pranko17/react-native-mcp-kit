@@ -6,56 +6,46 @@ Multiple React Native apps can connect simultaneously — each is identified by 
 
 ## How to interact
 
-Core loop: \`connection_status\` (who's connected) → \`list_tools\` / \`describe_tool\` (find the tool + its args) → \`call\` (act) → \`wait_until\` / \`assert\` (verify).
+Every tool is top-level: module tools shipped by the app (\`fiber_tree${MODULE_SEPARATOR}query\`, \`network${MODULE_SEPARATOR}get_requests\`, \`navigation${MODULE_SEPARATOR}navigate\`, ...), dynamic tools registered via \`useMcpTool\`, and host tools (\`host${MODULE_SEPARATOR}screenshot\`, \`host${MODULE_SEPARATOR}tap_fiber\`, \`metro${MODULE_SEPARATOR}reload\`, ...) are all first-class MCP tools — invoke them directly by name with their full schema visible in your catalog. No proxy layer.
 
-1. Use \`connection_status\` to check connected clients — each has a lifecycle \`status\` (\`active\` / \`background\` / \`inactive\`), plus a \`disconnected\` array of recently-closed clients (held ~1h, with \`expiresInMs\`). Not \`active\`? See "App not \`active\`?" below.
-2. Use \`list_tools\` to browse all available tool names and short descriptions. The response is compact — modules that are structurally identical across multiple clients are deduplicated into a single entry with a \`clientIds\` array, and input schemas are omitted. Narrow the listing with \`{ module }\` or \`{ clientId }\`, or pass \`{ compact: true }\` to drop module-level descriptions.
-3. Use \`describe_tool\` with \`{ tool, clientId? }\` to fetch the full input schema of a specific tool before calling it. Required when you need to know the argument shape. Host tools are resolved directly (no clientId needed). For in-app tools, omit \`clientId\` to auto-pick; specify it only when multiple clients have the same tool with different schemas.
-4. Use \`call\` to invoke any tool with format: module${MODULE_SEPARATOR}method (e.g. navigation${MODULE_SEPARATOR}navigate). When more than one client is connected, specify \`clientId\`. When exactly one client is connected, \`clientId\` is optional — it's auto-picked. \`args\` accepts either a plain object or a JSON string — prefer objects to avoid quote escaping.
-5. Use \`wait_until\` to poll any tool until a predicate over its result holds (or timeout). Replaces "screenshot in a loop + sleep" for state-level waits ("wait for network to idle", "wait for state key X to become Y"). Predicate supports compound forms: { all: [...] } (AND), { any: [...] } (OR), { not: predicate }.
-6. For UI-level waits ("wait for a screen to appear", "wait for a spinner to disappear") use \`fiber_tree${MODULE_SEPARATOR}query\` with \`waitFor: { until: "appear" | "disappear", timeout?, interval?, stable? }\` — it polls the same query with cache bypassed until the target state holds. \`stable: <ms>\` requires continuous presence/absence for that many ms to ignore transient matches during screen transitions.
-7. Use \`assert\` for a single-shot checkpoint after actions — same predicate vocabulary as wait_until, returns { pass, actual, expected?, result? }. Natural pair: do action → wait_until / fiber_tree waitFor → assert.
+1. Use \`host${MODULE_SEPARATOR}connection_status\` to check connected clients — each has a lifecycle \`status\` (\`active\` / \`background\` / \`inactive\`), plus a \`disconnected\` array of recently-closed clients (held ~1h, with \`expiresInMs\`). Not \`active\`? See "App not \`active\`?" below.
+2. Invoke tools directly. Every tool accepts an optional \`clientId\` arg — omit it with a single client connected (auto-picks); with several, omitting returns an error listing available IDs.
+3. Use \`wait_until\` to poll any tool until a predicate over its result holds (or timeout). Replaces "screenshot in a loop + sleep" for state-level waits ("wait for network to idle", "wait for state key X to become Y"). Predicate supports compound forms: { all: [...] } (AND), { any: [...] } (OR), { not: predicate }.
+4. For UI-level waits ("wait for a screen to appear", "wait for a spinner to disappear") use \`fiber_tree${MODULE_SEPARATOR}query\` with \`waitFor: { until: "appear" | "disappear", timeout?, interval?, stable? }\` — it polls the same query with cache bypassed until the target state holds. \`stable: <ms>\` requires continuous presence/absence for that many ms to ignore transient matches during screen transitions.
+5. Use \`assert\` for a single-shot checkpoint after actions — same predicate vocabulary as wait_until, returns { pass, actual, expected?, result? }. Natural pair: do action → wait_until / fiber_tree waitFor → assert.
 
-### Outer vs inner args — \`clientId\` is always outer
+The tool catalog updates live: tools appear when RN clients connect (or components mount \`useMcpTool\`) and disappear on disconnect — the server emits \`notifications/tools/list_changed\`. If the catalog feels stale after an app reload, re-check \`host${MODULE_SEPARATOR}connection_status\`.
 
-\`call\` / \`wait_until\` / \`assert\` are wrappers. Each invocation has two argument layers, never mixed:
+### \`clientId\` — routing and broadcast
 
-  • **Outer** — fields on the wrapper itself: \`tool\`, \`args\`, \`clientId\`, plus \`predicate\` / \`timeoutMs\` / \`intervalMs\` (wait_until), \`predicate\` / \`message\` (assert).
-  • **Inner** — what goes inside the wrapper's \`args\` object: ONLY the keys listed in the target tool's own inputSchema (see \`describe_tool\`).
+Every tool's \`clientId\` accepts a string, a \`/body/flags\` regex literal, or an array (literals and regex mixed). A plain string keeps the single-client shape (image content passes through). Regex and array forms switch into broadcast mode — every matching connected client is dispatched in parallel. Same regex slash form as fiber_tree hook filters and log_box ignore patterns.
 
-\`clientId\` is wrapper-level. In-app tools (\`fiber_tree__query\`, \`navigation__navigate\`, \`network__get_requests\`, …) do NOT carry \`clientId\` in their own inputSchema — the wrapper resolves the target client before dispatching. Putting \`clientId\` inside \`args\` is a hard error with a remediation hint; don't do it.
+  \`host${MODULE_SEPARATOR}screenshot({ clientId: ["ios-1", "android-1"] })\`   — two screenshots in one response
+  \`host${MODULE_SEPARATOR}screenshot({ clientId: "/^ios/" })\`                — broadcast to every connected iOS client
+  \`fiber_tree${MODULE_SEPARATOR}query({ clientId: "/./", mcpId: "checkout:button:submit" })\` — query every connected client
 
-  Wrong:  \`call({ tool: "fiber_tree${MODULE_SEPARATOR}query", args: { clientId: "ios-1", scope: "root" } })\`
-  Right:  \`call({ clientId: "ios-1", tool: "fiber_tree${MODULE_SEPARATOR}query", args: { scope: "root" } })\`
-
-Same rule for \`wait_until\` and \`assert\`.
-
-### Broadcast — same call on several clients
-
-\`call\`, \`wait_until\` and \`assert\` accept \`clientId\` as a string, a \`/body/flags\` regex literal, or an array (literals and regex mixed). A plain string keeps the single-client shape (image content passes through). Regex and array forms switch into broadcast mode — every matching connected client is dispatched in parallel. Same regex slash form as fiber_tree hook filters and log_box ignore patterns.
-
-  \`call({ clientId: ["ios-1", "android-1"], tool: "host${MODULE_SEPARATOR}screenshot" })\`          — two screenshots in one response
-  \`call({ clientId: "/^ios/", tool: "host${MODULE_SEPARATOR}screenshot" })\`                       — broadcast to every connected iOS client
-  \`wait_until({ clientId: ["ios-1", "android-1"], tool: "navigation${MODULE_SEPARATOR}get_current_route", predicate: { op: "equals", path: "name", value: "CART" } })\`  — wait until both clients land on CART
-  \`assert({ clientId: "/./", tool: "fiber_tree${MODULE_SEPARATOR}query", args: { mcpId: "checkout:button:submit" }, predicate: { op: "exists" } })\`                     — the same fiber exists on every connected client
-
-Broadcast result shapes (each carries top-level counters so you can pick out failures without scanning per-client):
-  \`call\` — text-only: \`{ okCount, failedCount, results: [{ clientId, ok, result | error }, ...] }\`. Image results: a summary text block \`Broadcast: N ok, M failed (T clients).\` precedes per-client \`## <clientId>\` headers + blocks.
-  \`wait_until\` — \`{ ok, okCount, failedCount, perClient: [{ clientId, ok, attempts, elapsedMs, matched? | lastResult, lastError?, reason? }, ...] }\`; overall \`ok\` is true only if every client matched within the shared timeout.
-  \`assert\` — \`{ pass, passedCount, failedCount, perClient: [{ clientId, pass, actual?, expected?, op?, path?, message?, result?, error? }, ...] }\`; overall \`pass\` is true only when every client passed.
-
-\`list_tools\` and \`describe_tool\` accept the same regex / array forms — there they narrow the considered client set (filter / canonicalisation pool) rather than triggering a broadcast.
+Broadcast result shape — text-only: \`{ okCount, failedCount, results: [{ clientId, ok, result | error }] }\`; image results: a summary text block \`Broadcast: N ok, M failed (T clients).\` precedes per-client \`## <clientId>\` headers + blocks.
 
 Regex form details:
   • A leading \`/\` plus a trailing \`/<flags>\` switches the string into regex mode. Flags from \`[gimsuy]\`. Anything else is treated as a literal client ID.
   • Pattern is matched against connected client IDs (\`ios-1\`, \`android-2\`, …). \`"/./"\` matches every connected client; \`"/^ios/"\` only iOS; \`"/-1$/"\` only the first client per platform.
   • Pattern that matches zero connected clients returns an error up front — broadcasting to nobody is almost always a mistake. Literals that are unconnected still fall through to the per-client error in the broadcast envelope (matches the not-fail-fast contract).
 
+### \`wait_until\` / \`assert\` — clientId is outer, args are inner
+
+\`wait_until\` and \`assert\` are wrappers around another tool. Each invocation has two argument layers, never mixed:
+
+  • **Outer** — fields on the wrapper itself: \`tool\`, \`args\`, \`clientId\`, plus \`predicate\` / \`timeoutMs\` / \`intervalMs\` (wait_until), \`predicate\` / \`message\` (assert). \`clientId\` accepts the same broadcast forms as direct invocation; overall \`ok\`/\`pass\` is true only when every targeted client matches.
+  • **Inner** — what goes inside the wrapper's \`args\` object: the target tool's own args WITHOUT \`clientId\` (the wrapper resolves the client before dispatch; \`clientId\` inside \`args\` is a hard error with a remediation hint).
+
+  Wrong:  \`wait_until({ tool: "fiber_tree${MODULE_SEPARATOR}query", args: { clientId: "ios-1", scope: "root" }, predicate: ... })\`
+  Right:  \`wait_until({ clientId: "ios-1", tool: "fiber_tree${MODULE_SEPARATOR}query", args: { scope: "root" }, predicate: ... })\`
+
 Some tools run inline on the MCP server host (e.g. \`host${MODULE_SEPARATOR}screenshot\`, \`host${MODULE_SEPARATOR}list_devices\`, \`host${MODULE_SEPARATOR}launch_app\`, \`host${MODULE_SEPARATOR}terminate_app\`, \`host${MODULE_SEPARATOR}restart_app\`, \`metro${MODULE_SEPARATOR}reload\`, \`metro${MODULE_SEPARATOR}symbolicate\`) and work even when no React Native client is connected. They use xcrun simctl / adb on the dev machine. When \`clientId\` is provided, host tools use that client's platform/label/deviceId as hints to resolve the target device; otherwise they prefer the device of the single connected client, falling back to the single booted sim / online device. \`launch_app\`, \`terminate_app\`, and \`restart_app\` accept an \`appId\` arg (iOS bundle ID / Android package name); omit it to reuse the target client's registered \`bundleId\` from its connection metadata. \`clientId\` resolves even a \`disconnected\` client within the ~1h reconnect window.
 
 ## App not \`active\`? Relaunch, don't hammer
 
-If \`connection_status\` shows a client as \`background\` / \`inactive\` (JS may be suspended → in-app calls can hang) or under \`disconnected\` (closed / crashed → in-app calls fail "not connected"; slot held ~1h), don't loop on the failing call — relaunch it. Host tools need no live socket: \`host${MODULE_SEPARATOR}launch_app\` (or \`restart_app\`) by \`clientId\` resolves even a \`disconnected\` client (or pass \`udid\` / \`serial\` from \`host${MODULE_SEPARATOR}list_devices\`); then \`wait_until\` it's \`active\` again under the same \`clientId\`.
+If \`host${MODULE_SEPARATOR}connection_status\` shows a client as \`background\` / \`inactive\` (JS may be suspended → in-app calls can hang) or under \`disconnected\` (closed / crashed → in-app calls fail "not connected"; slot held ~1h), don't loop on the failing call — relaunch it. Host tools need no live socket: \`host${MODULE_SEPARATOR}launch_app\` (or \`restart_app\`) by \`clientId\` resolves even a \`disconnected\` client (or pass \`udid\` / \`serial\` from \`host${MODULE_SEPARATOR}list_devices\`); then \`wait_until\` it's \`active\` again under the same \`clientId\`.
 
 ## Driving the UI — pick the right tool
 1. **\`host${MODULE_SEPARATOR}tap_fiber\` with \`steps: [...]\`** — the canonical way to simulate a user tap. One call locates the fiber via fiber_tree__query and taps its center through the real OS gesture pipeline, so Pressable feedback, gesture responders, and hit-test logic all run. Ambiguous matches return a candidate list so you can add \`index\` or narrow \`steps\`. This is what you want whenever the user asks to simulate a tap / press / button click.

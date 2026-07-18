@@ -1,5 +1,6 @@
 import { type ProcessRunner } from './processRunner';
 import { screenshotTool } from './tools/capture';
+import { connectionStatusTool } from './tools/connectionStatus';
 import { listDevicesTool } from './tools/devices';
 import {
   dragTool,
@@ -30,6 +31,7 @@ COORDINATES
   They match fiber_tree bounds.centerX/centerY — feed them directly.`,
     name: 'host',
     tools: {
+      connection_status: connectionStatusTool(),
       drag: dragTool(runner),
       launch_app: launchAppTool(runner),
       list_devices: listDevicesTool(runner),

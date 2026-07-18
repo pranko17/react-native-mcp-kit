@@ -145,14 +145,14 @@ Start Metro + your app. The `McpProvider` connects to `ws://localhost:8347` on m
 From your agent, a typical first session looks like:
 
 ```
-connection_status
+host__connection_status
  → { clientCount: 1, clients: [{ id: "ios-1", label: "iPhone 17 Pro", ... }] }
 
-list_tools { compact: true }
- → catalog of every module registered by the app, grouped by client
+fiber_tree__query { scope: "root", select: ["name"] }
+ → the mounted component tree, straight from the catalog
 ```
 
-After that, every tool is callable by name via `call`. If the server isn't running yet, the provider just retries silently — no crash, no error toast.
+Every tool — host, app-module, or `useMcpTool`-dynamic — is a first-class MCP tool in the agent's catalog; the catalog updates live as clients connect and disconnect. If the server isn't running yet, the provider just retries silently — no crash, no error toast.
 
 ## `McpProvider` reference
 
@@ -173,10 +173,10 @@ Wrap your whole app in it — every optional prop opts a module in when supplied
 
 ## MCP server tools
 
-The Node server exposes a small set of entry-point tools agents use directly — you don't register or configure them:
+Every tool is registered top-level with its real schema — the agent invokes `fiber_tree__query`, `host__screenshot`, or `myModule__greet` directly from its catalog; no dispatcher layer. Multi-client routing rides on an optional `clientId` arg every tool accepts (string, `/regex/`, or array — the latter two broadcast). The server adds two wrappers you don't register or configure:
 
-- **Discovery & dispatch** — `connection_status`, `list_tools`, `describe_tool`, `call`.
 - **Test automation** — `wait_until` (poll any tool until a predicate holds, replacing screenshot-in-a-loop + sleep) and `assert` (single-shot checkpoint with a standardized diff on failure).
+- **Discovery** — `host__connection_status` reports connected clients, their lifecycle state, and recently-disconnected ghosts.
 - **UI-level waits** — `fiber_tree__query` has a built-in `waitFor: { until: "appear" | "disappear", stable? }` option; see the [fiber_tree section](#fiber_tree).
 
 ## Host tools (device-level control)
@@ -254,7 +254,7 @@ Reading state is unified through `fiber_tree__query` with `select: ["hooks"]` �
 | [redux](#redux)           | `reduxModule(store)`            | Redux `Store`                             |
 | [storage](#storage)       | `storageModule(...storages)`    | one or more `NamedStorage`                |
 
-The full tool list for every module is always available via `list_tools` at runtime — the sections below describe what each module gives you, not each tool.
+The full tool list for every module lands in the agent's catalog at runtime — the sections below describe what each module gives you, not each tool.
 
 ### alert
 
@@ -393,7 +393,7 @@ const myModule = (): McpModule => ({
 useMcpModule(() => myModule(), []);
 ```
 
-Agents see the module + its tools in `list_tools` and call them via `call(tool: "myModule__greet")`.
+Agents see `myModule__greet` in their tool catalog and call it directly.
 
 ## Testing
 
