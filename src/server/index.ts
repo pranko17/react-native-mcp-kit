@@ -1,8 +1,10 @@
+import { join } from 'node:path';
+
 import { DEFAULT_PORT } from '@/shared/protocol';
 
 import { Bridge } from './bridge';
 import { type HostModule } from './host/types';
-import { McpServerWrapper } from './mcpServer';
+import { McpServerWrapper, PACKAGE_VERSION } from './mcpServer';
 import { type ServerConfig } from './types';
 
 export async function createServer(config?: ServerConfig): Promise<void> {
@@ -12,15 +14,19 @@ export async function createServer(config?: ServerConfig): Promise<void> {
   const mcpServer = new McpServerWrapper(bridge, hostModules);
 
   await bridge.start();
+  // Name the exact install serving this session — with link:-dev setups a
+  // stale copy from a previous install can otherwise answer unnoticed.
+  const packageRoot = join(__dirname, '..', '..');
   process.stderr.write(
-    `react-native-mcp-kit bridge listening on port ${port}` +
+    `react-native-mcp-kit v${PACKAGE_VERSION} bridge listening on port ${port}` +
       (hostModules.length > 0
         ? ` (host modules: ${hostModules
             .map((m) => {
               return m.name;
             })
-            .join(', ')})\n`
-        : '\n')
+            .join(', ')})`
+        : '') +
+      ` — serving ${packageRoot}\n`
   );
 
   // Graceful shutdown — without these the WebSocketServer keeps the event

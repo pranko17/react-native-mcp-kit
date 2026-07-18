@@ -80,8 +80,17 @@ export class Bridge {
   constructor(private readonly port: number) {}
 
   async start(): Promise<void> {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       this.wss = new WebSocketServer({ port: this.port });
+
+      // Startup errors (EADDRINUSE from another instance holding the port
+      // being the common one) must reject the start promise — without a
+      // handler they crash the process as an unhandled 'error' event.
+      const onStartupError = (error: Error): void => {
+        this.wss = null;
+        reject(error);
+      };
+      this.wss.once('error', onStartupError);
 
       this.wss.on('connection', (ws) => {
         // Greet the client with the protocol version so it can bail early if
@@ -125,6 +134,12 @@ export class Bridge {
       });
 
       this.wss.on('listening', () => {
+        this.wss?.off('error', onStartupError);
+        // Post-startup socket errors are non-fatal — surface them without
+        // taking the bridge down.
+        this.wss?.on('error', (error) => {
+          process.stderr.write(`react-native-mcp-kit bridge error: ${error.message}\n`);
+        });
         resolve();
       });
     });

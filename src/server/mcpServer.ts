@@ -22,7 +22,7 @@ import { registerWaitUntilTool } from './tools/waitUntil';
 // server version — keeps clients' connection logs in sync with the installed
 // package without a parallel constant to maintain. __dirname at runtime is
 // dist/server, so the relative walk lands on the package root.
-const PACKAGE_VERSION = ((): string => {
+export const PACKAGE_VERSION = ((): string => {
   try {
     const pkgPath = join(__dirname, '..', '..', 'package.json');
     return (JSON.parse(readFileSync(pkgPath, 'utf8')) as { version: string }).version;
