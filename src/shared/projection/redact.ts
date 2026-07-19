@@ -4,7 +4,7 @@
  * verbatim so behaviour stays identical for existing callers.
  *
  * - Pattern list is `Array<string | RegExp>`. Strings are lowercased and
- *   matched as substring on lowercased keys; regexes are matched verbatim.
+ *   matched exactly against lowercased keys; regexes are matched verbatim.
  * - `false` (instead of array) — disables redaction.
  * - `undefined` — uses provided defaults.
  */

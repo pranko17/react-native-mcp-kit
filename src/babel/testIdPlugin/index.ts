@@ -1,7 +1,7 @@
 import { type NodePath, type PluginObj, type types as BabelTypes } from '@babel/core';
 
 import { collectHooksInBody } from './collectHooks';
-import { DEFAULT_ATTR, DEFAULT_EXCLUDE } from './constants';
+import { DEFAULT_ATTR, DEFAULT_EXCLUDE, FRAGMENT_LIKE } from './constants';
 import {
   bodyCallsHook,
   bodyUsesJSX,
@@ -71,8 +71,29 @@ export default function testIdPlugin({ types: t }: { types: typeof BabelTypes })
 
         if (t.isJSXIdentifier(nameNode)) {
           componentName = nameNode.name;
+          // Fragment-like builtins accept nothing but `key`/`children` —
+          // stamping them makes React warn at runtime. The DEFAULT_EXCLUDE
+          // names catch canonical spellings; this binding check catches
+          // aliased imports (`import { Fragment as F } from 'react'`).
+          const binding = path.scope.getBinding(nameNode.name);
+          const bindingNode = binding?.path.node;
+          if (
+            bindingNode &&
+            t.isImportSpecifier(bindingNode) &&
+            t.isIdentifier(bindingNode.imported) &&
+            FRAGMENT_LIKE.has(bindingNode.imported.name) &&
+            t.isImportDeclaration(binding.path.parent) &&
+            binding.path.parent.source.value === 'react'
+          ) {
+            return;
+          }
         } else if (t.isJSXMemberExpression(nameNode)) {
           componentName = `${(nameNode.object as BabelTypes.JSXIdentifier).name}.${nameNode.property.name}`;
+          // Any-namespace variant of the same guard (`R.Fragment`,
+          // `Preact.Fragment`, ...) — DEFAULT_EXCLUDE only lists `React.*`.
+          if (FRAGMENT_LIKE.has(nameNode.property.name)) {
+            return;
+          }
         } else {
           return;
         }

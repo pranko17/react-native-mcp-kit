@@ -9,6 +9,11 @@ export const DEFAULT_EXCLUDE = [
   'Suspense',
 ];
 
+// Builtins that accept no props beyond `key`/`children` — stamping them makes
+// React warn at runtime. Backs the structural guards (aliased react imports,
+// any-namespace member access) that DEFAULT_EXCLUDE's name list can't cover.
+export const FRAGMENT_LIKE = new Set(['Fragment', 'StrictMode', 'Suspense']);
+
 // Map of built-in React hook names → agent-friendly `kind` labels. Anything
 // matching the hook-name detector (`use` exact or `/^use[A-Z]/`) that is
 // NOT in this table is treated as "Custom".

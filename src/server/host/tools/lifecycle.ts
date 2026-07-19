@@ -67,6 +67,47 @@ const launchIos = async (
   }
 };
 
+/**
+ * Real devices are driven through `devicectl` — `simctl` only manages
+ * simulators. `--terminate-existing` folds restart into a single command,
+ * which is also the only way to "terminate" by bundle id: bare devicectl
+ * terminate needs a PID.
+ */
+const launchIosRealDevice = async (
+  deviceId: string,
+  bundleId: string,
+  runner: ProcessRunner,
+  terminateExisting: boolean
+): Promise<{ ok: true } | AppTargetError> => {
+  try {
+    const args = ['devicectl', 'device', 'process', 'launch', '--device', deviceId];
+    if (terminateExisting) {
+      args.push('--terminate-existing');
+    }
+    args.push(bundleId);
+    const proc = await runner('xcrun', args, { timeoutMs: LAUNCH_TIMEOUT_MS });
+    if (proc.timedOut) {
+      return { error: `iOS launch timed out after ${LAUNCH_TIMEOUT_MS}ms` };
+    }
+    if (proc.exitCode !== 0) {
+      return {
+        error: `xcrun devicectl launch failed (exit ${proc.exitCode}): ${proc.stderr.toString('utf8').trim().slice(0, 500)}`,
+      };
+    }
+    return { ok: true };
+  } catch (err) {
+    if (err instanceof ProcessNotFoundError) {
+      return {
+        error: 'xcrun not found. iOS launch requires Xcode command line tools.',
+      };
+    }
+    return { error: `Failed to launch iOS app: ${(err as Error).message}` };
+  }
+};
+
+const REAL_DEVICE_TERMINATE_ERROR =
+  'Terminating an app on a real iOS device is not supported — devicectl can only terminate by PID. Use host__restart_app (relaunch with --terminate-existing) or close the app on the device.';
+
 const PM_LIST_TIMEOUT_MS = 5_000;
 
 // `adb shell pm list packages <name>` returns every package whose name CONTAINS
@@ -251,7 +292,9 @@ export const launchAppTool = (runner: ProcessRunner): HostToolHandler => {
       }
       const result =
         target.device.platform === 'ios'
-          ? await launchIos(target.device.nativeId, target.bundleId, runner)
+          ? target.device.kind === 'real-device'
+            ? await launchIosRealDevice(target.device.nativeId, target.bundleId, runner, false)
+            : await launchIos(target.device.nativeId, target.bundleId, runner)
           : await launchAndroid(target.device.nativeId, target.bundleId, runner);
       if ('error' in result) {
         return { error: result.error };
@@ -279,6 +322,9 @@ export const terminateAppTool = (runner: ProcessRunner): HostToolHandler => {
       const target = await resolveLaunchTarget(ctx, args, runner);
       if (!target.ok) {
         return { error: target.error };
+      }
+      if (target.device.platform === 'ios' && target.device.kind === 'real-device') {
+        return { error: REAL_DEVICE_TERMINATE_ERROR };
       }
       const result =
         target.device.platform === 'ios'
@@ -313,6 +359,25 @@ export const restartAppTool = (runner: ProcessRunner): HostToolHandler => {
       const target = await resolveLaunchTarget(ctx, args, runner);
       if (!target.ok) {
         return { error: target.error };
+      }
+      if (target.device.platform === 'ios' && target.device.kind === 'real-device') {
+        // Single devicectl relaunch — terminate-by-bundle-id does not exist on
+        // real devices, --terminate-existing covers the whole restart.
+        const relaunched = await launchIosRealDevice(
+          target.device.nativeId,
+          target.bundleId,
+          runner,
+          true
+        );
+        if ('error' in relaunched) {
+          return { error: relaunched.error };
+        }
+        const restartedSuccess: RestartSuccess = {
+          bundleId: target.bundleId,
+          device: target.device,
+          restarted: true,
+        };
+        return restartedSuccess;
       }
       const terminated =
         target.device.platform === 'ios'

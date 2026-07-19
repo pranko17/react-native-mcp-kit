@@ -302,20 +302,23 @@ const walk = (v: unknown, remainingDepth: number, ctx: WalkCtx, seen: WeakSet<ob
   const special = projectSpecial(v, ctx.collapse);
   if (special !== undefined) return special;
 
-  // cycle
+  // cycle — `seen` tracks the ancestor chain only: the entry is removed once
+  // the subtree is walked, so a repeated sibling reference (aliasing / DAG)
+  // renders normally instead of a false `${cyc}` marker.
   if (typeof v === 'object' && v !== null) {
     if (seen.has(v as object)) return { ['${cyc}']: true };
     seen.add(v as object);
   }
 
-  // depth exhausted — collapse to marker
-  if (remainingDepth <= 0) {
-    const collapsed = collapsedContainer(v);
-    return collapsed ?? v;
-  }
+  const result =
+    remainingDepth <= 0
+      ? (collapsedContainer(v) ?? v)
+      : walkContainer(v, remainingDepth, ctx, seen);
 
-  // expand container
-  return walkContainer(v, remainingDepth, ctx, seen);
+  if (typeof v === 'object' && v !== null) {
+    seen.delete(v as object);
+  }
+  return result;
 };
 
 export const projectValue = (input: unknown, options?: ProjectOptions): ProjectResult => {
