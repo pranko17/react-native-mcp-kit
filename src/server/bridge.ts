@@ -232,6 +232,14 @@ export class Bridge extends EventEmitter<BridgeEvents> {
     });
   }
 
+  // Actual TCP port the WebSocketServer bound to — differs from the
+  // constructor arg when constructed with port 0 (OS-assigned ephemeral port;
+  // tests / embedders). Null before start() succeeds.
+  boundPort(): number | null {
+    const address = this.wss?.address();
+    return address && typeof address === 'object' ? address.port : null;
+  }
+
   isAnyClientConnected(): boolean {
     return this.clients.size > 0;
   }

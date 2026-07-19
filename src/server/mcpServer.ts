@@ -3,6 +3,7 @@ import { join } from 'node:path';
 
 import { McpServer, type RegisteredTool } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { type Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 
 import { MODULE_SEPARATOR, type ModuleDescriptor, PACKAGE_NAME } from '@/shared/protocol';
 
@@ -104,6 +105,13 @@ export class McpServerWrapper {
     // Re-broadcast for clients that connected between the wait window closing
     // and the transport opening.
     this.mcp.sendToolListChanged();
+  }
+
+  // Test/embedding entrypoint: attach the MCP endpoint to a caller-provided
+  // transport (e.g. InMemoryTransport) instead of the stdio transport that
+  // start() owns for the CLI path.
+  async connectTransport(transport: Transport): Promise<void> {
+    await this.mcp.connect(transport);
   }
 
   private async waitForFirstClient(timeoutMs: number): Promise<void> {

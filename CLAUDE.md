@@ -20,10 +20,17 @@ yarn build          # tsc + tsc-alias + ./scripts/build-ios-hid.sh → dist/ (in
 yarn dev            # tsc watch mode
 yarn lint           # ESLint (src/**/*.{ts,tsx})
 yarn lint:fix       # Auto-fix ESLint violations
-yarn lint:ts        # TypeScript type check (tsc --noEmit)
+yarn lint:ts        # TypeScript type check (tsc --noEmit; covers tests/)
+yarn test           # vitest — unit + integration (tests/)
 ```
 
-No test suite is configured. UI changes are verified manually against a running RN app.
+Tests live in `tests/` (kept out of `dist` — the build compiles `src` only via
+`tsconfig.build.json`). Three layers: unit suites for the schema converter /
+helpers / predicates / projection / babel plugins, a description-preservation
+audit over every module factory (guards the zod JSON-Schema round-trip), and
+an in-process integration suite driving Bridge + McpServerWrapper through
+`InMemoryTransport` and real `ws` clients speaking the wire protocol. UI
+changes are still verified manually against a running RN app.
 
 ## Subdirectory guides
 

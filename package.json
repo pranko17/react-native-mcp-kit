@@ -63,11 +63,12 @@
     "./jest": "./dist/jest/index.js"
   },
   "scripts": {
-    "build": "rm -rf dist && tsc && tsc-alias && ./scripts/build-ios-hid.sh",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && tsc-alias -p tsconfig.build.json && ./scripts/build-ios-hid.sh",
     "dev": "tsc --watch",
-    "lint": "eslint --ext .ts --ext .tsx ./src",
-    "lint:fix": "eslint --ext .ts --ext .tsx ./src --fix",
-    "lint:ts": "tsc --noEmit"
+    "lint": "eslint --ext .ts --ext .tsx ./src ./tests",
+    "lint:fix": "eslint --ext .ts --ext .tsx ./src ./tests --fix",
+    "lint:ts": "tsc --noEmit",
+    "test": "vitest run"
   },
   "packageManager": "yarn@1.22.22+sha1.ac34549e6aa8e7ead463a7407e1c7390f61a6610",
   "devDependencies": {
@@ -90,8 +91,10 @@
     "eslint-plugin-sort-keys-fix": "^1.1.2",
     "eslint-plugin-typescript-sort-keys": "^3.3.0",
     "prettier": "^3.9.5",
+    "react-refresh": "^0.18.0",
     "tsc-alias": "^1.9.1",
-    "typescript": "~6.0.3"
+    "typescript": "~6.0.3",
+    "vitest": "^4.1.10"
   },
   "peerDependencies": {
     "react": ">=19",
