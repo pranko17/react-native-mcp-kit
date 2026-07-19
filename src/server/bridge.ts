@@ -106,6 +106,11 @@ export class Bridge extends EventEmitter<BridgeEvents> {
   private socketToClientId = new WeakMap<WebSocket, string>();
   private platformSequences = new Map<string, number>();
   private pendingRequests = new Map<string, PendingRequest>();
+  // Live agent-session proxies attached on PROXY_PATH. Counted here (not read
+  // from ProxyService) because the bridge is the connection router and is
+  // present in both daemon and single-process embedding modes — 0 in
+  // embedding, where the MCP client attaches directly with no proxy.
+  private proxySockets = new Set<WebSocket>();
 
   constructor(private readonly port: number) {
     super();
@@ -128,6 +133,10 @@ export class Bridge extends EventEmitter<BridgeEvents> {
         // Session proxies share the port but speak their own protocol —
         // route them out before the RN-app handshake below.
         if (req.url && req.url.startsWith(PROXY_PATH)) {
+          this.proxySockets.add(ws);
+          ws.on('close', () => {
+            this.proxySockets.delete(ws);
+          });
           this.emit('proxyConnection', ws);
           return;
         }
@@ -258,6 +267,12 @@ export class Bridge extends EventEmitter<BridgeEvents> {
 
   isAnyClientConnected(): boolean {
     return this.clients.size > 0;
+  }
+
+  // Number of agent-session proxies currently attached to this daemon. 0 in
+  // single-process embedding mode (no proxy layer).
+  proxySessionCount(): number {
+    return this.proxySockets.size;
   }
 
   listClients(): ClientEntry[] {

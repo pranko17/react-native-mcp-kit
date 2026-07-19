@@ -2,6 +2,7 @@ import { type ProcessRunner } from './processRunner';
 import { screenshotTool } from './tools/capture';
 import { connectionStatusTool } from './tools/connectionStatus';
 import { listDevicesTool } from './tools/devices';
+import { doctorTool } from './tools/doctor';
 import {
   dragTool,
   longPressTool,
@@ -32,6 +33,7 @@ COORDINATES
     name: 'host',
     tools: {
       connection_status: connectionStatusTool(),
+      doctor: doctorTool(),
       drag: dragTool(runner),
       launch_app: launchAppTool(runner),
       list_devices: listDevicesTool(runner),

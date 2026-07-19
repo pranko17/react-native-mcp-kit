@@ -4,7 +4,7 @@ Server-side tools that drive the device at OS level — `xcrun simctl` / `adb` /
 
 ## Module wiring
 
-[hostModule.ts](hostModule.ts) is a tiny factory: takes a `ProcessRunner`, returns a `HostModule` with the 13 tool factories invoked once. Per-tool descriptions live alongside each handler in [tools/](tools/) — the module-level description in `hostModule.ts` covers backends + the coordinate-system invariant (physical pixels, top-left origin, match `fiber_tree` bounds).
+[hostModule.ts](hostModule.ts) is a tiny factory: takes a `ProcessRunner`, returns a `HostModule` with the 15 tool factories invoked once. Per-tool descriptions live alongside each handler in [tools/](tools/) — the module-level description in `hostModule.ts` covers backends + the coordinate-system invariant (physical pixels, top-left origin, match `fiber_tree` bounds).
 
 Tools registered:
 
@@ -15,6 +15,8 @@ Tools registered:
 | `host__screenshot` | [tools/capture.ts](tools/capture.ts) |
 | `host__launch_app`, `host__terminate_app`, `host__restart_app` | [tools/lifecycle.ts](tools/lifecycle.ts) |
 | `host__list_devices` | [tools/devices.ts](tools/devices.ts) |
+| `host__connection_status` | [tools/connectionStatus.ts](tools/connectionStatus.ts) |
+| `host__doctor` | [tools/doctor.ts](tools/doctor.ts) |
 
 ## Types ([types.ts](types.ts))
 
@@ -137,6 +139,8 @@ Plain `adb` everywhere — no extra binaries:
 - **`host__screenshot`** — WebP, default width 280 px (clamped 64..1568), resized via `sharp`. Diff-cached per-device via SHA-256: identical bytes return `{ unchanged: true, lastMeta }` where `lastMeta` is the meta of the previously-shipped image (`{ width, height, originalWidth, originalHeight, scale, bytes, hash, region? }`). Accepts `region: { x, y, width, height }` in original device pixels — cropped BEFORE resize (clipped to the image bounds, so fiber bounds at the edges don't need guarding). Region pairs with fiber bounds to snapshot one element for ~20–60 vision tokens. Response is `[image, metadataText]`; metadata JSON includes `scale` (image-to-source ratio — image/region when cropped, image/full-screen otherwise) so the agent can map image pixel (px, py) back to device pixel as `(region.x + px / scale, region.y + py / scale)`. Routes per `resolved.device.kind`: iOS simulator → `xcrun simctl io screenshot`, Android → `adb exec-out screencap -p`, real iOS 17+ → `captureScreenshot` in [coredevice/screenshot.ts](coredevice/screenshot.ts).
 - **`host__launch_app` / `host__terminate_app` / `host__restart_app`** — `appId` (bundleId / package name) optional when the resolved client carries `bundleId` in its handshake. iOS simulators use `xcrun simctl launch / terminate`; real iOS devices use `xcrun devicectl device process launch` (restart = single `--terminate-existing` call, bare terminate unsupported); Android uses `monkey` for launch and `am force-stop` for terminate, with a `pm list packages` preflight on launch.
 - **`host__list_devices({ connected? })`** — enumerates iOS sims + Android devices, annotates with `connected: true` / `clientId` when matched. `connected: true` filters to only devices with a live MCP client attached; per-platform error envelopes (`{ error: 'xcrun not found' }` / `{ error: 'adb not found' }`) are preserved through the filter.
+- **`host__connection_status`** ([tools/connectionStatus.ts](tools/connectionStatus.ts)) — connected clients + `disconnected` ghosts (with `expiresInMs`); the read-only status pane. Zero-client safe.
+- **`host__doctor`** ([tools/doctor.ts](tools/doctor.ts)) — one-shot setup diagnosis with a verdict. Composes existing signals rather than adding new plumbing: daemon facts (`PACKAGE_VERSION`, `process.pid`, `bridge.boundPort()`, `process.uptime()`, `bridge.proxySessionCount()` — how many agent sessions share this daemon, 0 in embedding mode), `bridge.listClients()`/`listDisconnected()`, a Metro `/status` probe via `resolveMetroUrl` (2 s AbortController; `metroUrl` arg overrides), and the babel-plugin check — a `fiber_tree__query` for `mcpId: '/./'` run **per connected client** (the transform is per app bundle, so two apps can differ, and probing with an unset clientId would error "multiple clients — specify clientId"); `total > 0` means the plugin ran, `total === 0` with a mounted app means it didn't (or Metro cache is stale). Aggregate `applied`: `false` if any client lacks it (a real problem), `true` if at least one confirmed and none lack it, `null` when none could be probed (e.g. a client's query timed out — inconclusive, not a failure). Returns `{ ok, server, clients, metro, babelPlugin, problems }`; `ok` is `problems.length === 0`, each problem string carries its own fix. Never throws — every probe is wrapped, unprobeable checks report `applied: null` / `checked: false`.
 
 ## Code-level concerns
 

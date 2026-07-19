@@ -1,20 +1,12 @@
-import { spawn } from 'node:child_process';
-import { closeSync, openSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 
 import { type WireCallResult, type WireToolDescriptor } from '@/shared/proxyProtocol';
 
+import { connectOrSpawnDaemon, DAEMON_LOG_PATH } from './daemonSpawn';
 import { type FrontBackend, McpFront } from './mcpFront';
 import { PACKAGE_VERSION } from './mcpServer';
-import { RemoteBackend, VersionMismatchError } from './remoteBackend';
+import { type RemoteBackend, VersionMismatchError } from './remoteBackend';
 
-export const DAEMON_LOG_PATH = join(tmpdir(), 'react-native-mcp-kit-daemon.log');
-
-const CONNECT_ATTEMPT_WINDOW_MS = 10_000;
-const CONNECT_RETRY_DELAY_MS = 300;
 const RECONNECT_RETRY_DELAY_MS = 3_000;
 
 export interface ProxyConfig {
@@ -27,19 +19,6 @@ const sleep = (ms: number): Promise<void> => {
   return new Promise((r) => {
     return setTimeout(r, ms);
   });
-};
-
-const spawnDaemon = (daemonArgs: string[]): void => {
-  // The daemon is fully detached: it must outlive this proxy (and its
-  // session). Its stderr goes to a shared log file — the only place daemon
-  // diagnostics are visible.
-  const fd = openSync(DAEMON_LOG_PATH, 'a');
-  const child = spawn(process.execPath, [join(__dirname, 'cli.js'), ...daemonArgs], {
-    detached: true,
-    stdio: ['ignore', fd, fd],
-  });
-  child.unref();
-  closeSync(fd);
 };
 
 /**
@@ -58,24 +37,8 @@ export async function runProxy(config: ProxyConfig): Promise<void> {
     }
   };
 
-  const connectWithSpawn = async (): Promise<RemoteBackend> => {
-    const started = Date.now();
-    let spawned = false;
-    let lastError: Error = new Error('unreachable');
-    while (Date.now() - started < CONNECT_ATTEMPT_WINDOW_MS) {
-      try {
-        return await RemoteBackend.connect(config.port, PACKAGE_VERSION);
-      } catch (err) {
-        if (err instanceof VersionMismatchError) throw err;
-        lastError = err as Error;
-        if (!spawned) {
-          spawned = true;
-          spawnDaemon(config.daemonArgs);
-        }
-        await sleep(CONNECT_RETRY_DELAY_MS);
-      }
-    }
-    throw lastError;
+  const connectWithSpawn = (): Promise<RemoteBackend> => {
+    return connectOrSpawnDaemon(config.port, PACKAGE_VERSION, config.daemonArgs);
   };
 
   const attach = (remote: RemoteBackend): void => {

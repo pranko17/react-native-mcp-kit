@@ -131,6 +131,7 @@ Enabled by default; runs on the machine hosting the server via `adb` / `xcrun` /
 - **Screenshots** — WebP, resized to keep vision-token cost low, with `region` cropping and an `unchanged: true` short-circuit for polling. Works on simulators, emulators, Android devices, and **physical iOS 17+ devices** (over Apple's CoreDevice tunnel — no extra tooling).
 - **App lifecycle** — `launch_app` / `terminate_app` / `restart_app`. Simulators use `simctl`; real iOS devices go through `devicectl` (restart is one `--terminate-existing` call; bare terminate isn't possible there — the tool says so).
 - **Device listing** — sims, emulators, and devices, annotated with which ones have a live MCP client attached.
+- **Self-diagnosis** — `doctor` checks the whole chain (daemon, connected clients, Metro reachability, whether the test-id plugin actually ran) and returns a verdict with fixes. Ask the agent to "run doctor", or run `npx react-native-mcp-kit --doctor` in a terminal for a human-readable report.
 
 Real-device iOS **input** isn't supported yet (screenshots are) — use a simulator or Android for tap automation.
 
@@ -244,6 +245,7 @@ With the strip-plugin in your production babel env, release bundles contain no t
 
 ## Troubleshooting
 
+- **Not sure what's wrong** → run the doctor. From an agent, call `host__doctor`; from a terminal, `npx react-native-mcp-kit --doctor` prints a human-readable verdict (and exits non-zero if anything's off). Either checks the daemon, connected clients, Metro, and the babel plugin in one pass and names the fix for each problem — start here before the specifics below.
 - **Agent sees no in-app tools** → check `host__connection_status`. No clients? The app isn't reaching the server: Android emulator missing `adb reverse tcp:8347 tcp:8347`, or the app was started before the server and hasn't retried yet (it retries every 3s — give it a moment).
 - **`hooks` come back as `null` names** → Metro served a cached transform without the plugin. `yarn start --reset-cache` once.
 - **`Could not reach or start the ... daemon`** → the port is held by a process that doesn't speak the daemon protocol (the verdict names it — usually a stale pre-5.1 server). Kill it, or pass `--port`. Daemon boot failures land in `react-native-mcp-kit-daemon.log` in the OS temp dir.

@@ -14,6 +14,7 @@ import { z } from 'zod';
 
 import { Bridge } from '@/server/bridge';
 import { DaemonCore } from '@/server/daemonCore';
+import { doctorTool } from '@/server/host/tools/doctor';
 import { type HostModule } from '@/server/host/types';
 import { McpFront } from '@/server/mcpFront';
 import { ProxyService } from '@/server/proxyService';
@@ -27,6 +28,7 @@ const VERSION = '9.9.9-test';
 const echoHostModule: HostModule = {
   name: 'host',
   tools: {
+    doctor: doctorTool(),
     echo: {
       description: 'Echo the given text back.',
       handler: (args) => {
@@ -160,6 +162,24 @@ describe('multi-session daemon (integration)', () => {
     });
     const content = result.content as Array<{ text: string; type: string }>;
     expect(JSON.parse(content[0]!.text)).toEqual({ echoed: 'hi' });
+  });
+
+  it('reports the attached session count via host__doctor', async () => {
+    const { port } = await startDaemon();
+
+    const a = await attachSession(port);
+    const first = await a.client.callTool({ arguments: {}, name: 'host__doctor' });
+    const firstReport = JSON.parse((first.content as Array<{ text: string }>)[0]!.text) as {
+      server: { sessions: number };
+    };
+    expect(firstReport.server.sessions).toBe(1);
+
+    const b = await attachSession(port);
+    const second = await b.client.callTool({ arguments: {}, name: 'host__doctor' });
+    const secondReport = JSON.parse((second.content as Array<{ text: string }>)[0]!.text) as {
+      server: { sessions: number };
+    };
+    expect(secondReport.server.sessions).toBe(2);
   });
 
   it('propagates app module tools and tools_changed to every session', async () => {

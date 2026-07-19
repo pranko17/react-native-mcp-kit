@@ -41,31 +41,50 @@ const LSOF_ARGS = ['-nP', '-iTCP:4310', '-sTCP:LISTEN'];
 
 describe('parseCliArgs', () => {
   it('defaults to host enabled with no port', () => {
-    expect(parseCliArgs([])).toEqual({ daemon: false, disableHost: false });
+    expect(parseCliArgs([])).toEqual({ daemon: false, disableHost: false, doctor: false });
   });
 
   it('parses --port with a numeric value', () => {
     expect(parseCliArgs(['--port', '9000'])).toEqual({
       daemon: false,
       disableHost: false,
+      doctor: false,
       port: 9000,
     });
   });
 
   it('parses --no-host', () => {
-    expect(parseCliArgs(['--no-host'])).toEqual({ daemon: false, disableHost: true });
+    expect(parseCliArgs(['--no-host'])).toEqual({
+      daemon: false,
+      disableHost: true,
+      doctor: false,
+    });
   });
 
   it('parses --port and --no-host together', () => {
     expect(parseCliArgs(['--no-host', '--port', '4310'])).toEqual({
       daemon: false,
       disableHost: true,
+      doctor: false,
       port: 4310,
     });
   });
 
+  it('parses --daemon and --doctor', () => {
+    expect(parseCliArgs(['--daemon'])).toEqual({
+      daemon: true,
+      disableHost: false,
+      doctor: false,
+    });
+    expect(parseCliArgs(['--doctor'])).toEqual({
+      daemon: false,
+      disableHost: false,
+      doctor: true,
+    });
+  });
+
   it('leaves port undefined when --port has no value', () => {
-    expect(parseCliArgs(['--port'])).toEqual({ daemon: false, disableHost: false });
+    expect(parseCliArgs(['--port'])).toEqual({ daemon: false, disableHost: false, doctor: false });
   });
 
   it('ignores unrecognized arguments', () => {
@@ -73,6 +92,7 @@ describe('parseCliArgs', () => {
     expect(parseCliArgs(['--verbose', 'serve', '--port=9000'])).toEqual({
       daemon: false,
       disableHost: false,
+      doctor: false,
     });
   });
 });

@@ -3,11 +3,12 @@ import { type ProcessRunner } from './host/processRunner';
 export interface CliArgs {
   daemon: boolean;
   disableHost: boolean;
+  doctor: boolean;
   port?: number;
 }
 
 export const parseCliArgs = (argv: readonly string[]): CliArgs => {
-  const parsed: CliArgs = { daemon: false, disableHost: false };
+  const parsed: CliArgs = { daemon: false, disableHost: false, doctor: false };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--port' && argv[i + 1]) {
       parsed.port = parseInt(argv[i + 1]!, 10);
@@ -16,6 +17,8 @@ export const parseCliArgs = (argv: readonly string[]): CliArgs => {
       parsed.disableHost = true;
     } else if (argv[i] === '--daemon') {
       parsed.daemon = true;
+    } else if (argv[i] === '--doctor') {
+      parsed.doctor = true;
     }
   }
   return parsed;

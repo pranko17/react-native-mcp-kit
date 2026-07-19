@@ -32,6 +32,7 @@ vi.setConfig({ testTimeout: 15_000 });
 
 const HOST_TOOL_NAMES = [
   'host__connection_status',
+  'host__doctor',
   'host__drag',
   'host__launch_app',
   'host__list_devices',

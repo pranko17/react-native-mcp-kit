@@ -14,8 +14,10 @@ Node-side MCP server. Three layers:
 
 | File                         | Role                                                                                                              |
 | ---------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| [cli.ts](cli.ts)             | `#!/usr/bin/env node` shim. Default mode runs the session proxy (`runProxy`); `--daemon` runs the daemon (`runDaemon`). `--port` / `--no-host` pass through. |
-| [proxyMain.ts](proxyMain.ts) | `runProxy` — connects to the daemon (spawning a detached one if the port is silent), serves MCP over stdio through a backend shim that survives daemon restarts; respawn + reconnect loop on daemon loss. Daemon stderr → `DAEMON_LOG_PATH` (os tmpdir). |
+| [cli.ts](cli.ts)             | `#!/usr/bin/env node` shim. Default mode runs the session proxy (`runProxy`); `--daemon` runs the daemon (`runDaemon`); `--doctor` runs the human-facing diagnosis (`runDoctorCli`). `--port` / `--no-host` pass through. |
+| [proxyMain.ts](proxyMain.ts) | `runProxy` — connects to the daemon (via `connectOrSpawnDaemon`), serves MCP over stdio through a backend shim that survives daemon restarts; respawn + reconnect loop on daemon loss. |
+| [daemonSpawn.ts](daemonSpawn.ts) | `spawnDaemon` (detached `cli.js --daemon`, stderr → `DAEMON_LOG_PATH` in os tmpdir) + `connectOrSpawnDaemon` (connect, spawn once if silent, retry; rethrows `VersionMismatchError`). Shared by the proxy and the `--doctor` CLI. |
+| [doctorCli.ts](doctorCli.ts) | `runDoctorCli` — connects like a session (spawning a daemon if needed), waits a bounded window for the app to (re)connect, calls `host__doctor`, prints `formatDoctorReport` (pure, unit-tested), exits 0/1. The doctor's own transient proxy is counted in `sessions`. |
 | [daemonMain.ts](daemonMain.ts) | `runDaemon` — bridge + core + `ProxyService`; quiet exit on the spawn race (`EADDRINUSE` → another daemon won); graceful shutdown on signals / idle. |
 | [proxyService.ts](proxyService.ts) | Daemon side of the proxy protocol: answers `list_tools` / `call_tool`, pushes `tools_changed`, counts proxies, arms the idle-shutdown timer. First `list_tools` gated once per daemon on `waitForFirstClient(2000)`. |
 | [remoteBackend.ts](remoteBackend.ts) | Proxy side: `FrontBackend` over the WS connection; request correlation + timeouts; `VersionMismatchError` when daemon and session run different package versions (they must match exactly); emits `down` on socket loss. |
@@ -47,7 +49,7 @@ Dynamic tools from `useMcpTool` register under their wire name (`DYNAMIC_PREFIX`
 
 ## Multi-session daemon
 
-- **Same port, two protocols**: RN apps connect to the WS root; session proxies connect on `PROXY_PATH` (`/mcp-proxy`, `shared/proxyProtocol.ts`) and the bridge routes them to `ProxyService` via the `proxyConnection` event. One port to configure, no second listener.
+- **Same port, two protocols**: RN apps connect to the WS root; session proxies connect on `PROXY_PATH` (`/mcp-proxy`, `shared/proxyProtocol.ts`) and the bridge routes them to `ProxyService` via the `proxyConnection` event. One port to configure, no second listener. The bridge also counts live proxy sockets (`proxySessionCount()`, exposed for `host__doctor`) independently of `ProxyService` — it's the router and exists in embedding mode too, where the count is 0.
 - **Spawn race is by design**: two first-sessions may both spawn a daemon; the loser exits quietly on `EADDRINUSE` (exit 0 — not an error), both proxies connect to the winner. Don't "fix" the quiet exit into a verdict — the verdict path belongs to the proxy (`formatProxyStartupVerdict`), which fires only when the port holder doesn't speak the proxy protocol.
 - **Version handshake is exact-match on the npm package version** (`proxy_hello`). Proxy and daemon ship in one package; a mismatch means two installs are alive (typically a stale daemon) — the proxy refuses with a message naming the daemon pid rather than serving a catalog whose schemas may differ.
 - **Idle lifecycle**: the daemon arms a 60 s timer whenever its proxy count is 0 (including right after spawn, before the spawner connects — connection cancels it). Zombie proxies (host keeps the pipe open) hold the daemon alive but harm nothing: they own no port.
