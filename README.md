@@ -5,10 +5,13 @@
 Wire it in once, and any agent that speaks the [Model Context Protocol](https://modelcontextprotocol.io) — Claude Code, Cursor, Continue, your own — can look inside your running app and act on it: read the component tree without screenshots and OCR, tail logs and network traffic, inspect navigation / Redux / React Query state, and fire real taps and keystrokes through the OS gesture pipeline.
 
 ```
-AI Agent / Cursor / Claude Code --stdio/MCP--> Node server --WebSocket--> RN app (device)
-                                                    │
-                                                    └─ host tools (adb / xcrun / ios-hid) --USB/sim--> device
+Agent session ─ stdio/MCP ─▶ proxy ─┐
+Agent session ─ stdio/MCP ─▶ proxy ─┴─▶ shared daemon ─ WebSocket ─▶ RN app (device)
+                                               │
+                                               └─ host tools (adb / xcrun / ios-hid) ─▶ device
 ```
+
+Each agent session talks to a thin local proxy; the proxies share one daemon that owns the app connection and the tool catalog — so any number of editor windows see the same live app.
 
 Nothing here ships to your users: the production babel plugin strips every trace of the library from release bundles.
 
@@ -93,6 +96,8 @@ The MCP server ships as a bin in the package. For Claude Code / Cursor, a projec
 ```
 
 Flags: `--port <number>` (WebSocket port the app connects to, default `8347`), `--no-host` (in-app tools only, no device control).
+
+**Multiple agent sessions just work.** Each session's MCP process is a thin proxy over one shared daemon: the first session starts it, later sessions attach to it, and every session sees the same live catalog and the same connected apps. The daemon exits on its own about a minute after the last session closes. Its diagnostics land in `react-native-mcp-kit-daemon.log` in the OS temp dir.
 
 Android emulators need the adb port forward once per boot: `adb reverse tcp:8347 tcp:8347`. iOS simulators share localhost — nothing to do.
 
@@ -241,7 +246,8 @@ With the strip-plugin in your production babel env, release bundles contain no t
 
 - **Agent sees no in-app tools** → check `host__connection_status`. No clients? The app isn't reaching the server: Android emulator missing `adb reverse tcp:8347 tcp:8347`, or the app was started before the server and hasn't retried yet (it retries every 3s — give it a moment).
 - **`hooks` come back as `null` names** → Metro served a cached transform without the plugin. `yarn start --reset-cache` once.
-- **`Port 8347 is already in use`** → the server names the process holding the port (usually a stale server from a previous session) — kill it, or pass `--port`.
+- **`Could not reach or start the ... daemon`** → the port is held by a process that doesn't speak the daemon protocol (the verdict names it — usually a stale pre-5.1 server). Kill it, or pass `--port`. Daemon boot failures land in `react-native-mcp-kit-daemon.log` in the OS temp dir.
+- **`Daemon (pid N) runs ... vX, this session runs vY`** → two installs are alive (typically a daemon from an older checkout). Close the old sessions or kill the pid; the next session respawns a fresh daemon.
 - **`Client protocol vN does not match server vM`** → the app bundle and the server come from different package versions. Update the lagging side; the wire format is versioned deliberately so a skew fails loudly instead of degrading quietly.
 - **Catalog feels stale after an app reload** → re-check `host__connection_status`; tools follow client connections live, but your MCP client may need a moment to refresh.
 

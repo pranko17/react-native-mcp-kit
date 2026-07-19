@@ -1,4 +1,3 @@
-import { type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import {
@@ -15,6 +14,7 @@ import {
   type Predicate,
   resolvePath,
 } from '@/server/predicate';
+import { type RegistryEntry } from '@/server/toolRegistry';
 import { MODULE_SEPARATOR } from '@/shared/protocol';
 
 interface PollOutcome {
@@ -79,15 +79,44 @@ const pollForClient = async (
   };
 };
 
-export const registerWaitUntilTool = (mcp: McpServer, ctx: ServerContext): void => {
-  mcp.registerTool(
-    'wait_until',
-    {
-      annotations: {
-        openWorldHint: true,
-        title: 'Wait Until',
-      },
-      description: `Poll a tool until its result satisfies a predicate, or timeout.
+const WAIT_UNTIL_SCHEMA = z.object({
+  args: z
+    .union([z.string(), z.record(z.string(), z.unknown())])
+    .optional()
+    .describe('Arguments for the polled tool — object or JSON string.'),
+  clientId: z
+    .union([z.string(), z.array(z.string())])
+    .optional()
+    .describe(
+      'Target client ID(s). String polls one client; `/body/flags` literal ("/^ios/") expands to every matching connected client; array mixes literals and regex strings. Broadcast forms poll each matched client in parallel under the shared timeoutMs and report per-client outcomes. Omitted: auto-resolves to the single connected client. Full forms: server instructions § clientId.'
+    ),
+  intervalMs: z
+    .number()
+    .optional()
+    .describe('Delay between poll attempts. Out-of-range values are clamped to 50..5000.')
+    .meta({ default: 300 }),
+  predicate: z
+    .looseObject({})
+    .describe(
+      'Leaf { op, path?, value? } or compound { all|any: [...] } / { not: predicate }. See tool description for ops and composition.'
+    ),
+  timeoutMs: z
+    .number()
+    .optional()
+    .describe('Total wait budget. Out-of-range values are clamped to 500..60000.')
+    .meta({ default: 10_000 }),
+  tool: z
+    .string()
+    .describe(`Tool name to poll (e.g. "navigation${MODULE_SEPARATOR}get_current_route").`),
+});
+
+export const waitUntilToolDef = (ctx: ServerContext): RegistryEntry & { name: string } => {
+  return {
+    annotations: {
+      openWorldHint: true,
+      title: 'Wait Until',
+    },
+    description: `Poll a tool until its result satisfies a predicate, or timeout.
 
 Replaces "screenshot in a loop + sleep" with a declarative check. Typical use:
   • wait for navigation to land on a screen
@@ -114,38 +143,10 @@ RETURNS
   Broadcast (clientId is an array — polls each client in parallel under the
   shared timeout): { ok, okCount, failedCount, perClient: [{ clientId, ok, attempts, elapsedMs, matched? | lastResult, lastError? }, ...] }
   with overall ok = every client matched within the shared timeout.`,
-      inputSchema: {
-        args: z
-          .union([z.string(), z.record(z.string(), z.unknown())])
-          .optional()
-          .describe('Arguments for the polled tool — object or JSON string.'),
-        clientId: z
-          .union([z.string(), z.array(z.string())])
-          .optional()
-          .describe(
-            'Target client ID(s). String polls one client; `/body/flags` literal ("/^ios/") expands to every matching connected client; array mixes literals and regex strings. Broadcast forms poll each matched client in parallel under the shared timeoutMs and report per-client outcomes. Omitted: auto-resolves to the single connected client. Full forms: server instructions § clientId.'
-          ),
-        intervalMs: z
-          .number()
-          .optional()
-          .describe('Delay between poll attempts. Out-of-range values are clamped to 50..5000.')
-          .meta({ default: 300 }),
-        predicate: z
-          .looseObject({})
-          .describe(
-            'Leaf { op, path?, value? } or compound { all|any: [...] } / { not: predicate }. See tool description for ops and composition.'
-          ),
-        timeoutMs: z
-          .number()
-          .optional()
-          .describe('Total wait budget. Out-of-range values are clamped to 500..60000.')
-          .meta({ default: 10_000 }),
-        tool: z
-          .string()
-          .describe(`Tool name to poll (e.g. "navigation${MODULE_SEPARATOR}get_current_route").`),
-      },
-    },
-    async ({ args, clientId, intervalMs, predicate, timeoutMs, tool }) => {
+    handler: async (rawArgs) => {
+      const { args, clientId, intervalMs, predicate, timeoutMs, tool } = rawArgs as z.infer<
+        typeof WAIT_UNTIL_SCHEMA
+      >;
       const parsedArgs = parseCallArgs(args);
       if (!parsedArgs.ok) return jsonError(parsedArgs.error);
 
@@ -233,6 +234,8 @@ RETURNS
           },
         ],
       };
-    }
-  );
+    },
+    name: 'wait_until',
+    schema: WAIT_UNTIL_SCHEMA,
+  };
 };

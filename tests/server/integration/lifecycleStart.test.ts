@@ -40,7 +40,9 @@ describe('start() first-client wait window (integration)', () => {
   const openSockets: WebSocket[] = [];
 
   const internals = (): WrapperInternals => {
-    return wrapper as unknown as WrapperInternals;
+    // waitForFirstClient is public on the core; moduleTools stays private —
+    // the structural cast reaches both through the wrapper's core.
+    return wrapper.core as unknown as WrapperInternals;
   };
 
   // Fake RN client: registers the demo module on server_hello. Fire-and-forget

@@ -191,9 +191,8 @@ module.exports = {
   settings: {
     'import/ignore': ['node_modules'],
     'import/resolver': {
-      alias: {
-        extensions: ['.js', '.jsx', '.ts', '.tsx'],
-        map: [['^@', './src']],
+      typescript: {
+        project: './tsconfig.json',
       },
     },
     react: {

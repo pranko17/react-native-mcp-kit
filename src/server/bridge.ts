@@ -16,6 +16,7 @@ import {
   type VersionMismatchMessage,
   WS_CLOSE_PROTOCOL_MISMATCH,
 } from '@/shared/protocol';
+import { PROXY_PATH } from '@/shared/proxyProtocol';
 
 const REQUEST_TIMEOUT = 10_000;
 // When a client's WebSocket drops, we keep its ID slot reserved for this long
@@ -93,6 +94,9 @@ export interface BridgeEvents {
   clientReregistered: [client: ClientEntry, prevModules: ModuleDescriptor[]];
   dynamicToolAdded: [client: ClientEntry, fullName: string, entry: DynamicToolEntry];
   dynamicToolRemoved: [client: ClientEntry, fullName: string];
+  /** A session proxy connected on `PROXY_PATH` — handled by the daemon's
+   * ProxyService, invisible to the RN-app flow below. */
+  proxyConnection: [socket: WebSocket];
 }
 
 export class Bridge extends EventEmitter<BridgeEvents> {
@@ -120,7 +124,13 @@ export class Bridge extends EventEmitter<BridgeEvents> {
       };
       this.wss.once('error', onStartupError);
 
-      this.wss.on('connection', (ws) => {
+      this.wss.on('connection', (ws, req) => {
+        // Session proxies share the port but speak their own protocol —
+        // route them out before the RN-app handshake below.
+        if (req.url && req.url.startsWith(PROXY_PATH)) {
+          this.emit('proxyConnection', ws);
+          return;
+        }
         // Greet the client with the protocol version so it can bail early if
         // incompatible instead of waiting for its registration to be rejected.
         const hello: ServerHelloMessage = {
@@ -189,6 +199,12 @@ export class Bridge extends EventEmitter<BridgeEvents> {
     this.disconnectedClients.clear();
     return new Promise((resolve) => {
       if (this.wss) {
+        // `close()` only stops accepting new connections — live sockets (apps
+        // AND session proxies) must be terminated explicitly or shutdown hangs
+        // until every peer goes away on its own.
+        for (const socket of this.wss.clients) {
+          socket.terminate();
+        }
         this.wss.close(() => {
           resolve();
         });

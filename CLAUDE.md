@@ -7,11 +7,13 @@ This file orients Claude Code (and any reader) at the top of the repository. The
 `react-native-mcp-kit` is a bidirectional MCP bridge connecting React Native apps to AI agents. The Node-side MCP server proxies in-app business logic over a WebSocket and additionally hosts an OS-level control plane that shells out to `adb` / `xcrun simctl` / `xcrun devicectl` / a bundled Swift HID injector to drive the device. Real iOS 17+ devices are reached via a native TS client speaking RemoteXPC + DTX over Apple's CoreDevice tunnel — no `pymobiledevice3`, no WebDriverAgent, no Appium.
 
 ```
-AI Agent  --stdio/MCP-->  MCP Server (Node.js)  --WebSocket-->  RN App (device)
-                               │
-                               ├─ host module (adb / xcrun simctl / ios-hid binary) --> sim / emulator / android
-                               └─ coredevice client (RemoteXPC + DTX over CoreDevice tunnel) --> real iOS 17+ device
+AI Agent  --stdio/MCP-->  session proxy  --WS-->  shared daemon  --WebSocket-->  RN App (device)
+                                                       │
+                                                       ├─ host module (adb / xcrun simctl / ios-hid binary) --> sim / emulator / android
+                                                       └─ coredevice client (RemoteXPC + DTX over CoreDevice tunnel) --> real iOS 17+ device
 ```
+
+Each agent session's MCP process is a thin **stdio proxy**; the first one spawns a detached **daemon** that owns the bridge, the tool registry, and all app state. Any number of sessions attach to the one daemon (identical live catalog, one app connection); it exits ~1 min after the last session closes. Single-process embedding via `createServer` still exists for tests. See [`src/server/`](src/server/CLAUDE.md) for the process model.
 
 ## Commands
 
@@ -28,9 +30,11 @@ Tests live in `tests/` (kept out of `dist` — the build compiles `src` only via
 `tsconfig.build.json`). Three layers: unit suites for the schema converter /
 helpers / predicates / projection / babel plugins, a description-preservation
 audit over every module factory (guards the zod JSON-Schema round-trip), and
-an in-process integration suite driving Bridge + McpServerWrapper through
-`InMemoryTransport` and real `ws` clients speaking the wire protocol. UI
-changes are still verified manually against a running RN app.
+in-process integration suites driving Bridge + McpServerWrapper through
+`InMemoryTransport` and real `ws` clients speaking the wire protocol —
+including a multi-session suite (daemon + proxies over real sockets, shared
+catalog, idle shutdown, version handshake). UI changes are still verified
+manually against a running RN app.
 
 ## Subdirectory guides
 
@@ -40,7 +44,7 @@ Each subdirectory has its own `CLAUDE.md` with the concrete details. Skim from t
 | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | [`src/babel/`](src/babel/CLAUDE.md)                       | Babel plugins: `testIdPlugin` (data-mcp-id JSX attr + `__mcp_hooks` metadata emit) and `stripPlugin` (prod-strip).      |
 | [`src/client/`](src/client/CLAUDE.md)                     | RN side: `<McpProvider>`, `McpClient` singleton, `useMcpTool` / `useMcpModule`, registration paths, debug logging.     |
-| [`src/server/`](src/server/CLAUDE.md)                     | MCP server: direct top-level tool registration (host + client-module + dynamic tools, refcount-dedup'd, live via `list_changed`), the `wait_until`/`assert` wrappers, bridge, dispatcher. |
+| [`src/server/`](src/server/CLAUDE.md)                     | MCP server: session-proxy / shared-daemon process model, tool registry (host + client-module + dynamic tools, refcount-dedup'd, live via `list_changed`), MCP fronts, the `wait_until`/`assert` wrappers, bridge, dispatcher. |
 | [`src/server/host/`](src/server/host/CLAUDE.md)           | Host module: OS-level tools (`input`, `capture`, `lifecycle`, `devices`, `tap_fiber`), device resolver, Swift HID, real-iOS CoreDevice tunnel. |
 | [`src/server/metro/`](src/server/metro/CLAUDE.md)         | Metro dev-server control plane: `symbolicate`, `reload`, `status`, `open_in_editor`, `get_events`.                    |
 | [`src/modules/`](src/modules/CLAUDE.md)                   | In-app modules — index + module-interface contract + side-effectful-capture pattern + projection refresher. Each of the 12 modules has its own per-folder `CLAUDE.md` (alert / console / device / errors / fiberTree / i18next / logBox / navigation / network / reactQuery / redux / storage). |
@@ -84,7 +88,7 @@ Multiple bundles ship from one `package.json`:
 
 ## Key dependencies
 
-- `@modelcontextprotocol/sdk` — MCP protocol (server-only). `registerTool` API. Deep imports require `.js` extension because of the SDK's ESM layout — server tool files have an `import/extensions: off` ESLint override.
+- `@modelcontextprotocol/sdk` — MCP protocol (server-only). MCP fronts use the low-level `Server` (a passthrough serving a catalog owned by the registry, which the high-level `McpServer` can't express). Deep imports keep the `.js` extension (SDK ESM layout); module resolution for eslint runs through `eslint-import-resolver-typescript`.
 - `@babel/core` — devDep for the Babel plugins.
 - `ws` — WebSocket server (server-only; RN uses its built-in WebSocket).
 - `zod` — Schema validation for MCP tool input schemas.

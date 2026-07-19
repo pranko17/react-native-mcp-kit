@@ -9,10 +9,10 @@ Wire-format types + the four well-known constants. Single source of truth for bo
 ### Constants
 
 - `PACKAGE_NAME = 'react-native-mcp-kit'` — npm identity, reused by `mcpServer.ts` (handshake) and `stripPlugin.ts` (default import source it strips).
-- `DEFAULT_PORT = 8347` — WebSocket port. Both `createServer` (server) and `McpClient.initialize` (client) read this, so they always agree.
+- `DEFAULT_PORT = 8347` — the port the RN app connects to AND the port the daemon binds (the session proxy connects to the same port on `PROXY_PATH`). The daemon, `McpClient.initialize` (client), and the proxy all read this, so they always agree.
 - `MODULE_SEPARATOR = '__'` — joins module + tool in MCP call format (`module__method`).
 - `DYNAMIC_PREFIX = '__dynamic__'` — derived from `MODULE_SEPARATOR`. Marks tools registered via `useMcpTool` (e.g. `call(tool: '_dynamic_logout')`).
-- `PROTOCOL_VERSION = 2` — wire-protocol version. Independent of the npm semver — bump on any breaking change to the messages below. Introduced in package v2.0.0; older clients/servers don't send or expect a version field, and the handshake treats their absence as an incompatibility.
+- `PROTOCOL_VERSION = 3` — wire-protocol version. Independent of the npm semver — bump on any breaking change to the messages below. v3: `inputSchema` on the wire is standard JSON Schema (clients serialize their Zod schemas via `z.toJSONSchema`); the old flat mini-schema is gone. Older clients/servers don't send or expect a version field, and the handshake treats their absence as an incompatibility.
 - `WS_CLOSE_PROTOCOL_MISMATCH = 4010` — custom WS close code the server uses when refusing a client over protocol mismatch.
 
 ### Message types
@@ -41,6 +41,10 @@ All messages carry a discriminated `type` field. The two unions at the bottom of
 ### Bumping the protocol
 
 Bump `PROTOCOL_VERSION` for **any** field-rename / removed message / changed semantics. The server's handshake rejects `protocolVersion !== PROTOCOL_VERSION` (including `undefined`) before the registration is processed. Add a one-line entry near the constant explaining what changed in that bump.
+
+## proxyProtocol.ts
+
+Wire format between a session proxy and the shared daemon (`server/proxyMain.ts` ↔ `server/proxyService.ts`) — a **separate** protocol from `protocol.ts`, riding the same TCP port but on `PROXY_PATH = '/mcp-proxy'` (the bridge routes upgrades on that path to the daemon's proxy service, RN apps to the root). Messages: daemon→proxy `proxy_hello` (carries the daemon's `packageVersion` + `pid` — proxy and daemon must be the exact same install, mismatch is refused), `list_tools_result`, `call_tool_result`, `tools_changed` (broadcast on every registry change → each proxy forwards `notifications/tools/list_changed`); proxy→daemon `list_tools`, `call_tool`. Requests carry an `id`; responses go only to the requesting socket. `WireCallResult` carries `invalidParams` (→ in-band isError) and `unknownTool` (→ MCP MethodNotFound) so the front re-raises the shape the high-level SDK produced. This protocol is **not** version-gated by `PROTOCOL_VERSION` — the exact-package-version check in `proxy_hello` subsumes it (proxy and daemon ship together).
 
 ## projection/
 
@@ -169,4 +173,4 @@ Both module-level caches (`cachedRN`, `cachedInternals`) use `undefined` as "not
 
 ### Why this isolation matters
 
-The server entry point exports the host module + the MCP wiring without ever pulling RN — running `import { createServer } from 'react-native-mcp-kit/server'` from a plain Node script must succeed even when `react-native` isn't installed. Any new server-side code that touches an RN-only API must go through `loadRN()` or `loadRNInternal()` (or live behind a runtime gate in a module the server never imports) — never `import 'react-native'` at the top of a file that's reachable from `server/index.ts`.
+The whole server side (the `server/index.ts` embedding entry AND the `server/cli.js` daemon/proxy entry) exports the host module + the MCP wiring without ever pulling RN — running `import { createServer } from 'react-native-mcp-kit/server'` from a plain Node script, or launching the daemon, must succeed even when `react-native` isn't installed. Any new server-side code that touches an RN-only API must go through `loadRN()` or `loadRNInternal()` (or live behind a runtime gate in a module the server never imports) — never `import 'react-native'` at the top of a file reachable from `server/index.ts` or `server/cli.ts`.

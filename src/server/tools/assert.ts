@@ -1,4 +1,3 @@
-import { type McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import {
@@ -16,6 +15,7 @@ import {
   type Predicate,
   resolvePath,
 } from '@/server/predicate';
+import { type RegistryEntry } from '@/server/toolRegistry';
 import { MODULE_SEPARATOR } from '@/shared/protocol';
 
 interface AssertOutcome {
@@ -52,15 +52,36 @@ const evaluate = (
   return payload;
 };
 
-export const registerAssertTool = (mcp: McpServer, ctx: ServerContext): void => {
-  mcp.registerTool(
-    'assert',
-    {
-      annotations: {
-        openWorldHint: true,
-        title: 'Assert',
-      },
-      description: `Single-shot assertion over a tool's result. Same predicate vocabulary (including { all / any / not }) as wait_until, but one attempt and a standardized diff on failure.
+const ASSERT_SCHEMA = z.object({
+  args: z
+    .union([z.string(), z.record(z.string(), z.unknown())])
+    .optional()
+    .describe('Arguments for the asserted tool — object or JSON string.'),
+  clientId: z
+    .union([z.string(), z.array(z.string())])
+    .optional()
+    .describe(
+      'Target client ID(s). String asserts on one client; `/body/flags` literal ("/^ios/") expands to every matching connected client; array mixes literals and regex strings. Broadcast forms run the assertion on each matched client in parallel. Omitted: auto-resolves to the single connected client. Full forms: server instructions § clientId.'
+    ),
+  message: z
+    .string()
+    .optional()
+    .describe('Human-readable description of the check; echoed in the failure payload.'),
+  predicate: z
+    .looseObject({})
+    .describe(
+      'Leaf { op, path?, value? } or compound { all|any: [...] } / { not: predicate }. See wait_until for full semantics.'
+    ),
+  tool: z.string().describe(`Tool name to call once (e.g. "fiber_tree${MODULE_SEPARATOR}query").`),
+});
+
+export const assertToolDef = (ctx: ServerContext): RegistryEntry & { name: string } => {
+  return {
+    annotations: {
+      openWorldHint: true,
+      title: 'Assert',
+    },
+    description: `Single-shot assertion over a tool's result. Same predicate vocabulary (including { all / any / not }) as wait_until, but one attempt and a standardized diff on failure.
 
 Single client (clientId omitted or a string):
   Returns { pass: true, actual? } on success — actual is the path-resolved value for leaf predicates, omitted for compound.
@@ -72,32 +93,8 @@ Broadcast (clientId is an array — asserts on each client in parallel):
   with overall pass = every client's assertion passed.
 
 Useful after wait_until as a checkpoint — the pair reads "do action → wait → assert" which produces a clean audit trail in session logs.`,
-      inputSchema: {
-        args: z
-          .union([z.string(), z.record(z.string(), z.unknown())])
-          .optional()
-          .describe('Arguments for the asserted tool — object or JSON string.'),
-        clientId: z
-          .union([z.string(), z.array(z.string())])
-          .optional()
-          .describe(
-            'Target client ID(s). String asserts on one client; `/body/flags` literal ("/^ios/") expands to every matching connected client; array mixes literals and regex strings. Broadcast forms run the assertion on each matched client in parallel. Omitted: auto-resolves to the single connected client. Full forms: server instructions § clientId.'
-          ),
-        message: z
-          .string()
-          .optional()
-          .describe('Human-readable description of the check; echoed in the failure payload.'),
-        predicate: z
-          .looseObject({})
-          .describe(
-            'Leaf { op, path?, value? } or compound { all|any: [...] } / { not: predicate }. See wait_until for full semantics.'
-          ),
-        tool: z
-          .string()
-          .describe(`Tool name to call once (e.g. "fiber_tree${MODULE_SEPARATOR}query").`),
-      },
-    },
-    async ({ args, clientId, message, predicate, tool }) => {
+    handler: async (rawArgs) => {
+      const { args, clientId, message, predicate, tool } = rawArgs as z.infer<typeof ASSERT_SCHEMA>;
       const parsedArgs = parseCallArgs(args);
       if (!parsedArgs.ok) return jsonError(parsedArgs.error);
 
@@ -141,6 +138,8 @@ Useful after wait_until as a checkpoint — the pair reads "do action → wait �
           },
         ],
       };
-    }
-  );
+    },
+    name: 'assert',
+    schema: ASSERT_SCHEMA,
+  };
 };
