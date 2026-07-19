@@ -284,7 +284,8 @@ const APPID_SCHEMA = z
 
 export const launchAppTool = (runner: ProcessRunner): HostToolHandler => {
   return {
-    description: 'Launch an installed app on a booted simulator / emulator / device.',
+    description:
+      'Launch an installed app on a booted simulator / emulator / device. Works with zero clients connected — this is the recovery path when the app is closed and its tools left the catalog.',
     handler: async (args, ctx) => {
       const target = await resolveLaunchTarget(ctx, args, runner);
       if (!target.ok) {
@@ -354,7 +355,7 @@ const RESTART_TEARDOWN_DELAY_MS = 200;
 export const restartAppTool = (runner: ProcessRunner): HostToolHandler => {
   return {
     description:
-      'Terminate then immediately relaunch an app (host__terminate_app + host__launch_app in one call, with a short teardown delay).',
+      'Terminate then immediately relaunch an app (host__terminate_app + host__launch_app in one call, with a short teardown delay). Works with zero clients connected.',
     handler: async (args, ctx) => {
       const target = await resolveLaunchTarget(ctx, args, runner);
       if (!target.ok) {

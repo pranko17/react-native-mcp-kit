@@ -1,12 +1,16 @@
 import { MODULE_SEPARATOR } from '@/shared/protocol';
 
-export const BASE_INSTRUCTIONS = `You are connected to a running React Native app via the react-native-mcp-kit bridge.
-
-Multiple React Native apps can connect simultaneously — each is identified by a short ID like "ios-1", "android-1", or "client-1".
+export const BASE_INSTRUCTIONS = `react-native-mcp-kit bridges you to React Native dev apps on simulators, emulators, and devices. Multiple apps can connect simultaneously — each is identified by a short ID like "ios-1", "android-1", or "client-1".
 
 ## How to interact
 
 Every tool is top-level: module tools shipped by the app (\`fiber_tree${MODULE_SEPARATOR}query\`, \`network${MODULE_SEPARATOR}get_requests\`, \`navigation${MODULE_SEPARATOR}navigate\`, ...), dynamic tools registered via \`useMcpTool\`, and host tools (\`host${MODULE_SEPARATOR}screenshot\`, \`host${MODULE_SEPARATOR}tap_fiber\`, \`metro${MODULE_SEPARATOR}reload\`, ...) are all first-class MCP tools — invoke them directly by name with their full schema visible in your catalog. No proxy layer.
+
+The catalog has two layers with different lifetimes:
+  • **Host tools** (\`host${MODULE_SEPARATOR}*\`, \`metro${MODULE_SEPARATOR}*\`, \`wait_until\`, \`assert\`) — always registered, no app required. They drive the simulator / emulator / device and Metro directly from the dev machine, including when zero clients are connected.
+  • **App tools** (module tools like \`redux${MODULE_SEPARATOR}*\` / \`fiber_tree${MODULE_SEPARATOR}*\`, and dynamic \`useMcpTool\` tools) — registered only while their app client is connected. They leave the catalog when the app closes and re-register when it reconnects.
+
+**App closed ≠ server down.** When app tools disappear from the catalog, this server is still running and every host tool still works — that shrink just means the app went away. Recover instead of retrying dead tools: \`host${MODULE_SEPARATOR}connection_status\` (the closed client sits under \`disconnected\` for ~1h) → \`host${MODULE_SEPARATOR}launch_app\` → \`wait_until\` on \`host${MODULE_SEPARATOR}connection_status\` until \`clientCount\` ≥ 1 — the app tools then reappear.
 
 1. Use \`host${MODULE_SEPARATOR}connection_status\` to check connected clients — each has a lifecycle \`status\` (\`active\` / \`background\` / \`inactive\`), plus a \`disconnected\` array of recently-closed clients (held ~1h, with \`expiresInMs\`). Not \`active\`? See "App not \`active\`?" below.
 2. Invoke tools directly. Every tool accepts an optional \`clientId\` arg — omit it with a single client connected (auto-picks); with several, omitting returns an error listing available IDs.
@@ -14,7 +18,7 @@ Every tool is top-level: module tools shipped by the app (\`fiber_tree${MODULE_S
 4. For UI-level waits ("wait for a screen to appear", "wait for a spinner to disappear") use \`fiber_tree${MODULE_SEPARATOR}query\` with \`waitFor: { until: "appear" | "disappear", timeout?, interval?, stable? }\` — it polls the same query with cache bypassed until the target state holds. \`stable: <ms>\` requires continuous presence/absence for that many ms to ignore transient matches during screen transitions.
 5. Use \`assert\` for a single-shot checkpoint after actions — same predicate vocabulary as wait_until, returns { pass, actual, expected?, result? }. Natural pair: do action → wait_until / fiber_tree waitFor → assert.
 
-The tool catalog updates live: tools appear when RN clients connect (or components mount \`useMcpTool\`) and disappear on disconnect — the server emits \`notifications/tools/list_changed\`. If the catalog feels stale after an app reload, re-check \`host${MODULE_SEPARATOR}connection_status\`.
+The tool catalog updates live: tools appear when RN clients connect (or components mount \`useMcpTool\`) and disappear on disconnect — the server emits \`notifications/tools/list_changed\`. A shrinking catalog means an app went away, never that this server died — host tools stay callable throughout. If the catalog feels stale after an app reload, re-check \`host${MODULE_SEPARATOR}connection_status\`.
 
 ### \`clientId\` — routing and broadcast
 
