@@ -2,7 +2,7 @@
 
 **See, drive, and debug a running React Native app from an AI agent.**
 
-`react-native-mcp-kit` connects a running RN app — on simulator, emulator, or physical device — to any process that speaks the [Model Context Protocol](https://modelcontextprotocol.io). You wire it in once and the agent gets a concise, structured view of what's happening inside the running app: deep runtime-state analysis it can cross-reference in a single pass, full access to the React tree so it can find and reason about UI without screenshots and OCR, every kind of log the app produces, and simulation of real taps, swipes, and text input through the OS gesture pipeline. The whole surface is designed around what's cheap and fast for the agent to think about — lean responses by default, low vision-token cost on screenshots, a focused set of tools instead of overwhelming dumps.
+Wire it in once, and any agent that speaks the [Model Context Protocol](https://modelcontextprotocol.io) — Claude Code, Cursor, Continue, your own — can look inside your running app and act on it: read the component tree without screenshots and OCR, tail logs and network traffic, inspect navigation / Redux / React Query state, and fire real taps and keystrokes through the OS gesture pipeline.
 
 ```
 AI Agent / Cursor / Claude Code --stdio/MCP--> Node server --WebSocket--> RN app (device)
@@ -10,43 +10,27 @@ AI Agent / Cursor / Claude Code --stdio/MCP--> Node server --WebSocket--> RN app
                                                     └─ host tools (adb / xcrun / ios-hid) --USB/sim--> device
 ```
 
-## Why would I want this?
+Nothing here ships to your users: the production babel plugin strips every trace of the library from release bundles.
 
-A few concrete scenarios this unlocks:
+## What you can do with it
 
-- **Drive multiple devices in parallel from one agent session.** iOS simulator, Android emulator, physical device — any mix attaches to the same server. The agent can walk the same flow across platforms side-by-side, catching visual or behavioural regressions that show up on one OS but not the other, without ever leaving the editor.
-- **End-to-end automation without a separate test harness.** Describe a multi-step flow in natural language — "sign in, open settings, flip the notifications toggle, verify the confirmation toast" — and the agent walks it: locates the right components, fires real taps through the OS gesture pipeline, asserts on the resulting state, and reports back.
-- **Interactive inspection of a live app from your editor.** Ask "what screen am I on?", "what's in the request cache?", "what did the last POST return?", "what values are in app state right now?" — no rebuild, no DevTools panel, no "add more logs and reload" loop.
-- **Debug gesture-arbitration bugs that unit tests can't catch.** Taps go through the real iOS/Android touch pipeline, so issues like "the close button inside a horizontally-scrolling list swallows taps" surface naturally — and when you need to sidestep the pipeline (call a prop directly, in a spot a real finger can't reach) the bridge offers that too.
-- **Expose your own inspection points from inside components.** A component can register a named state key or an ad-hoc action from its own lifecycle. Agents then read feature-flag state, force a particular loading scenario, or trigger an internal-only action without you shipping a debug menu.
+- **Ask questions about the live app.** "What screen am I on?", "what did the last POST return?", "why is this list empty?" — the agent cross-references the mounted UI, navigation state, network log, and errors in one pass. No rebuild, no extra `console.log`, no DevTools tab.
+- **Hand over a bug ticket.** The agent drives the app into the failing state with real taps, confirms the bug, fixes the source, and replays the same steps to verify — in one editor session.
+- **Automate flows without a test harness.** "Sign in, create a document, share it, verify the recipient sees it, screenshot the result" — described in plain language, executed through the real touch pipeline, asserted on real state.
+- **Check platforms side by side.** iOS simulator, Android emulator, and a physical device can attach at once; one broadcast call runs the same step everywhere and hands back the differences.
+- **Expose your own debug points.** A component can register an ad-hoc tool from its own lifecycle (`useMcpTool`) — feature-flag reads, "force this loading state" actions — without shipping a debug menu.
 
-Everything the library adds to your bundle is stripped from production builds by default — wire it up once and leave it in, without shipping it to users.
+## Quick start
 
-## Example scenarios
-
-- **Deep runtime-state analysis on demand.** Ask "why is this screen blank?" or "why did the last submission fail?" — the agent cross-references what's mounted in the UI, where the user is in the app, what the network has been doing, what errors fired, and any state the app has opted into exposing. All from the running runtime, no extra logging or rebuild. The same pass can be scoped to a specific moment ("state right after I tap submit") instead of a stale snapshot.
-- **Reproduce a bug from a ticket, fix it, verify the fix.** The agent reads the reproduction steps, drives the app into the failing state through real taps and swipes, confirms the bug, edits the relevant source, then replays the same sequence to verify the fix — all in one editor session, no rebuilds between steps.
-- **End-to-end flow narrated in plain language.** "Sign in, add an item to the cart, go through checkout, verify the total matches the expected value, screenshot the final screen, and give me a network traffic summary." The agent drives real taps, checks state at each step, snapshots the key screens, and hands back captured request counts / durations / errors as evidence.
-- **Cross-platform parity check.** One agent holds two connected clients, runs the same tap sequence on iOS and Android in parallel, captures screenshots, and points out the differences — catches platform-specific regressions after an RN upgrade, shared-component refactor, or native change.
-- **Implement a feature and verify it end-to-end.** Write the code, then hand the finished feature to the agent — it navigates to the affected screen, exercises the new controls, inspects component state and network calls, and confirms the expected behavior without you having to click through the simulator yourself.
-
-## Install
+### 1. Install
 
 ```bash
 yarn add react-native-mcp-kit
-# or
-npm install react-native-mcp-kit
 ```
 
-**Peer dependencies**: `react >= 19`, `react-native >= 0.79`, `react-native-device-info >= 10`.
+Peer dependencies: `react >= 19`, `react-native >= 0.79`, `react-native-device-info >= 10` (device-info is optional — without it the `device` module just reports fewer fields).
 
-## Setup
-
-Three pieces need to be wired up: the **provider** at the root of your RN app, a pair of **babel plugins** so components are identifiable and production builds stay clean, and the **MCP server** that the AI agent talks to.
-
-### 1. Wrap the app in `McpProvider`
-
-Put it at the root of the tree. Optional props opt specific modules in — omit a prop and that module isn't registered.
+### 2. Wrap the app in `McpProvider`
 
 ```tsx
 import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
@@ -57,13 +41,12 @@ const navigationRef = createNavigationContainerRef();
 export const App = () => {
   return (
     <McpProvider
-      debug
-      // Optional — each prop opts a module in:
+      // Each prop opts a module in — omit what you don't use:
       navigationRef={navigationRef} // → navigation module
-      queryClient={queryClient} // → reactQuery module
-      i18n={i18nInstance} // → i18next module
+      queryClient={queryClient} // → query module
       store={store} // → redux module
       storages={[{ name: 'mmkv', adapter: mmkvAdapter }]} // → storage module
+      i18n={i18nInstance} // → i18n module
     >
       <NavigationContainer ref={navigationRef}>{/* your app */}</NavigationContainer>
     </McpProvider>
@@ -71,24 +54,9 @@ export const App = () => {
 };
 ```
 
-These modules register automatically on mount — no prop required:
+`alert`, `console`, `device`, `errors`, `log_box`, `network`, and `fiber_tree` register automatically — no props needed. If a dependency lives deeper in the tree (say, the `QueryClient` is created inside a feature provider), skip the prop and call `useMcpModule` there instead — see [Your own tools](#your-own-tools).
 
-`alert`, `console`, `device`, `errors`, `log_box`, `network`, `fiber_tree`
-
-If the dependency lives deeper in the tree (e.g. the `QueryClient` is created inside a feature-specific provider), skip the prop and use `useMcpModule` there instead — see [Hooks](#hooks).
-
-### 2. Babel plugins — why and how
-
-Two plugins ship under `react-native-mcp-kit/babel`. You want both.
-
-**`test-id-plugin`** — two transforms, one pass:
-
-- Stamps every capitalized JSX element with a stable `data-mcp-id="ComponentName:path/to/file:line"` attribute. `fiber_tree` uses this to identify a component across renders, minification, and refactors. Without it you can still find components by `name` or `testID`, but mcpId is what makes "find the nth `ProductCard` on a specific line" reliable across a large codebase.
-- Attaches `__mcp_hooks` metadata to each component function and each custom-hook function (`/^use[A-Z]/` with hook calls in body). This is how `fiber_tree__query` with `select: ["hooks"]` recovers hook names (`count`, `scrollRef`, …) instead of `State[0]` / `Ref[2]`. The plugin runs on `node_modules` too, so library hooks from react-redux / react-query get annotated automatically.
-
-Run in **development**.
-
-**`strip-plugin`** — strips every trace of mcp-kit from a bundle: imports from `react-native-mcp-kit`, calls to `McpClient.*` / `useMcpTool` / `useMcpModule`, the `<McpProvider>` JSX wrapper (its children are preserved), `data-mcp-id` attributes, and `__mcp_hooks = [...]` metadata assignments. Run this in **production** and none of the library code reaches your users.
+### 3. Add the babel plugins
 
 ```js
 // babel.config.js
@@ -104,15 +72,14 @@ module.exports = (api) => {
 };
 ```
 
-Both plugins accept options (attribute name, include/exclude lists, extra import sources, extra function names to strip) when you need to customize — pass them as the 2nd array element in the usual babel style. Defaults cover the common case.
+- **test-id-plugin** (dev) stamps every component with a stable `data-mcp-id="Name:file:line"` and records hook names — this is what lets the agent say "the second `ListItem` on line 76" and read `isLoading` instead of `State[3]`.
+- **strip-plugin** (prod) removes everything: the provider, the hooks, the imports, the stamped attributes. You don't need `if (__DEV__)` guards in your code.
 
-After editing `babel.config.js` — or after installing / upgrading `react-native-mcp-kit` — clear Metro's cache once: `yarn start --reset-cache`. Metro aggressively caches transformed files, and until it re-runs the plugin on `node_modules`, `__mcp_hooks` annotations for library hooks will be missing and `fiber_tree__query` with `select: ["hooks"]` will return `null`.
+After editing babel config or upgrading the package, reset Metro's cache once: `yarn start --reset-cache`.
 
-### 3. Configure the MCP server
+### 4. Point your agent at the server
 
-The MCP server is a Node process that brokers between your agent (stdio/MCP) and the RN app (WebSocket). It ships as a bin in the package — `npx react-native-mcp-kit` boots it.
-
-Point your agent at it via the usual MCP config. For Claude Code / Cursor / Continue etc., a project-local `.mcp.json`:
+The MCP server ships as a bin in the package. For Claude Code / Cursor, a project-local `.mcp.json`:
 
 ```json
 {
@@ -125,312 +92,158 @@ Point your agent at it via the usual MCP config. For Claude Code / Cursor / Cont
 }
 ```
 
-**CLI flags:**
+Flags: `--port <number>` (WebSocket port the app connects to, default `8347`), `--no-host` (in-app tools only, no device control).
 
-- `--port <number>` — WebSocket port the RN app connects to (default `8347`).
-- `--no-host` — disable the host module (the server no longer exposes `host__tap`, `host__screenshot`, etc.). Use this when you only want in-app modules.
+Android emulators need the adb port forward once per boot: `adb reverse tcp:8347 tcp:8347`. iOS simulators share localhost — nothing to do.
 
-For **Android emulators** you need the adb port forward so the app can reach the server:
+### 5. Run it
 
-```bash
-adb reverse tcp:8347 tcp:8347
-```
-
-iOS simulators share localhost with the host machine, no forwarding needed.
-
-### 4. Run
-
-Start Metro + your app. The `McpProvider` connects to `ws://localhost:8347` on mount.
-
-From your agent, a typical first session looks like:
+Start Metro and the app; the provider connects on mount (and silently retries until the server appears). A first agent session looks like:
 
 ```
 host__connection_status
  → { clientCount: 1, clients: [{ id: "ios-1", label: "iPhone 17 Pro", ... }] }
 
-fiber_tree__query { scope: "root", select: ["name"] }
- → the mounted component tree, straight from the catalog
+fiber_tree__query { steps: [{ scope: "root" }], select: [{ children: 5 }] }
+ → the mounted component tree
 ```
 
-Every tool — host, app-module, or `useMcpTool`-dynamic — is a first-class MCP tool in the agent's catalog; the catalog updates live as clients connect and disconnect. If the server isn't running yet, the provider just retries silently — no crash, no error toast.
+## How the agent sees it
 
-## `McpProvider` reference
+Every tool — in-app module tools, your `useMcpTool` registrations, and device-level host tools — is a first-class MCP tool with a real schema in the agent's catalog. The catalog updates live: connect a second device and its tools appear; unmount a screen that registered a tool and it disappears.
 
-```ts
-interface McpProviderProps {
-  children: ReactNode;
-  debug?: boolean; // colored console logs for all MCP traffic
-  navigationRef?: NavigationRef; // → navigationModule
-  queryClient?: QueryClientLike; // → reactQueryModule
-  i18n?: I18nLike; // → i18nextModule
-  store?: StoreLike; // → reduxModule
-  storages?: NamedStorage[]; // → storageModule(...storages)
-  modules?: McpModule[]; // arbitrary extra modules
-}
-```
+Three things worth knowing:
 
-Wrap your whole app in it — every optional prop opts a module in when supplied.
+- **`clientId` routes everything.** Every tool takes an optional `clientId`. With one app connected you never pass it; with several, pass `"ios-1"`, a `/regex/`, or an array — the latter two broadcast the call to every match and aggregate per-client results.
+- **`wait_until` and `assert` replace sleep-and-screenshot.** `wait_until` polls any tool until a predicate over its result holds; `assert` is the single-shot checkpoint version. For UI waits, `fiber_tree__query` has `waitFor: { until: "appear" | "disappear", stable? }` built in.
+- **Responses are projection-first.** Heavy JSON collapses into compact `${...}` markers with `path` / `depth` / `maxBytes` knobs on every listing tool — the agent drills into `[-1:][0].response.body` instead of receiving a 50KB dump.
 
-## MCP server tools
+## Device control (host tools)
 
-Every tool is registered top-level with its real schema — the agent invokes `fiber_tree__query`, `host__screenshot`, or `myModule__greet` directly from its catalog; no dispatcher layer. Multi-client routing rides on an optional `clientId` arg every tool accepts (string, `/regex/`, or array — the latter two broadcast). The server adds two wrappers you don't register or configure:
+Enabled by default; runs on the machine hosting the server via `adb` / `xcrun` / a bundled `ios-hid` binary. Works even when the app is hung, not launched, or mid-reload.
 
-- **Test automation** — `wait_until` (poll any tool until a predicate holds, replacing screenshot-in-a-loop + sleep) and `assert` (single-shot checkpoint with a standardized diff on failure).
-- **Discovery** — `host__connection_status` reports connected clients, their lifecycle state, and recently-disconnected ghosts.
-- **UI-level waits** — `fiber_tree__query` has a built-in `waitFor: { until: "appear" | "disappear", stable? }` option; see the [fiber_tree section](#fiber_tree).
+- **Real input** — `tap`, `long_press`, `swipe`, `drag`, `type_text`, `type_text_batch`, `press_key`; `tap_fiber` finds a component via fiber_tree and taps its center in one call. iOS input is injected through the bundled `ios-hid` binary (no external daemons); Android goes through adb.
+- **Screenshots** — WebP, resized to keep vision-token cost low, with `region` cropping and an `unchanged: true` short-circuit for polling. Works on simulators, emulators, Android devices, and **physical iOS 17+ devices** (over Apple's CoreDevice tunnel — no extra tooling).
+- **App lifecycle** — `launch_app` / `terminate_app` / `restart_app`. Simulators use `simctl`; real iOS devices go through `devicectl` (restart is one `--terminate-existing` call; bare terminate isn't possible there — the tool says so).
+- **Device listing** — sims, emulators, and devices, annotated with which ones have a live MCP client attached.
 
-## Host tools (device-level control)
+Real-device iOS **input** isn't supported yet (screenshots are) — use a simulator or Android for tap automation.
 
-When the `host` module is enabled (the default), the server exposes tools that operate **on the host machine** — they run `adb` / `xcrun simctl` / `xcrun devicectl` / a bundled `ios-hid` binary. These work even when the RN app is frozen, not launched yet, or between reloads.
+## Metro tools
 
-What you get:
+A separate module that talks to the Metro instance each app was bundled from — the URL is auto-detected per client at handshake, so non-default ports and LAN devices just work.
 
-- **Real OS input** — `tap`, `long_press`, `swipe`, `drag`, `type_text`, `type_text_batch`, `press_key`. Goes through the real iOS/Android touch pipeline.
-- **`tap_fiber`** — one call to locate a component via fiber_tree and tap its center. No copy-paste of bounds between calls.
-- **Screenshots** — WebP, auto-diffing. Every response carries a `hash` so callers can diff externally; `{ unchanged: true, lastMeta }` is returned when bytes match the previous capture (`lastMeta` mirrors the original meta — width / height / scale / hash — so polling loops don't need to re-query). Pass `region` in physical pixels to crop to a specific element and keep vision-token cost low. Works on iOS simulators, Android sims/emulators/devices, **and physical iOS 17+ devices** (over Apple's CoreDevice tunnel — no external tools or sudo required, the connected RN client's `isSimulator: false` flag picks the right path automatically).
-- **App lifecycle** — launch, terminate, restart.
-- **Device enumeration** — list sims / emulators / devices, annotated with active MCP clients. Pass `connected: true` to filter to just devices with a live MCP client attached.
+- `metro__symbolicate` — raw Hermes/V8 stack → source paths. `errors__get_errors` and `log_box__get_logs` return `stackFrames` ready to feed in.
+- `metro__reload` — full JS reload on every attached app.
+- `metro__get_events` — ring buffer over Metro's event stream; catches silent HMR failures when no red box appears.
+- `metro__status`, `metro__open_in_editor` — ping and jump-to-line.
 
-iOS input goes through a bundled `ios-hid` Swift binary that injects HID events directly into iOS Simulator via private frameworks — no external daemons to install or keep running. Real-device iOS input isn't supported yet (screenshots are); use a simulator or Android device for tap/swipe automation.
+## In-app modules
 
-## Metro tools (dev-server control plane)
+| Module       | What the agent gets                                                                        |
+| ------------ | ------------------------------------------------------------------------------------------ |
+| `fiber_tree` | Search and read the component tree — the heart of UI inspection ([details](#fiber_tree))   |
+| `navigation` | Current route (+ rendering component), state, history; navigate / pop / reset / go_back    |
+| `network`    | fetch + XHR log with redaction: method, URL, status, duration, headers, bodies             |
+| `console`    | Ring buffer over console.* with stacks and monotonic ids                                   |
+| `errors`     | Unhandled errors + promise rejections, stacks pre-parsed for symbolication                 |
+| `redux`      | State tree reads + dispatch                                                                |
+| `query`      | React Query cache: list, read by key, invalidate / refetch / remove / reset                |
+| `storage`    | Named key-value stores (MMKV, AsyncStorage, anything with a `get`)                         |
+| `device`     | Platform facts: dimensions, appearance, battery, memory; open_url / vibrate / reload       |
+| `i18n`       | i18next: keys, resources, search, translate, switch language                               |
+| `log_box`    | Inspect / dismiss / mute the LogBox overlay (handy when a warning blocks a flow)           |
+| `alert`      | Native Alert from the agent — returns which button was pressed                             |
 
-Separate module talking HTTP / WebSocket to the Metro instance the app was bundled from.
-
-- **Auto-detected URL per client.** Each attached app reports its actual Metro origin at handshake (via RN's `getDevServer()`). Non-default ports (`yarn start --port 8082`) and LAN-connected physical devices work without an explicit `metroUrl` arg.
-- **`metro__symbolicate`** — maps a raw Hermes / V8 stack trace back to source paths via Metro's `/symbolicate`. Pairs naturally with `errors__get_errors` and `log_box__get_logs` (each entry has parsed `stackFrames` ready to feed in).
-- **`metro__reload`** — triggers a full JS reload on every attached app (`POST /reload`).
-- **`metro__status`** — cheap ping before a chain of Metro calls.
-- **`metro__open_in_editor({ file, lineNumber, column? })`** — jumps `$REACT_EDITOR` to the exact line. Natural finisher after a symbolication flow.
-- **`metro__get_events`** — reads a server-side ring buffer (200 events) fed by a lazy WebSocket to Metro's `/events` stream. Surfaces `bundle_build_failed`, `bundling_error`, `hmr_client_error`, `hmr_update`, `client_log`, etc. Key use: detecting silent HMR failures when the red box doesn't appear.
-
-## Hooks
-
-For when the thing you want to expose lives deeper than `McpProvider`:
-
-```ts
-useMcpTool(name, factory, deps); // register an ad-hoc tool tied to the component lifecycle
-useMcpModule(factory, deps); // register a whole module from inside a component
-```
-
-Each follows `useMemo` / `useEffect` semantics — the factory re-runs on dep changes, registration cleans up on unmount.
-
-```tsx
-const UserProvider = ({ children }) => {
-  const [user, setUser] = useState(null);
-
-  useMcpTool(
-    'logout',
-    () => ({
-      description: 'Log out the current user',
-      handler: async () => {
-        await logout();
-        return { success: true };
-      },
-    }),
-    [logout]
-  );
-
-  return <UserContext.Provider value={user}>{children}</UserContext.Provider>;
-};
-```
-
-Reading state is unified through `fiber_tree__query` with `select: ["hooks"]` — no manual exposure step needed. See the [fiber_tree section](#fiber_tree) below.
-
-## Modules
-
-| Module                    | Factory                         | Requires                                  |
-| ------------------------- | ------------------------------- | ----------------------------------------- |
-| [alert](#alert)           | `alertModule()`                 | —                                         |
-| [console](#console)       | `consoleModule(options?)`       | —                                         |
-| [device](#device)         | `deviceModule()`                | —                                         |
-| [errors](#errors)         | `errorsModule(options?)`        | —                                         |
-| [fiber_tree](#fiber_tree) | `fiberTreeModule({ rootRef })`  | root ref (auto-supplied by `McpProvider`) |
-| [i18n](#i18n)             | `i18nextModule(i18n)`           | i18next instance                          |
-| [log_box](#log_box)       | `logBoxModule()`                | —                                         |
-| [navigation](#navigation) | `navigationModule(ref)`         | React Navigation ref                      |
-| [network](#network)       | `networkModule(options?)`       | —                                         |
-| [query](#query)           | `reactQueryModule(queryClient)` | `QueryClient`                             |
-| [redux](#redux)           | `reduxModule(store)`            | Redux `Store`                             |
-| [storage](#storage)       | `storageModule(...storages)`    | one or more `NamedStorage`                |
-
-The full tool list for every module lands in the agent's catalog at runtime — the sections below describe what each module gives you, not each tool.
-
-### alert
-
-Show a native `Alert.alert` from the agent with any combination of `default` / `cancel` / `destructive` buttons and get back which one was pressed. Useful for "are you sure?" prompts driven by the agent, or for surfacing a decision point to a human tester.
-
-### console
-
-Tails `console.log` / `warn` / `error` / `info` / `debug` / `trace` / `group` / `groupCollapsed` / `groupEnd` into a ring buffer the agent can read or clear. `trace` (and error / warn by default) capture stacks. Each entry carries a monotonic `id`. Args are stored raw and projected at query time — Errors, Dates, class instances, cyclic refs, functions, Symbols, Maps, Sets all collapse to compact `${kind}` markers. Listing tools accept standard `path` / `depth` / `maxBytes` projection args (default depth 3); drill via `path: '[-1:][0].args[1]'` to fetch one specific arg. Buffer size, captured levels, and whether stack traces are collected are all configurable.
-
-```ts
-consoleModule({
-  maxEntries: 200,
-  levels: ['error', 'warn', 'log'],
-  stackTrace: ['error', 'warn'], // or `true` / `false`
-});
-```
-
-### device
-
-Aggregate read of platform facts via `info({ select? })` — returns any subset of: RN-core fields (`platform`, `dimensions`, `pixelRatio`, `appearance`, `appState`, `accessibility`, `keyboard`, `initialUrl`, `dev`) and `react-native-device-info`-backed fields (`identity`, `app`, `battery`, `memoryStorage`); pass `select: ['battery','identity']` to limit to specific fields. `dimensions` carries both DP and physical pixels. `react-native-device-info` is an **optional dependency** — install it to surface battery / memory / disk / extended identity (model, manufacturer, deviceType, isTablet, hasNotch, hasDynamicIsland, systemName/Version) and app metadata (buildNumber, readableVersion, install/update times). Missing package → DI-backed fields return `{ unavailable: true, reason }`. Imperative actions: `open_url({ url, dryRun? })` (dryRun only checks Linking.canOpenURL), `open_settings`, `dismiss_keyboard`, `vibrate`, `reload`.
-
-### errors
-
-Captures unhandled JS errors (via `ErrorUtils.setGlobalHandler`) and unhandled promise rejections. Each entry has a monotonic `id`, parsed `stackFrames` designed to feed into `metro__symbolicate` (one call resolves bundle paths back to `src/components/Foo.tsx:42:10`), plus the raw `stack` string. Listing tools accept standard `path` / `depth` / `maxBytes` projection args (default depth 4 — entries + stackFrames expanded; long stacks wrap in `${str}` markers); drill via `path: '[-1:][0].stack'` for the full text.
+Factories (`consoleModule(options?)`, `networkModule(options?)`, `storageModule(...stores)`, …) accept options where capture behaviour is tunable — buffer sizes, captured levels, redact lists, ignored URLs. The catalog carries every tool's full schema at runtime, so the sections below stay at the "what's there" level.
 
 ### fiber_tree
 
-The heart of UI inspection. Search the component tree via a chained `query`: each step narrows the result by **criteria** within a given **scope**, with multiple matches fanning out into the next step.
+Search the tree with a chained `query`: each step narrows matches by criteria (`name`, `testID`, `mcpId`, `text`, `hasProps`, `props`, `not`, `any` — strings accept `/regex/flags`) within a scope (`descendants`, `children`, `parent`, `ancestors`, `siblings`, `self`, `root`, `screen`, `nearest_host`). Wrapper cascades (`PressableView → Pressable → View → RCTView`) collapse to the topmost so results don't drown in wrappers.
 
-- **Criteria**: `name`, `testID`, `mcpId`, `text`, `hasProps`, `props` (equality + `contains` / `regex`), `not`, `any`. `name` / `mcpId` / `testID` / `text` accept either an exact string or a `/pattern/flags` slash form (e.g. `name: "/^Pressable/"` matches Pressable / PressableView / …) — same syntax wherever string matching shows up in the tool.
-- **Scopes**: `descendants`, `children`, `parent`, `ancestors`, `siblings`, `self`, `root` (the React fiber root — useful as a first step to dump the whole tree), `screen` (focused screen fiber from React Navigation), `nearest_host` (closest host component).
+What you can select per match:
 
-Wrapper cascades (`PressableView → Pressable → View → RCTView`) collapse to the topmost by default, so overlapping matches don't drown the result. `bounds` come back in physical pixels and pair directly with `host__tap` — or use `host__tap_fiber` for the locate-and-tap shortcut.
+- `bounds` — physical pixels, feed them straight into `host__tap` (or use `host__tap_fiber` and skip the copy-paste);
+- `props` — projected with its own `path` / `depth` / `maxBytes`;
+- `hooks` — hook values **with source-recovered names** (`isLoading`, not `State[3]`), filterable by kind / name / call-site, resolved values on request, sensitive names auto-redacted. Works through `memo` / `forwardRef` / custom HOC chains and library hooks (react-query, react-redux, reanimated);
+- `children` — a light recursive tree dump (`select: [{ children: 5 }]` from `scope: 'root'` is the canonical "show me everything" call);
+- `refMethods` — native-ref methods (`focus`, `scrollTo`, …) callable via `fiber_tree__call({ method })`; `fiber_tree__call({ prop: 'onPress' })` invokes callback props directly when the gesture pipeline is unwanted.
 
-Pass `waitFor: { until: 'appear' | 'disappear', timeout?, interval?, stable? }` to poll the same query until the target state is reached — e.g. `waitFor: { until: 'appear', stable: 300 }` waits for a screen to mount and hold stable for 300ms. Response carries `{ waited, attempts, elapsedMs, timedOut, stableFor? }` alongside the usual matches.
+Every hook entry and every stamped component carries an `mcpId` of the form `Name:file:line` — the agent can jump from a running component straight to its source line.
 
-**Per-field projection.** Heavy fields — `props` and `hooks` — are projected per-field via `select`, so the rest of the response (mcpId, name, total) stays raw and always visible. Each takes its own `path` / `depth` / `maxBytes` knobs:
+## Your own tools
 
-- `select: [{ props: { path: "data[0:5]", depth: 2 } }]` — drill into props.data[0..5) with 2 levels of expansion.
-- `select: [{ hooks: { kinds: ["State"], names: ["isLoading"], withValues: true, depth: 2, path: "[0].value" } }]` — filter hooks by kind/name + project hook values. `mcpIds: ['count:screens/HomeScreen/HomeScreen:50']` targets one specific call-site directly; `kinds` covers React 18/19 too (`Optimistic`, `ActionState`, `Use`, plus the classic State / Effect / Memo / …).
-- `select: [{ children: 5 }]` — recursive light-only walker, dumps a tree of mcpId/name 5 levels deep from each match. At the bottom, sub-children appear as `{ "${arr}": N }` so you see there's more to drill. Heavy fields (`props`/`hooks`) are not allowed inside `select.children` — query a child's mcpId separately when you need them.
-- `select: ['mcpId', 'refMethods']` — list native-ref methods (focus, blur, measure, scrollTo, ...) available for `call({ method })`. `null` when the fiber has no native instance.
-- `query({ steps: [{ scope: 'root' }], select: [{ children: 5 }] })` — the canonical "dump the whole tree" entry point.
+Register an ad-hoc tool from any component — it lives and dies with the component:
 
-Heavy nested values render as compact `${kind}`-keyed markers — `{"${arr}":47}`, `{"${fun}":"onPress"}`, `{"${str}":{ "len":1247, "preview":"..." }}` for long strings, `{"${Date}":"iso"}`, `{"${Err}":{ name, msg }}`, `{"${cyc}":true}`, `{"${ref}":{ mcpId, name }}` for component refs. Wide objects/arrays (>30 keys / >50 items) get a `${truncated}` sentinel as the first entry.
-
-Hooks pull `useState` / `useMemo` / `useCallback` / `useRef` / `useEffect` / custom hooks with variable names recovered from source (via `__mcp_hooks` metadata from the test-id babel plugin). Every entry also carries an `mcpId` — `<name>:<shortFile>:<line>` in the same shape as JSX `data-mcp-id` — so you can drop it straight into `Read(file, line)` to jump to the call site without grepping. React 18 and 19 hooks are mapped to dedicated kinds (`Optimistic`, `ActionState`, `Use`, `SyncExternalStore`, `DeferredValue`, …) alongside the classics; `use(promise | context)` is detected too, with `<obj>.use(...)` calls (`database.use`, `app.use`) filtered out by a React-namespace guard so they don't show up as false-positive hooks. `withValues: true` adds resolved values; `expansionDepth` caps custom-hook recursion (`0` = top-level only); `format: "tree"` returns nested children instead of flat `via` chains. Sensitive names (password, token, jwt, secret, credential, apiKey, authorization, *Pin) are auto-redacted — override via `fiberTreeModule({ redactHookNames, additionalRedactHookNames })`. Works against any HOC chain (`memo`, `forwardRef`, custom HOCs, `as` casts) and library hooks from react-query, react-redux, reanimated, react-navigation.
-
-### i18n
-
-Inspect and manipulate an `i18next` instance: list keys, dump a whole translation resource, run a substring search, translate with interpolation, switch language at runtime.
-
-### log_box
-
-Control the React Native LogBox overlay: inspect current rows, dismiss or clear them, add ignore patterns (substring or `/regex/flags`), globally mute. `get_logs` accepts standard `path` / `depth` / `maxBytes` projection args; drill via `path: '[0].stack[0]'` for a specific frame. Useful for clearing warning toasts that block automated UI flows. Dev-only — no-op in production.
-
-### navigation
-
-Drive React Navigation from outside and read the current route, nested state, and the last 100 transitions. Reads — `get_state`, `get_history`, `get_current_route({ withState? })` — accept standard `path` / `depth` / `maxBytes` projection args; current-route responses include a `screen` field identifying the rendering component (`componentName`, `mcpId`, `filePath`, `line`). Actions are collapsed by semantic verb: `navigate({ screen, params?, mode?: 'reuse' | 'push' | 'replace' })` for forward moves (default mode reuses existing screen); `pop({ to? })` accepts a number, a screen name, or `"top"` for the three pop variants; plus `reset({ routes, index? })` and `go_back`. Needs a `createNavigationContainerRef()` passed to both `<NavigationContainer ref={…}>` and `<McpProvider navigationRef={…}>`.
-
-### network
-
-Intercepts `fetch` and `XMLHttpRequest` into a ring buffer — method, URL, status, duration, headers, bodies. Bodies are stored raw (post JSON-parse + redact) up to `bodyMaxBytes` (default 20KB); larger payloads collapse at capture time to `{ "${str}": { len, preview } }`. Sensitive headers / body keys are redacted at capture time (`Authorization`, `Cookie`, `password`, `token`, etc. — configurable). Listing tools accept standard `path` / `depth` / `maxBytes` projection args (default depth 3 — entries expanded, headers and bodies collapse to `${obj}` markers); drill into a body via `path: '[-1:][0].response.body'` or bump `depth` to expand inline. WebSocket, Metro, and symbolicate traffic are auto-ignored.
-
-```ts
-networkModule({
-  maxEntries: 200,
-  bodyMaxBytes: 10_000,
-  ignoreUrls: ['https://analytics.example.com', /\.png$/],
-  redactHeaders: ['authorization'], // or false to disable
-  redactBodyKeys: ['password'], // or false to disable
-});
+```tsx
+const EditorScreen = ({ draft }) => {
+  useMcpTool(
+    'get_current_draft',
+    () => ({
+      description: 'Snapshot of the draft currently open in the editor.',
+      handler: () => ({ id: draft.id, title: draft.title, wordCount: draft.wordCount }),
+    }),
+    [draft]
+  );
+  // ...
+};
 ```
 
-### query
-
-React Query cache inspection + mutation: list cached queries, fetch cached data by key, get stats, and run `mutate({ action: 'invalidate' | 'refetch' | 'remove' | 'reset', key? })` against specific keys or the whole cache. `get_data` accepts standard `path` / `depth` / `maxBytes` projection args — heavy `data` collapses to `${obj}`/`${arr}` markers by default; drill via `path: 'data.user.email'`.
-
-### redux
-
-Redux store inspection + dispatch. `get_state` returns the full state tree keyed by slice and accepts standard `path` / `depth` / `maxBytes` projection args — heavy slices collapse to `${obj}`/`${arr}` markers by default (default depth 2 walks each slice one level); drill via `path: 'auth.user.email'`, or pass `depth: 1` for a slice-name overview. `dispatch({ action })` takes the action as a JSON object string with a string `type` — e.g. `'{"type":"cart/addItem","payload":{"id":42}}'` — and works against any Redux Toolkit / vanilla store.
-
-```ts
-interface StoreLike {
-  getState(): unknown;
-  dispatch(action: { type: string; [key: string]: unknown }): unknown;
-}
-
-<McpProvider store={store}>
-```
-
-### storage
-
-Reads and writes to one or more named key-value stores. Values are JSON-parsed on read when possible. `get_item` and `get_all` accept standard `path` / `depth` / `maxBytes` projection args — heavy nested values collapse to `${obj}`/`${arr}` markers; drill via `path: 'session.user.email'` (for `get_all`) or `path: 'value.user.email'` (for `get_item`, since the response wraps as `{ key, value }`).
-
-Each store is a `{ name, adapter }` pair; the adapter can wrap MMKV, AsyncStorage, or any custom implementation that provides at least a `get`:
-
-```ts
-interface StorageAdapter {
-  get(key: string): string | undefined | null | Promise<string | undefined | null>;
-  set?(key: string, value: string): void | Promise<void>;
-  delete?(key: string): void | Promise<void>;
-  getAllKeys?(): string[] | Promise<string[]>;
-}
-
-storageModule(
-  { name: 'mmkv', adapter: mmkvAdapter },
-  { name: 'async', adapter: asyncStorageAdapter }
-);
-```
-
-Without an `adapter.set` / `delete` / `getAllKeys`, the corresponding tools just report the operation as unsupported.
-
-## Custom modules
-
-Write your own module by returning an `McpModule`:
+Or a whole module (several tools sharing a dependency):
 
 ```ts
 import { type McpModule } from 'react-native-mcp-kit';
-
 import { z } from 'zod';
 
-const myModule = (): McpModule => ({
-  name: 'myModule',
-  description: 'Custom tools exposed to AI agents',
+const sessionModule = (auth: AuthApi): McpModule => ({
+  name: 'session',
+  description: 'Auth session inspection and control',
   tools: {
-    greet: {
-      description: 'Returns a greeting',
-      handler: async (args) => ({ message: `Hello, ${args.name}!` }),
-      inputSchema: z.looseObject({ name: z.string() }),
-      timeout: 5000, // optional per-tool timeout, default 10s
+    switch_account: {
+      description: 'Switch to another test account by id',
+      handler: async (args) => auth.switchTo(String(args.accountId)),
+      inputSchema: z.looseObject({ accountId: z.string() }),
+      timeout: 5000, // per-tool, default 10s
     },
   },
 });
 
-<McpProvider modules={[myModule()]}>{…}</McpProvider>
-// or
-useMcpModule(() => myModule(), []);
+// at the root:
+<McpProvider modules={[sessionModule(auth)]}>...</McpProvider>
+// or from a component that owns the dependency:
+useMcpModule(() => sessionModule(auth), [auth]);
 ```
 
-Agents see `myModule__greet` in their tool catalog and call it directly.
+Both hooks follow `useMemo` / `useEffect` semantics: the factory re-runs on dep changes, registration cleans up on unmount, and the agent's catalog follows along.
 
-`inputSchema` is a Zod schema (serialized to JSON Schema for the wire via `z.toJSONSchema`). Prefer `z.looseObject` so undeclared args still reach your handler, and advertise defaults with `.meta({ default })` rather than `.default()` — the schema guides the agent, your handler stays the source of truth.
+`inputSchema` is a Zod schema (serialized to JSON Schema for the wire). Two habits pay off: use `z.looseObject` so undeclared args still reach your handler, and advertise defaults with `.meta({ default })` rather than `.default()` — the schema guides the agent, your handler stays the source of truth. Write descriptions that name the *task* ("snapshot of the draft open in the editor"), not the implementation — that's what the agent's semantic tool search matches against.
 
-## Testing
+## Testing your app
 
-Unit tests shouldn't load the real client — it opens a WebSocket and lazy-requires react-native. The package ships a no-op mock at `react-native-mcp-kit/jest`: full type-compliance, every export stubbed (the provider renders its children, the hooks no-op, factories return empty modules, `registerModule` hands back a disposer). Wire it once:
+Unit tests shouldn't load the real client (it opens a WebSocket and lazy-requires react-native). The package ships a complete no-op mock:
 
 ```js
-// jest setup file
-jest.mock('react-native-mcp-kit', () => require('react-native-mcp-kit/jest'));
-
-// …or via jest config
+// jest config
 moduleNameMapper: { '^react-native-mcp-kit$': 'react-native-mcp-kit/jest' }
 ```
 
-## Dev vs production
+Provider renders children, hooks no-op, factories return empty modules — fully type-compatible.
 
-- **Development** — test-id plugin on, strip plugin off. The `McpProvider` boots, tries to connect to `ws://localhost:8347`; if the server isn't running, no harm done — the bridge just stays disconnected and retries.
-- **Production** — strip plugin on (test-id plugin off). The provider, all hook calls, every import from `react-native-mcp-kit`, and every `data-mcp-id` attribute vanish from the bundle. Nothing ships to users.
+## Production builds
 
-You don't need `if (__DEV__)` guards around mcp-kit usage — the babel plugin handles it.
+With the strip-plugin in your production babel env, release bundles contain no trace of the library: no provider, no hooks, no stamped attributes, no imports. Dev bundles keep everything and connect automatically. There is nothing to guard, toggle, or remember at release time.
 
-## Debug logging
+## Troubleshooting
 
-Pass `debug` to the provider to print every incoming request and outgoing response with color-coded module names and arrows. Logs use the pre-intercept `console.log`, so they never pollute the `console` module's buffer.
-
-```tsx
-<McpProvider debug>{…}</McpProvider>
-```
+- **Agent sees no in-app tools** → check `host__connection_status`. No clients? The app isn't reaching the server: Android emulator missing `adb reverse tcp:8347 tcp:8347`, or the app was started before the server and hasn't retried yet (it retries every 3s — give it a moment).
+- **`hooks` come back as `null` names** → Metro served a cached transform without the plugin. `yarn start --reset-cache` once.
+- **`Port 8347 is already in use`** → the server names the process holding the port (usually a stale server from a previous session) — kill it, or pass `--port`.
+- **`Client protocol vN does not match server vM`** → the app bundle and the server come from different package versions. Update the lagging side; the wire format is versioned deliberately so a skew fails loudly instead of degrading quietly.
+- **Catalog feels stale after an app reload** → re-check `host__connection_status`; tools follow client connections live, but your MCP client may need a moment to refresh.
 
 ## API reference
 
-The recommended entry point is `<McpProvider />` — it owns the client singleton and you rarely need to touch `McpClient` directly. For advanced cases the class exposes `McpClient.initialize` / `getInstance` / `registerModule(s)` / `registerTool` / `setState` / `removeState` / `dispose` / `enableDebug` (all idempotent, `initialize` returns the existing instance on repeat calls).
-
-Module and tool types:
+`<McpProvider />` owns the client singleton — you rarely need `McpClient` directly. For advanced embedding it exposes `McpClient.initialize(options)` / `getInstance()` / `registerModule(s)` / `unregisterModule(s)` / `registerTool` / `unregisterTool` / `dispose` / `enableDebug` (idempotent; `initialize` returns the existing instance on repeat calls). Pass `debug` to the provider for color-coded logs of every request and response.
 
 ```ts
 interface McpModule {
@@ -442,8 +255,8 @@ interface McpModule {
 interface ToolHandler {
   description: string;
   handler: (args: Record<string, unknown>) => unknown | Promise<unknown>;
-  inputSchema?: Record<string, unknown>;
-  timeout?: number; // default 10s
+  inputSchema?: ZodType; // z.looseObject({...}) — serialized to JSON Schema for the wire
+  timeout?: number; // ms, default 10s
 }
 ```
 
