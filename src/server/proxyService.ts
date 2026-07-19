@@ -9,13 +9,14 @@ import {
 import { type Bridge } from './bridge';
 import { type DaemonCore } from './daemonCore';
 
-/** How long the daemon outlives its last session proxy. Long enough to ride
- * out an editor restart, short enough that closing the last session doesn't
- * leave a stray process holding the port for hours. */
+/** How long the daemon outlives its last connection. Long enough to ride out
+ * an editor restart / app reload, short enough that a fully-idle daemon doesn't
+ * hold the port for hours. */
 export const DAEMON_IDLE_TIMEOUT_MS = 60_000;
 
 export interface ProxyServiceOptions {
-  /** Called after the last proxy has been gone for the idle timeout. */
+  /** Called after the daemon has been fully idle (no proxies AND no app
+   * clients) for the idle timeout. */
   onIdle: () => void;
   packageVersion: string;
   idleTimeoutMs?: number;
@@ -24,9 +25,12 @@ export interface ProxyServiceOptions {
 /**
  * Daemon-side counterpart of the session proxies: serves the shared tool
  * catalog over proxy WebSocket connections (routed here by the bridge via the
- * `proxyConnection` event) and owns the daemon's idle lifecycle — when the
- * last proxy disconnects and none returns within the timeout, `onIdle` fires
- * and the daemon shuts down.
+ * `proxyConnection` event) and owns the daemon's idle lifecycle.
+ *
+ * "Idle" means neither a session proxy NOR an app client is connected — a
+ * daemon with a live app but no agent session stays up (so the next session
+ * attaches instantly to a connected app with full sticky state, instead of
+ * killing the app connection and forcing a reconnect to a fresh daemon).
  */
 export class ProxyService {
   private connections = new Set<WebSocket>();
@@ -35,7 +39,7 @@ export class ProxyService {
   private firstClientGate: Promise<void> | null = null;
 
   constructor(
-    bridge: Bridge,
+    private readonly bridge: Bridge,
     private readonly core: DaemonCore,
     private readonly options: ProxyServiceOptions
   ) {
@@ -49,9 +53,18 @@ export class ProxyService {
       this.attach(socket);
     });
 
-    // The daemon starts with zero proxies (its spawner hasn't connected yet) —
-    // arm the timer so a daemon nobody ever connects to still cleans itself up.
-    this.armIdleTimer();
+    // An app connecting/disconnecting also flips idle state — re-evaluate the
+    // timer on both, not just on proxy churn.
+    bridge.on('clientAdded', () => {
+      this.reevaluateIdle();
+    });
+    bridge.on('clientRemoved', () => {
+      this.reevaluateIdle();
+    });
+
+    // The daemon starts with nothing connected — arm so one nobody ever uses
+    // still cleans itself up.
+    this.reevaluateIdle();
   }
 
   proxyCount(): number {
@@ -81,9 +94,7 @@ export class ProxyService {
 
     socket.on('close', () => {
       this.connections.delete(socket);
-      if (this.connections.size === 0) {
-        this.armIdleTimer();
-      }
+      this.reevaluateIdle();
     });
   }
 
@@ -129,10 +140,27 @@ export class ProxyService {
     }
   }
 
+  private isIdle(): boolean {
+    return this.connections.size === 0 && !this.bridge.isAnyClientConnected();
+  }
+
+  // Single source of truth for the idle timer: arm when fully idle, cancel
+  // otherwise. Arming is a no-op if a countdown is already running, so a
+  // second idle-keeping event doesn't reset the clock.
+  private reevaluateIdle(): void {
+    if (this.isIdle()) {
+      this.armIdleTimer();
+    } else {
+      this.cancelIdleTimer();
+    }
+  }
+
   private armIdleTimer(): void {
-    this.cancelIdleTimer();
+    if (this.idleTimer) return;
     this.idleTimer = setTimeout(() => {
-      if (this.connections.size === 0) {
+      // Re-check at fire time — a connection may have arrived without a
+      // cancel racing through.
+      if (this.isIdle()) {
         this.options.onIdle();
       }
     }, this.idleTimeoutMs);

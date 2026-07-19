@@ -97,7 +97,7 @@ The MCP server ships as a bin in the package. For Claude Code / Cursor, a projec
 
 Flags: `--port <number>` (WebSocket port the app connects to, default `8347`), `--no-host` (in-app tools only, no device control).
 
-**Multiple agent sessions just work.** Each session's MCP process is a thin proxy over one shared daemon: the first session starts it, later sessions attach to it, and every session sees the same live catalog and the same connected apps. The daemon exits on its own about a minute after the last session closes. Its diagnostics land in `react-native-mcp-kit-daemon.log` in the OS temp dir.
+**Multiple agent sessions just work.** Each session's MCP process is a thin proxy over one shared daemon: the first session starts it, later sessions attach to it, and every session sees the same live catalog and the same connected apps. The daemon exits on its own about a minute after it goes fully idle — no sessions AND no app connected (a running app with no open session keeps it alive). Its diagnostics land in `react-native-mcp-kit-daemon.log` in the OS temp dir.
 
 Android emulators need the adb port forward once per boot: `adb reverse tcp:8347 tcp:8347`. iOS simulators share localhost — nothing to do.
 

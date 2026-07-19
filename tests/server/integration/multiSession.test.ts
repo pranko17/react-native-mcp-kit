@@ -269,6 +269,32 @@ describe('multi-session daemon (integration)', () => {
     });
   });
 
+  it('stays alive while an app is connected with no sessions, dies once both are gone', async () => {
+    const onIdle = vi.fn();
+    const { port, service } = await startDaemon({ idleTimeoutMs: 150, onIdle });
+
+    // Session attaches first (cancels the daemon's initial idle timer), then an
+    // app connects.
+    const s = await attachSession(port);
+    const app = await connectApp(port);
+
+    // Drop the only session — the app is still connected, so NOT idle.
+    s.remote.close();
+    await vi.waitFor(() => {
+      expect(service.proxyCount()).toBe(0);
+    });
+    await new Promise((r) => {
+      return setTimeout(r, 350);
+    });
+    expect(onIdle).not.toHaveBeenCalled();
+
+    // Now the app leaves too — fully idle, daemon exits.
+    app.close();
+    await vi.waitFor(() => {
+      expect(onIdle).toHaveBeenCalledOnce();
+    });
+  });
+
   it('emits down on the session backend when the daemon stops', async () => {
     const { bridge, port } = await startDaemon();
     const { remote } = await attachSession(port);
