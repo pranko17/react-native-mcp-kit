@@ -214,7 +214,11 @@ const sessionModule = (auth: AuthApi): McpModule => ({
 useMcpModule(() => sessionModule(auth), [auth]);
 ```
 
-Both hooks follow `useMemo` / `useEffect` semantics: the factory re-runs on dep changes, registration cleans up on unmount, and the agent's catalog follows along.
+Both hooks follow `useMemo` / `useEffect` semantics: the factory re-runs on dep changes, registration cleans up on unmount, and the agent's catalog follows along. For conditional registration pass `null` instead of a factory (or return `null` from it) — hooks can't be called conditionally, but a null factory registers nothing and unregisters whatever a previous render put up:
+
+```tsx
+useMcpTool('get_current_draft', draft ? () => draftTool(draft) : null, [draft]);
+```
 
 `inputSchema` is a Zod schema (serialized to JSON Schema for the wire). Two habits pay off: use `z.looseObject` so undeclared args still reach your handler, and advertise defaults with `.meta({ default })` rather than `.default()` — the schema guides the agent, your handler stays the source of truth. Write descriptions that name the *task* ("snapshot of the draft open in the editor"), not the implementation — that's what the agent's semantic tool search matches against.
 
