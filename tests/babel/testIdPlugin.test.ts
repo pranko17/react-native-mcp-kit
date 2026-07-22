@@ -360,6 +360,88 @@ describe('testIdPlugin — fragment-like guards beyond the name list', () => {
     );
     expect(out).toContain('data-mcp-id="F:');
   });
+
+  it('guards a component prop whose destructuring default is a fragment-like', () => {
+    // @gorhom/bottom-sheet BottomSheetModal.tsx pattern. The stamp becomes a
+    // runtime-conditional spread: present when a real component is injected,
+    // absent when the Fragment default kicks in.
+    const out = transform(
+      [
+        'const Sheet = ({ containerComponent: ContainerComponent = React.Fragment }) => (',
+        '  <ContainerComponent key="k">',
+        '    <Row />',
+        '  </ContainerComponent>',
+        ');',
+      ].join('\n')
+    );
+    expect(out).not.toContain('data-mcp-id="ContainerComponent:');
+    expect(out).toContain('typeof ContainerComponent === "symbol" ? null :');
+    expect(out).toContain('"data-mcp-id": "ContainerComponent:');
+    expect(out).toContain('data-mcp-id="Row:');
+  });
+
+  it('guards a bare param default of Fragment', () => {
+    const out = transform('const List = (C = Fragment) => <C><Row /></C>;');
+    expect(out).not.toContain('data-mcp-id="C:');
+    expect(out).toContain('typeof C === "symbol" ? null :');
+    expect(out).toContain('"data-mcp-id": "C:');
+    expect(out).toContain('data-mcp-id="Row:');
+  });
+
+  it('guards a body-destructured prop whose default is a fragment-like', () => {
+    const out = transform(
+      [
+        'const Sheet = (props) => {',
+        '  const { container: Container = React.Fragment } = props;',
+        '  return <Container><Row /></Container>;',
+        '};',
+      ].join('\n')
+    );
+    expect(out).not.toContain('data-mcp-id="Container:');
+    expect(out).toContain('typeof Container === "symbol" ? null :');
+    expect(out).toContain('"data-mcp-id": "Container:');
+    expect(out).toContain('data-mcp-id="Row:');
+  });
+
+  it('guards a variable that can resolve to Fragment through a ternary', () => {
+    // react-native-network-logger Icon.tsx pattern: the TouchableOpacity
+    // branch keeps its id, the Fragment branch stays silent.
+    const out = transform(
+      [
+        "import { Fragment } from 'react';",
+        'const Icon = ({ onPress }) => {',
+        '  const Wrapper = onPress ? TouchableOpacity : Fragment;',
+        '  return <Wrapper><Row /></Wrapper>;',
+        '};',
+      ].join('\n')
+    );
+    expect(out).not.toContain('data-mcp-id="Wrapper:');
+    expect(out).toContain('typeof Wrapper === "symbol" ? null :');
+    expect(out).toContain('"data-mcp-id": "Wrapper:');
+    expect(out).toContain('data-mcp-id="Row:');
+  });
+
+  it('still stamps injected component props without a fragment default', () => {
+    const out = transform('const Layout = ({ Header }) => <Header title="x" />;');
+    expect(out).toContain('data-mcp-id="Header:');
+  });
+
+  it('still stamps a param default that is a real component', () => {
+    const out = transform('const Card = ({ Slot = DefaultSlot }) => <Slot />;');
+    expect(out).toContain('data-mcp-id="Slot:');
+  });
+
+  it('still stamps a variable aliasing a real component through a ternary', () => {
+    const out = transform(
+      [
+        'const Row = ({ pressable }) => {',
+        '  const Wrapper = pressable ? Pressable : View;',
+        '  return <Wrapper />;',
+        '};',
+      ].join('\n')
+    );
+    expect(out).toContain('data-mcp-id="Wrapper:');
+  });
 });
 
 describe('testIdPlugin — remaining declarator-cast variants', () => {

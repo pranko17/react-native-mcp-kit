@@ -3,6 +3,7 @@ import { type NodePath, type PluginObj, type types as BabelTypes } from '@babel/
 import { collectHooksInBody } from './collectHooks';
 import { DEFAULT_ATTR, DEFAULT_EXCLUDE, FRAGMENT_LIKE } from './constants';
 import {
+  bindingCanBeFragmentLike,
   bodyCallsHook,
   bodyUsesJSX,
   getShortFile,
@@ -68,6 +69,11 @@ export default function testIdPlugin({ types: t }: { types: typeof BabelTypes })
 
         const nameNode = path.node.name;
         let componentName: string;
+        // A name whose binding site admits a fragment-like value —
+        // `({ container: C = React.Fragment }) => <C/>` or
+        // `const W = cond ? View : Fragment` — gets a runtime-conditional
+        // stamp instead of a static attribute (see the push site below).
+        let fragmentCapable = false;
 
         if (t.isJSXIdentifier(nameNode)) {
           componentName = nameNode.name;
@@ -87,6 +93,7 @@ export default function testIdPlugin({ types: t }: { types: typeof BabelTypes })
           ) {
             return;
           }
+          fragmentCapable = !!binding && bindingCanBeFragmentLike(binding, t);
         } else if (t.isJSXMemberExpression(nameNode)) {
           componentName = `${(nameNode.object as BabelTypes.JSXIdentifier).name}.${nameNode.property.name}`;
           // Any-namespace variant of the same guard (`R.Fragment`,
@@ -119,6 +126,31 @@ export default function testIdPlugin({ types: t }: { types: typeof BabelTypes })
               `${existing}${separator}${shortFile}${separator}${line}`
             );
           }
+          return;
+        }
+
+        if (fragmentCapable && t.isJSXIdentifier(nameNode)) {
+          // Runtime-conditional stamp: every fragment-like builtin is a
+          // Symbol at runtime (Fragment / StrictMode / Suspense), while real
+          // components are strings, functions, or objects. Spreading
+          // `typeof X === 'symbol' ? null : { attr: id }` keeps the id on
+          // the component branch of `cond ? View : Fragment` and stays
+          // silent on the Fragment branch.
+          path.node.attributes.push(
+            t.jsxSpreadAttribute(
+              t.conditionalExpression(
+                t.binaryExpression(
+                  '===',
+                  t.unaryExpression('typeof', t.identifier(nameNode.name)),
+                  t.stringLiteral('symbol')
+                ),
+                t.nullLiteral(),
+                t.objectExpression([
+                  t.objectProperty(t.stringLiteral(attrName), t.stringLiteral(generatedId)),
+                ])
+              )
+            )
+          );
           return;
         }
 

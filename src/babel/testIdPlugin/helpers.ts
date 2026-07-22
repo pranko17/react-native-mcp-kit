@@ -1,5 +1,9 @@
 import { type NodePath, type types as BabelTypes } from '@babel/core';
 
+import { FRAGMENT_LIKE } from './constants';
+
+type Binding = NonNullable<ReturnType<NodePath['scope']['getBinding']>>;
+
 // Cheap, conservative component detector: the binding name starts with a
 // capital letter and the function body mentions JSX somewhere. Covers
 // `function LoginForm() { return <View />; }` and
@@ -48,6 +52,79 @@ export const bodyUsesJSX = (bodyPath: NodePath<BabelTypes.Node>): boolean => {
     },
   });
   return uses;
+};
+
+// Can this expression evaluate to a fragment-like builtin at runtime?
+// Walks the value positions that stay statically enumerable — ternary /
+// logical branches and TS cast wrappers — and flags direct references:
+// bare `Fragment`-family identifiers and any-namespace `.Fragment` members
+// (the same name-based convention as the JSXMemberExpression guard).
+export const exprCanBeFragmentLike = (
+  node: BabelTypes.Node | null | undefined,
+  t: typeof BabelTypes
+): boolean => {
+  if (!node) return false;
+  if (
+    t.isTSAsExpression(node) ||
+    t.isTSTypeAssertion(node) ||
+    t.isTSSatisfiesExpression(node) ||
+    t.isTSNonNullExpression(node) ||
+    t.isParenthesizedExpression(node)
+  ) {
+    return exprCanBeFragmentLike(node.expression, t);
+  }
+  if (t.isConditionalExpression(node)) {
+    return exprCanBeFragmentLike(node.consequent, t) || exprCanBeFragmentLike(node.alternate, t);
+  }
+  if (t.isLogicalExpression(node)) {
+    return exprCanBeFragmentLike(node.left, t) || exprCanBeFragmentLike(node.right, t);
+  }
+  if (t.isIdentifier(node)) {
+    return FRAGMENT_LIKE.has(node.name);
+  }
+  if (t.isMemberExpression(node) && !node.computed && t.isIdentifier(node.property)) {
+    return FRAGMENT_LIKE.has(node.property.name);
+  }
+  return false;
+};
+
+// Does the binding site of a JSX name admit a fragment-like value? Shapes
+// seen in the wild (both ship untranspiled to Metro consumers, so our
+// plugin transforms them):
+//   `({ containerComponent: C = React.Fragment }) => <C/>`  — @gorhom/bottom-sheet
+//   `const Wrapper = onPress ? TouchableOpacity : Fragment` — react-native-network-logger
+// Params WITHOUT a fragment default stay stampable: their runtime value is
+// the caller's choice and unknowable here, and the stamp marks a real slot.
+export const bindingCanBeFragmentLike = (binding: Binding, t: typeof BabelTypes): boolean => {
+  const node = binding.path.node;
+
+  // Plain declarator: `const Wrapper = cond ? X : Fragment`.
+  if (t.isVariableDeclarator(node) && t.isIdentifier(node.id)) {
+    return exprCanBeFragmentLike(node.init, t);
+  }
+
+  // Bare param default: `(C = Fragment) => <C/>` — the binding path IS the
+  // AssignmentPattern, which traverse() below would not visit.
+  if (t.isAssignmentPattern(node) && node.left === binding.identifier) {
+    return exprCanBeFragmentLike(node.right, t);
+  }
+
+  // Destructuring defaults, in params or declarators:
+  //   `({ container: C = React.Fragment }) => ...`
+  //   `const { container: C = React.Fragment } = props;`
+  let admits = false;
+  binding.path.traverse({
+    AssignmentPattern(patternPath) {
+      if (
+        patternPath.node.left === binding.identifier &&
+        exprCanBeFragmentLike(patternPath.node.right, t)
+      ) {
+        admits = true;
+        patternPath.stop();
+      }
+    },
+  });
+  return admits;
 };
 
 export const bodyCallsHook = (
