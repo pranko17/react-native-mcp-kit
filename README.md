@@ -186,7 +186,7 @@ Every hook entry and every stamped component carries an `mcpId` of the form `Nam
 - **`error`** — network failure;
 - **`timeout`** — the request never settles.
 
-Matching is first-match-wins: `url` substring or `/regex/`, optional `method` and `times` (each hit consumes one), `delayMs` for latency simulation. Mocks apply at the XHR layer — RN's fetch rides on XHR, so every JS-side HTTP client is covered by one interception point. They are deliberately volatile (a JS reload clears them), every mock hit is logged to the console, and affected `get_requests` entries carry `mock: { id, mode, originalStatus? }` — captured traffic never silently lies about being fake.
+Matching is first-match-wins: `url` substring or `/regex/`, optional `method`, `times` (each hit consumes one), `delayMs` for latency simulation, and request-body constraints for endpoints that multiplex over one URL — `bodyContains` (substring or `/regex/` over the raw body) and `bodyMatch` (dot-paths into the parsed JSON body: `{ "data.type": "courier" }`). Mocks apply at the XHR layer — RN's fetch rides on XHR, so every JS-side HTTP client is covered by one interception point. They are deliberately volatile (a JS reload clears them), every mock hit is logged to the console, and affected `get_requests` entries carry `mock: { id, mode, originalStatus? }` — captured traffic never silently lies about being fake.
 
 ## Your own tools
 

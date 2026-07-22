@@ -20,6 +20,8 @@ export interface NetworkMock {
   /** Remaining allowed hits; null = unlimited. */
   remaining: number | null;
   url: string;
+  bodyContains?: string;
+  bodyMatch?: Record<string, unknown>;
   delayMs?: number;
   errorMessage?: string;
   method?: string;
@@ -30,6 +32,8 @@ export interface NetworkMock {
 export interface MockConfig {
   mode: MockMode;
   url: string;
+  bodyContains?: string;
+  bodyMatch?: Record<string, unknown>;
   delayMs?: number;
   errorMessage?: string;
   method?: string;
@@ -51,12 +55,13 @@ const REGEX_LITERAL = /^\/(.+)\/([gimsuy]*)$/;
 const mocks: NetworkMock[] = [];
 let nextMockId = 1;
 
-const urlMatches = (spec: string, url: string): boolean => {
+/** Shared substring-or-/regex/ text matcher (url and bodyContains). */
+const textMatches = (spec: string, text: string): boolean => {
   const literal = spec.match(REGEX_LITERAL);
   if (literal) {
-    return new RegExp(literal[1]!, literal[2]).test(url);
+    return new RegExp(literal[1]!, literal[2]).test(text);
   }
-  return url.includes(spec);
+  return text.includes(spec);
 };
 
 export const setMock = (config: MockConfig): NetworkMock | { error: string } => {
@@ -66,6 +71,30 @@ export const setMock = (config: MockConfig): NetworkMock | { error: string } => 
       new RegExp(literal[1]!, literal[2]);
     } catch (error) {
       return { error: `Invalid url regex: ${error instanceof Error ? error.message : error}` };
+    }
+  }
+  const bodyContainsLiteral = config.bodyContains?.match(REGEX_LITERAL);
+  if (bodyContainsLiteral) {
+    try {
+      new RegExp(bodyContainsLiteral[1]!, bodyContainsLiteral[2]);
+    } catch (error) {
+      return {
+        error: `Invalid bodyContains regex: ${error instanceof Error ? error.message : error}`,
+      };
+    }
+  }
+  for (const [path, expected] of Object.entries(config.bodyMatch ?? {})) {
+    const spec = expected as { regex?: unknown } | null;
+    if (spec !== null && typeof spec === 'object' && typeof spec.regex === 'string') {
+      const literal = spec.regex.match(REGEX_LITERAL);
+      try {
+        if (literal) new RegExp(literal[1]!, literal[2]);
+        else new RegExp(spec.regex);
+      } catch (error) {
+        return {
+          error: `Invalid bodyMatch regex at "${path}": ${error instanceof Error ? error.message : error}`,
+        };
+      }
     }
   }
   if (config.mode === 'modify') {
@@ -84,6 +113,8 @@ export const setMock = (config: MockConfig): NetworkMock | { error: string } => 
     }
   }
   const mock: NetworkMock = {
+    bodyContains: config.bodyContains,
+    bodyMatch: config.bodyMatch,
     createdAt: new Date().toISOString(),
     delayMs: config.delayMs,
     errorMessage: config.errorMessage,
@@ -119,12 +150,81 @@ export const clearMocks = (): number => {
   return removed;
 };
 
+/** Dot-path drill with [n] / [-1] bracket indices — mirrors predicate paths. */
+const readPath = (value: unknown, path: string): unknown => {
+  const normalized = path.replace(/\[(-?\d+)\]/g, '.$1').replace(/^\./, '');
+  let current: unknown = value;
+  for (const key of normalized.split('.')) {
+    if (current == null) return undefined;
+    if (Array.isArray(current)) {
+      if (key === 'length') {
+        current = current.length;
+        continue;
+      }
+      const idx = Number.parseInt(key, 10);
+      if (Number.isNaN(idx)) return undefined;
+      current = current[idx < 0 ? current.length + idx : idx];
+      continue;
+    }
+    if (typeof current === 'object') {
+      current = (current as Record<string, unknown>)[key];
+      continue;
+    }
+    return undefined;
+  }
+  return current;
+};
+
+/**
+ * One bodyMatch entry: primitive → strict equality, { contains } /
+ * { regex } for strings, anything else object-shaped → deep equality —
+ * the same matcher vocabulary fiber_tree uses for props.
+ */
+const matchValue = (actual: unknown, expected: unknown): boolean => {
+  if (Array.isArray(expected)) return deepEqual(actual, expected);
+  if (expected !== null && typeof expected === 'object') {
+    const spec = expected as { contains?: unknown; regex?: unknown };
+    if (typeof spec.contains === 'string') {
+      return typeof actual === 'string' && actual.includes(spec.contains);
+    }
+    if (typeof spec.regex === 'string') {
+      if (typeof actual !== 'string') return false;
+      const literal = spec.regex.match(REGEX_LITERAL);
+      const re = literal ? new RegExp(literal[1]!, literal[2]) : new RegExp(spec.regex);
+      return re.test(actual);
+    }
+    return deepEqual(actual, expected);
+  }
+  return actual === expected;
+};
+
+/**
+ * Body-based matching. bodyContains runs substring-or-/regex/ over the raw
+ * serialized body; bodyMatch drills dot-paths into the JSON-parsed body and
+ * ANDs every entry. Both require a string body (FormData / binary payloads
+ * never match), so a GET simply skips body-constrained mocks.
+ */
+const bodyMatchesSpec = (mock: NetworkMock, rawBody: unknown): boolean => {
+  if (mock.bodyContains === undefined && mock.bodyMatch === undefined) return true;
+  if (typeof rawBody !== 'string') return false;
+  if (mock.bodyContains !== undefined && !textMatches(mock.bodyContains, rawBody)) return false;
+  if (mock.bodyMatch !== undefined) {
+    const parsed = tryParseJson(rawBody);
+    if (parsed === null || typeof parsed !== 'object') return false;
+    for (const [path, expected] of Object.entries(mock.bodyMatch)) {
+      if (!matchValue(readPath(parsed, path), expected)) return false;
+    }
+  }
+  return true;
+};
+
 /** First-match-wins over insertion order; a match consumes one `times` slot. */
-export const consumeMatch = (method: string, url: string): NetworkMock | null => {
+export const consumeMatch = (method: string, url: string, body?: unknown): NetworkMock | null => {
   for (const mock of mocks) {
     if (mock.remaining !== null && mock.remaining <= 0) continue;
     if (mock.method && mock.method !== method.toUpperCase()) continue;
-    if (!urlMatches(mock.url, url)) continue;
+    if (!textMatches(mock.url, url)) continue;
+    if (!bodyMatchesSpec(mock, body)) continue;
     mock.hits += 1;
     if (mock.remaining !== null) mock.remaining -= 1;
     return mock;

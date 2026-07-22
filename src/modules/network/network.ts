@@ -377,7 +377,7 @@ const installPatches = (): void => {
     this.addEventListener('loadend', recordResponse);
     (this as unknown as Record<string, unknown>).__mcp_record = recordResponse;
 
-    const mock = consumeMatch(method ?? 'GET', url);
+    const mock = consumeMatch(method ?? 'GET', url, body);
     if (mock) {
       console.info(`[mcp-kit] network mock #${mock.id} (${mock.mode}) → ${method} ${url}`);
       const proceed = applyMockToXhr(this, mock);
@@ -475,7 +475,10 @@ RFC 7396: objects merge deep, null deletes a key; bodyJsonPatch is RFC 6902
 for array surgery: remove/insert/replace by index, applied after the merge
 patch), \`error\` (network failure), \`timeout\`. Matching: first-match-wins
 by insertion order; url is
-a substring or /regex/; optional method and times (consumed per hit).
+a substring or /regex/; optional method, times (consumed per hit),
+bodyContains (substring or /regex/ over the raw request body) and
+bodyMatch (dot-paths into the parsed JSON body — tells apart requests
+that share a URL and differ only in the payload).
 delayMs applies to replace/error/timeout. Mocks work at the XHR layer (RN
 fetch rides on XHR, so both are covered), are volatile — a JS reload clears
 them — and every affected buffer entry carries \`mock: { id, mode,
@@ -548,6 +551,8 @@ the query module when a screen must drop mocked data.`,
           return listMocks().map((mock) => {
             return {
               active: mock.remaining === null || mock.remaining > 0,
+              bodyContains: mock.bodyContains,
+              bodyMatch: mock.bodyMatch,
               createdAt: mock.createdAt,
               delayMs: mock.delayMs,
               hits: mock.hits,
@@ -575,6 +580,8 @@ the query module when a screen must drop mocked data.`,
           'Register a network mock; returns its id. First matching mock wins. See the module description for modes and matching.',
         handler: (args) => {
           const result = setMock({
+            bodyContains: args.bodyContains as string | undefined,
+            bodyMatch: args.bodyMatch as Record<string, unknown> | undefined,
             delayMs: args.delayMs as number | undefined,
             errorMessage: args.errorMessage as string | undefined,
             method: args.method as string | undefined,
@@ -594,6 +601,20 @@ the query module when a screen must drop mocked data.`,
           };
         },
         inputSchema: z.looseObject({
+          bodyContains: z
+            .string()
+            .min(1)
+            .describe(
+              'Substring or /regex/ over the raw serialized request body. Body-constrained mocks never match bodyless requests.'
+            )
+            .optional(),
+          bodyMatch: z
+            .record(z.string(), z.unknown())
+            .describe(
+              'Field-level matching over the JSON-parsed request body: dot-path (with [0] / [-1] indices) → expected value. Primitive = strict equality; { contains } / { regex } for strings; objects/arrays deep-equal. All entries must match.'
+            )
+            .meta({ examples: [{ 'data.type': 'courier' }] })
+            .optional(),
           delayMs: z
             .number()
             .min(0)

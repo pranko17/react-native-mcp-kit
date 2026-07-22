@@ -50,7 +50,11 @@ interface RequestResult {
 
 const request = (
   url: string,
-  { method = 'GET', responseType = '' }: { method?: string; responseType?: string } = {}
+  {
+    body,
+    method = 'GET',
+    responseType = '',
+  }: { body?: string; method?: string; responseType?: string } = {}
 ): Promise<RequestResult> => {
   return new Promise((resolve) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -74,7 +78,8 @@ const request = (
     };
     xhr.open(method, url);
     xhr.responseType = responseType;
-    xhr.send();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (xhr.send as any)(body);
   });
 };
 
@@ -298,6 +303,137 @@ describe('network mocks — matching and lifecycle', () => {
     expect(xhr.status).toBe(200);
     const mocks = call('list_mocks') as Array<Record<string, unknown>>;
     expect(mocks[0]).toMatchObject({ hits: 0 });
+  });
+});
+
+describe('network mocks — body matching', () => {
+  it('routes two mocks on one URL by a field of the JSON body', async () => {
+    call('set_mock', {
+      bodyMatch: { 'data.type': 'courier' },
+      mode: 'replace',
+      response: { status: 503 },
+      url: '/intervals-endpoint',
+    });
+    call('set_mock', {
+      bodyMatch: { 'data.type': 'window' },
+      mode: 'replace',
+      response: { status: 500 },
+      url: '/intervals-endpoint',
+    });
+
+    const courier = await request('https://api.test/intervals-endpoint', {
+      body: JSON.stringify({ data: { city: 1, type: 'courier' } }),
+      method: 'POST',
+    });
+    const window = await request('https://api.test/intervals-endpoint', {
+      body: JSON.stringify({ data: { city: 1, type: 'window' } }),
+      method: 'POST',
+    });
+
+    expect(courier.xhr.status).toBe(503);
+    expect(window.xhr.status).toBe(500);
+  });
+
+  it('body-constrained mocks never match bodyless requests', async () => {
+    call('set_mock', {
+      bodyContains: 'anything',
+      mode: 'replace',
+      response: { status: 503 },
+      url: '/plain',
+    });
+    const { xhr } = await request('https://api.test/plain');
+    expect(xhr.status).toBe(200);
+    const mocks = call('list_mocks') as Array<Record<string, unknown>>;
+    expect(mocks[0]).toMatchObject({ hits: 0 });
+  });
+
+  it('supports contains / regex value matchers and strict number equality', async () => {
+    call('set_mock', {
+      bodyMatch: {
+        'data.city': 42,
+        'data.note': { contains: 'urgent' },
+        'data.slot': { regex: '/^slot-\\d+$/' },
+      },
+      mode: 'replace',
+      response: { status: 503 },
+      url: '/matchers',
+    });
+    const hit = await request('https://api.test/matchers', {
+      body: JSON.stringify({ data: { city: 42, note: 'very urgent order', slot: 'slot-7' } }),
+      method: 'POST',
+    });
+    const missCity = await request('https://api.test/matchers', {
+      body: JSON.stringify({ data: { city: '42', note: 'very urgent order', slot: 'slot-7' } }),
+      method: 'POST',
+    });
+    expect(hit.xhr.status).toBe(503);
+    expect(missCity.xhr.status).toBe(200);
+  });
+
+  it('ANDs every bodyMatch entry and rejects non-JSON bodies', async () => {
+    call('set_mock', {
+      bodyMatch: { a: 1, b: 2 },
+      mode: 'replace',
+      response: { status: 503 },
+      url: '/strict',
+    });
+    const partial = await request('https://api.test/strict', {
+      body: JSON.stringify({ a: 1, b: 999 }),
+      method: 'POST',
+    });
+    const nonJson = await request('https://api.test/strict', {
+      body: 'a=1&b=2',
+      method: 'POST',
+    });
+    expect(partial.xhr.status).toBe(200);
+    expect(nonJson.xhr.status).toBe(200);
+  });
+
+  it('bodyContains matches a substring of the raw body', async () => {
+    call('set_mock', {
+      bodyContains: 'address_id',
+      mode: 'replace',
+      response: { status: 503 },
+      url: '/raw',
+    });
+    const hit = await request('https://api.test/raw', {
+      body: JSON.stringify({ type: 'address_id_lookup' }),
+      method: 'POST',
+    });
+    expect(hit.xhr.status).toBe(503);
+  });
+
+  it('drills bracket indices, negative indices and array length', async () => {
+    call('set_mock', {
+      bodyMatch: {
+        'items[-1].sku': { regex: '/^B-/' },
+        'items[0].sku': 'A-1',
+        'items.length': 2,
+      },
+      mode: 'replace',
+      response: { status: 503 },
+      url: '/paths',
+    });
+    const hit = await request('https://api.test/paths', {
+      body: JSON.stringify({ items: [{ sku: 'A-1' }, { sku: 'B-2' }] }),
+      method: 'POST',
+    });
+    const wrongLength = await request('https://api.test/paths', {
+      body: JSON.stringify({ items: [{ sku: 'A-1' }, { sku: 'B-2' }, { sku: 'C-3' }] }),
+      method: 'POST',
+    });
+    expect(hit.xhr.status).toBe(503);
+    expect(wrongLength.xhr.status).toBe(200);
+  });
+
+  it('rejects an invalid bodyMatch regex at set time', () => {
+    expect(
+      call('set_mock', {
+        bodyMatch: { field: { regex: '/(/' } },
+        mode: 'replace',
+        url: '/x',
+      })
+    ).toHaveProperty('error');
   });
 });
 

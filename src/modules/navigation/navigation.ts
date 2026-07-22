@@ -353,7 +353,12 @@ ACTIONS (see each tool for arg detail)
           // focusChanged: false on a success is the agent's cue to inspect
           // get_state and pick a different route path.
           const focusedAfter = (currentRoute as { key?: string } | null)?.key;
-          return { currentRoute, focusChanged: focusedAfter !== focusedBefore, mode, success: true };
+          return {
+            currentRoute,
+            focusChanged: focusedAfter !== focusedBefore,
+            mode,
+            success: true,
+          };
         },
         inputSchema: z.looseObject({
           mode: z
