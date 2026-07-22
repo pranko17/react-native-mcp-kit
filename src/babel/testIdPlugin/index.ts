@@ -200,9 +200,8 @@ export default function testIdPlugin({ types: t }: { types: typeof BabelTypes })
         // angle-bracket assertion), and `x satisfies Foo`. Without this,
         // `const Wrapped = memo(arrow) as { ... }` fails our HOC unwrap
         // because we'd see TSAsExpression instead of the inner CallExpression.
-        // Pattern in the wild: 21vek's PageFlashListWithBanner /
-        // ListProductRow / RangeFilter use `as` to attach generic call
-        // signatures + displayName onto memo'd components.
+        // Pattern in the wild: apps use `as` casts to attach generic
+        // call signatures + displayName onto memo'd components.
         let initPathForUnwrap: NodePath<BabelTypes.Node> = path.get(
           'init'
         ) as NodePath<BabelTypes.Node>;

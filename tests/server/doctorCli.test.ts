@@ -7,7 +7,7 @@ const baseReport = {
   clients: {
     connected: 1,
     disconnected: 0,
-    list: [{ appName: '21vek', id: 'ios-1', platform: 'ios', status: 'active' }],
+    list: [{ appName: 'demo-app', id: 'ios-1', platform: 'ios', status: 'active' }],
   },
   metro: { detail: 'packager-status: running', reachable: true, url: 'http://localhost:8081' },
   ok: true,
@@ -22,7 +22,7 @@ describe('formatDoctorReport', () => {
     expect(out).toContain('[✓] daemon');
     expect(out).toContain('2 session(s)');
     expect(out).toContain('[✓] clients');
-    expect(out).toContain('ios-1 (21vek, ios, active)');
+    expect(out).toContain('ios-1 (demo-app, ios, active)');
     expect(out).toContain('[✓] metro');
     expect(out).toContain('[✓] babel plugin');
     expect(out).not.toContain('Problems:');

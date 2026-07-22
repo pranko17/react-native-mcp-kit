@@ -267,7 +267,7 @@ const resolveLaunchTarget = async (
   if (!bundleId) {
     return {
       error:
-        "appId required. Pass it explicitly (e.g. 'by.21vek.mobile') or target a clientId whose client registered its bundleId metadata.",
+        "appId required. Pass it explicitly (e.g. 'com.example.app') or target a clientId whose client registered its bundleId metadata.",
       ok: false,
     };
   }

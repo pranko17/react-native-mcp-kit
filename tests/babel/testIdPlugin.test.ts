@@ -362,9 +362,9 @@ describe('testIdPlugin — fragment-like guards beyond the name list', () => {
   });
 
   it('guards a component prop whose destructuring default is a fragment-like', () => {
-    // @gorhom/bottom-sheet BottomSheetModal.tsx pattern. The stamp becomes a
-    // runtime-conditional spread: present when a real component is injected,
-    // absent when the Fragment default kicks in.
+    // Component-library pattern: a container prop defaulting to Fragment.
+    // The stamp becomes a runtime-conditional spread: present when a real
+    // component is injected, absent when the Fragment default kicks in.
     const out = transform(
       [
         'const Sheet = ({ containerComponent: ContainerComponent = React.Fragment }) => (',
@@ -404,8 +404,8 @@ describe('testIdPlugin — fragment-like guards beyond the name list', () => {
   });
 
   it('guards a variable that can resolve to Fragment through a ternary', () => {
-    // react-native-network-logger Icon.tsx pattern: the TouchableOpacity
-    // branch keeps its id, the Fragment branch stays silent.
+    // Conditional-wrapper pattern: the component branch keeps its id,
+    // the Fragment branch stays silent.
     const out = transform(
       [
         "import { Fragment } from 'react';",

@@ -89,10 +89,10 @@ export const exprCanBeFragmentLike = (
 };
 
 // Does the binding site of a JSX name admit a fragment-like value? Shapes
-// seen in the wild (both ship untranspiled to Metro consumers, so our
-// plugin transforms them):
-//   `({ containerComponent: C = React.Fragment }) => <C/>`  — @gorhom/bottom-sheet
-//   `const Wrapper = onPress ? TouchableOpacity : Fragment` — react-native-network-logger
+// seen in the wild (component libraries ship them untranspiled to Metro
+// consumers, so our plugin transforms them):
+//   `({ containerComponent: C = React.Fragment }) => <C/>`
+//   `const Wrapper = onPress ? TouchableOpacity : Fragment`
 // Params WITHOUT a fragment default stay stampable: their runtime value is
 // the caller's choice and unknowable here, and the stamp marks a real slot.
 export const bindingCanBeFragmentLike = (binding: Binding, t: typeof BabelTypes): boolean => {
