@@ -103,94 +103,164 @@ const call = (mod: McpModule, tool: string, args: Record<string, unknown> = {}):
   return mod.tools[tool]!.handler(args);
 };
 
+const profileState = (): NavigationState => {
+  return {
+    index: 2,
+    routes: [
+      { key: 'home-1', name: 'Home' },
+      { key: 'details-1', name: 'Details', params: { id: 42 } },
+      { key: 'profile-1', name: 'Profile', params: { id: 7 } },
+    ],
+  };
+};
+
 describe('navigationModule navigate', () => {
-  it('reuse mode calls navigation.navigate and returns the current route', () => {
+  it('reuse mode calls navigation.navigate and returns the settled route', async () => {
     const nav = makeFakeNavigation(stackState());
     const mod = navigationModule(nav.ref);
-    const result = call(mod, 'navigate', { params: { id: 7 }, screen: 'Profile' });
+    const pending = call(mod, 'navigate', { params: { id: 7 }, screen: 'Profile' });
+    nav.setState(profileState());
+    const result = await pending;
     expect(nav.calls).toContainEqual({ args: ['Profile', { id: 7 }], method: 'navigate' });
     expect(result).toMatchObject({
-      currentRoute: { key: 'details-1', name: 'Details' },
+      currentRoute: { key: 'profile-1', name: 'Profile' },
+      focusChanged: true,
       mode: 'reuse',
       success: true,
     });
   });
 
-  it('push mode dispatches a PUSH action', () => {
+  it('reports focusChanged: false when the state event fires but focus stays put', async () => {
     const nav = makeFakeNavigation(stackState());
     const mod = navigationModule(nav.ref);
-    call(mod, 'navigate', { mode: 'push', params: { id: 1 }, screen: 'Profile' });
+    const pending = call(mod, 'navigate', { params: { tab: 'cart' }, screen: 'Details' });
+    // Same focused route key — the navigator absorbed the action into params.
+    nav.setState(stackState());
+    const result = await pending;
+    expect(result).toMatchObject({ focusChanged: false, success: true });
+  });
+
+  it('push mode dispatches a PUSH action', async () => {
+    const nav = makeFakeNavigation(stackState());
+    const mod = navigationModule(nav.ref);
+    const pending = call(mod, 'navigate', { mode: 'push', params: { id: 1 }, screen: 'Profile' });
+    nav.setState(profileState());
+    await pending;
     expect(nav.calls).toContainEqual({
       args: [{ payload: { name: 'Profile', params: { id: 1 } }, type: 'PUSH' }],
       method: 'dispatch',
     });
   });
 
-  it('replace mode dispatches a REPLACE action', () => {
+  it('replace mode dispatches a REPLACE action', async () => {
     const nav = makeFakeNavigation(stackState());
     const mod = navigationModule(nav.ref);
-    call(mod, 'navigate', { mode: 'replace', screen: 'Profile' });
+    const pending = call(mod, 'navigate', { mode: 'replace', screen: 'Profile' });
+    nav.setState(profileState());
+    await pending;
     expect(nav.calls).toContainEqual({
       args: [{ payload: { name: 'Profile', params: undefined }, type: 'REPLACE' }],
       method: 'dispatch',
     });
   });
 
-  it('rejects an unknown mode without touching the ref', () => {
+  it('rejects an unknown mode without touching the ref', async () => {
     const nav = makeFakeNavigation(stackState());
     const mod = navigationModule(nav.ref);
-    const result = call(mod, 'navigate', { mode: 'sideways', screen: 'Profile' }) as {
+    const result = (await call(mod, 'navigate', { mode: 'sideways', screen: 'Profile' })) as {
       error?: string;
     };
     expect(result.error).toContain('navigate.mode must be');
     expect(nav.calls).toEqual([]);
   });
+
+  it('reports failure when the action changes nothing and the target is not focused', async () => {
+    const nav = makeFakeNavigation(stackState());
+    const mod = navigationModule(nav.ref);
+    const result = (await call(mod, 'navigate', { screen: 'Ghost' })) as {
+      error?: string;
+      success?: boolean;
+    };
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("'Ghost' was not handled");
+    expect(result.error).toContain('Home');
+  });
+
+  it('reports alreadyOnScreen when navigating to the focused route', async () => {
+    const nav = makeFakeNavigation(stackState());
+    const mod = navigationModule(nav.ref);
+    const result = (await call(mod, 'navigate', { screen: 'Details' })) as Record<string, unknown>;
+    expect(result).toMatchObject({ alreadyOnScreen: true, success: true });
+  });
+
+  it('reports an error when the container is not ready', async () => {
+    const nav = makeFakeNavigation(stackState());
+    nav.ref.isReady = () => {
+      return false;
+    };
+    const mod = navigationModule(nav.ref);
+    const result = (await call(mod, 'navigate', { screen: 'Profile' })) as { error?: string };
+    expect(result.error).toContain('not ready');
+  });
 });
 
 describe('navigationModule pop', () => {
-  it('pops one screen when `to` is omitted', () => {
+  it('pops one screen when `to` is omitted and reports the settled route', async () => {
     const nav = makeFakeNavigation(stackState());
     const mod = navigationModule(nav.ref);
-    const result = call(mod, 'pop');
+    const pending = call(mod, 'pop');
+    nav.setState(homeState());
+    const result = await pending;
     expect(nav.calls).toContainEqual({
       args: [{ payload: { count: 1 }, type: 'POP' }],
       method: 'dispatch',
     });
-    expect(result).toMatchObject({ success: true });
+    expect(result).toMatchObject({
+      changed: true,
+      currentRoute: { key: 'home-1', name: 'Home' },
+      success: true,
+    });
   });
 
-  it('pops N screens for a numeric `to`', () => {
+  it('pops N screens for a numeric `to`', async () => {
     const nav = makeFakeNavigation(stackState());
     const mod = navigationModule(nav.ref);
-    call(mod, 'pop', { to: 3 });
+    const pending = call(mod, 'pop', { to: 3 });
+    nav.setState(homeState());
+    await pending;
     expect(nav.calls).toContainEqual({
       args: [{ payload: { count: 3 }, type: 'POP' }],
       method: 'dispatch',
     });
   });
 
-  it('pops back to a named screen with params', () => {
+  it('pops back to a named screen with params', async () => {
     const nav = makeFakeNavigation(stackState());
     const mod = navigationModule(nav.ref);
-    call(mod, 'pop', { params: { tab: 'x' }, to: 'Home' });
+    const pending = call(mod, 'pop', { params: { tab: 'x' }, to: 'Home' });
+    nav.setState(homeState());
+    await pending;
     expect(nav.calls).toContainEqual({
       args: [{ payload: { name: 'Home', params: { tab: 'x' } }, type: 'POP_TO' }],
       method: 'dispatch',
     });
   });
 
-  it('pops to the first screen for `to: "top"`', () => {
+  it('pops to the first screen for `to: "top"`', async () => {
     const nav = makeFakeNavigation(stackState());
     const mod = navigationModule(nav.ref);
-    call(mod, 'pop', { to: 'top' });
+    const pending = call(mod, 'pop', { to: 'top' });
+    nav.setState(homeState());
+    await pending;
     expect(nav.calls).toContainEqual({ args: [{ type: 'POP_TO_TOP' }], method: 'dispatch' });
   });
 
-  it('rejects a non-number, non-string `to`', () => {
+  it('rejects a non-number, non-string `to` without touching the ref', async () => {
     const nav = makeFakeNavigation(stackState());
     const mod = navigationModule(nav.ref);
-    const result = call(mod, 'pop', { to: true }) as { error?: string };
+    const result = (await call(mod, 'pop', { to: true })) as { error?: string };
     expect(result.error).toContain('pop.to must be a number');
+    expect(nav.calls).toEqual([]);
   });
 });
 
@@ -211,10 +281,14 @@ describe('navigationModule go_back', () => {
 });
 
 describe('navigationModule reset', () => {
-  it('dispatches RESET with the index defaulting to the last route', () => {
+  it('dispatches RESET with the index defaulting to the last route', async () => {
     const nav = makeFakeNavigation(stackState());
     const mod = navigationModule(nav.ref);
-    call(mod, 'reset', { routes: [{ name: 'Home' }, { name: 'Profile', params: { id: 2 } }] });
+    const pending = call(mod, 'reset', {
+      routes: [{ name: 'Home' }, { name: 'Profile', params: { id: 2 } }],
+    });
+    nav.setState(homeState());
+    await pending;
     expect(nav.calls).toContainEqual({
       args: [
         {
@@ -232,10 +306,15 @@ describe('navigationModule reset', () => {
     });
   });
 
-  it('honours an explicit index', () => {
+  it('honours an explicit index', async () => {
     const nav = makeFakeNavigation(stackState());
     const mod = navigationModule(nav.ref);
-    call(mod, 'reset', { index: 0, routes: [{ name: 'Home' }, { name: 'Profile' }] });
+    const pending = call(mod, 'reset', {
+      index: 0,
+      routes: [{ name: 'Home' }, { name: 'Profile' }],
+    });
+    nav.setState(homeState());
+    await pending;
     const dispatched = nav.calls.find((c) => c.method === 'dispatch')!.args[0] as {
       payload: { index: number };
     };

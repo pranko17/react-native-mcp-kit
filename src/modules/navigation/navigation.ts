@@ -139,6 +139,11 @@ export const navigationModule = (navigation: NavigationRef): McpModule => {
     if (rootState) recordEntry(rootState);
 
     navigation.addListener('state', () => {
+      // A remounting NavigationContainer can emit 'state' to surviving
+      // listeners before the ref re-attaches; ref methods called in that
+      // window console.error "hasn't been initialized". isReady() is the
+      // one call that stays silent on a detached ref — gate on it.
+      if (!(navigation.isReady?.() ?? true)) return;
       const state = navigation.getRootState() as NavigationState | undefined;
       if (state) recordEntry(state);
     });
@@ -153,6 +158,41 @@ export const navigationModule = (navigation: NavigationRef): McpModule => {
   };
 
   waitForReady();
+
+  // Navigation state settles asynchronously — a dispatch lands on a later
+  // React commit, so reading getCurrentRoute right after dispatching returns
+  // the PRE-transition route. Mutating tools instead register this listener
+  // BEFORE dispatching and await the ref's 'state' event; its absence within
+  // the window means the action was a no-op (unhandled name, or already on
+  // the target) — which used to be reported as a silent success.
+  const waitForStateChange = (timeoutMs = 400): Promise<boolean> => {
+    return new Promise((resolve) => {
+      let settled = false;
+      let unsubscribe: (() => void) | null = null;
+      const finish = (changed: boolean) => {
+        if (settled) return;
+        settled = true;
+        unsubscribe?.();
+        clearTimeout(timer);
+        resolve(changed);
+      };
+      const timer = setTimeout(() => {
+        finish(false);
+      }, timeoutMs);
+      unsubscribe = navigation.addListener('state', () => {
+        finish(true);
+      });
+    });
+  };
+
+  const rootRouteNames = (): string[] => {
+    const state = navigation.getRootState() as NavigationState | undefined;
+    return (
+      state?.routes.map((route) => {
+        return route.name;
+      }) ?? []
+    );
+  };
 
   // Decorate a route dict from React Navigation with a `screen` field describing
   // the React component rendering it — gives agents a direct path to inspect
@@ -267,26 +307,53 @@ ACTIONS (see each tool for arg detail)
       },
       navigate: {
         description:
-          'Move to a screen. `mode` controls how the stack changes:\n  · "reuse" — reuse the existing screen if it\'s already in the stack (`navigation.navigate`).\n  · "push" — always add a new stack entry, even for duplicates (`dispatch PUSH`).\n  · "replace" — replace the current screen with the new one (`dispatch REPLACE`).\nReturns the new currentRoute on success.',
-        handler: (args) => {
+          'Move to a screen. `mode` controls how the stack changes:\n  · "reuse" — reuse the existing screen if it\'s already in the stack (`navigation.navigate`).\n  · "push" — always add a new stack entry, even for duplicates (`dispatch PUSH`).\n  · "replace" — replace the current screen with the new one (`dispatch REPLACE`).\nWaits for the navigation state to settle and returns the post-transition currentRoute. When the action changes nothing: `{ alreadyOnScreen: true }` if the focused route already is `screen`, otherwise `{ success: false, error }` — the name was not handled by any mounted navigator.',
+        handler: async (args) => {
           const screen = args.screen as string;
           const params = args.params as Record<string, unknown> | undefined;
           const mode = (typeof args.mode === 'string' ? args.mode : 'reuse') as
             'reuse' | 'push' | 'replace';
+          if (!['push', 'replace', 'reuse'].includes(mode)) {
+            return { error: `navigate.mode must be "reuse" / "push" / "replace", got ${mode}.` };
+          }
+          if (navigation.isReady && !navigation.isReady()) {
+            return {
+              error:
+                'Navigation container is not ready — the app is still mounting. Retry shortly.',
+              success: false,
+            };
+          }
+          const focusedBefore = (navigation.getCurrentRoute() as { key?: string } | null)?.key;
+          const settle = waitForStateChange();
           if (mode === 'reuse') {
             navigation.navigate(screen, params);
           } else if (mode === 'push') {
             navigation.dispatch({ payload: { name: screen, params }, type: 'PUSH' });
-          } else if (mode === 'replace') {
-            navigation.dispatch({ payload: { name: screen, params }, type: 'REPLACE' });
           } else {
-            return { error: `navigate.mode must be "reuse" / "push" / "replace", got ${mode}.` };
+            navigation.dispatch({ payload: { name: screen, params }, type: 'REPLACE' });
           }
-          return {
-            currentRoute: withScreenInfo(navigation.getCurrentRoute() as { key?: unknown } | null),
-            mode,
-            success: true,
-          };
+          const changed = await settle;
+          const currentRoute = withScreenInfo(
+            navigation.getCurrentRoute() as { key?: unknown } | null
+          );
+          if (!changed) {
+            const focusedName = (currentRoute as { name?: string } | null)?.name;
+            if (focusedName === screen) {
+              return { alreadyOnScreen: true, currentRoute, mode, success: true };
+            }
+            return {
+              currentRoute,
+              error: `Navigation state did not change — '${screen}' was not handled by any mounted navigator. Mounted root routes: [${rootRouteNames().join(', ')}]. The screen may live in an unmounted nested navigator, be behind a gate, or the name may be wrong.`,
+              mode,
+              success: false,
+            };
+          }
+          // The state event alone doesn't prove the transition: a navigator
+          // can absorb the action into params while focus stays put.
+          // focusChanged: false on a success is the agent's cue to inspect
+          // get_state and pick a different route path.
+          const focusedAfter = (currentRoute as { key?: string } | null)?.key;
+          return { currentRoute, focusChanged: focusedAfter !== focusedBefore, mode, success: true };
         },
         inputSchema: z.looseObject({
           mode: z
@@ -301,25 +368,27 @@ ACTIONS (see each tool for arg detail)
       pop: {
         description:
           'Pop screens off the stack.\n  · `to` omitted — pop 1 screen.\n  · `to: <number>` — pop N screens.\n  · `to: "ScreenName"` — pop back to a specific screen by name (optional `params`).\n  · `to: "top"` — pop all the way to the first screen.',
-        handler: (args) => {
+        handler: async (args) => {
           const to = args.to;
+          if (to !== undefined && to !== null && typeof to !== 'number' && typeof to !== 'string') {
+            return { error: `pop.to must be a number, a screen name, or "top". got ${typeof to}.` };
+          }
+          const settle = waitForStateChange();
           if (to === undefined || to === null) {
             navigation.dispatch({ payload: { count: 1 }, type: 'POP' });
           } else if (typeof to === 'number') {
             navigation.dispatch({ payload: { count: to }, type: 'POP' });
-          } else if (typeof to === 'string') {
-            if (to === 'top') {
-              navigation.dispatch({ type: 'POP_TO_TOP' });
-            } else {
-              navigation.dispatch({
-                payload: { name: to, params: args.params },
-                type: 'POP_TO',
-              });
-            }
+          } else if (to === 'top') {
+            navigation.dispatch({ type: 'POP_TO_TOP' });
           } else {
-            return { error: `pop.to must be a number, a screen name, or "top". got ${typeof to}.` };
+            navigation.dispatch({
+              payload: { name: to, params: args.params },
+              type: 'POP_TO',
+            });
           }
+          const changed = await settle;
           return {
+            changed,
             currentRoute: withScreenInfo(navigation.getCurrentRoute() as { key?: unknown } | null),
             success: true,
           };
@@ -341,9 +410,10 @@ ACTIONS (see each tool for arg detail)
       reset: {
         description:
           'Replace the navigator stack with `routes` (index defaults to the last route). Returns the new currentRoute.',
-        handler: (args) => {
+        handler: async (args) => {
           const routes = args.routes as Array<{ name: string; params?: Record<string, unknown> }>;
           const index = (args.index as number) ?? routes.length - 1;
+          const settle = waitForStateChange();
           navigation.dispatch({
             payload: {
               index,
@@ -353,7 +423,9 @@ ACTIONS (see each tool for arg detail)
             },
             type: 'RESET',
           });
+          const changed = await settle;
           return {
+            changed,
             currentRoute: withScreenInfo(navigation.getCurrentRoute() as { key?: unknown } | null),
             success: true,
           };
