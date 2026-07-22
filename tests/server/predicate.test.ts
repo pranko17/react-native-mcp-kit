@@ -44,6 +44,17 @@ describe('resolvePath', () => {
   it('handles out-of-bounds array indices as undefined', () => {
     expect(resolvePath(value, 'items.5')).toBeUndefined();
   });
+
+  it('accepts bracket indices, including at the path root', () => {
+    expect(resolvePath(value, 'items[0].name')).toBe('first');
+    expect(resolvePath([{ mock: { id: 3 } }], '[0].mock.id')).toBe(3);
+  });
+
+  it('accepts negative bracket indices as from-the-end access', () => {
+    expect(resolvePath(value, 'items[-1].name')).toBe('second');
+    expect(resolvePath([1, 2, 3], '[-2]')).toBe(2);
+    expect(resolvePath(value, 'items[-5].name')).toBeUndefined();
+  });
 });
 
 describe('evalPredicate — leaf ops', () => {

@@ -24,14 +24,18 @@ export type Predicate =
   LeafPredicate | { all: Predicate[] } | { any: Predicate[] } | { not: Predicate };
 
 /**
- * Drill into a value by dot-path. Arrays accept numeric indices and also
- * respond to `.length` (handy for "wait until list is empty"). Returns
- * undefined when any intermediate segment is missing.
+ * Drill into a value by dot-path. Arrays accept numeric indices in both
+ * `items.0.id` and `items[0].id` spellings (bracket indices may be negative:
+ * `[-1]` is the last element — matching the projection path syntax used by
+ * listing tools), and also respond to `.length` (handy for "wait until list
+ * is empty"). Returns undefined when any intermediate segment is missing.
  */
 export const resolvePath = (value: unknown, path: string | undefined): unknown => {
   if (!path) return value;
+  // `[0].mock` → `0.mock`, `items[-1].id` → `items.-1.id`.
+  const normalized = path.replace(/\[(-?\d+)\]/g, '.$1').replace(/^\./, '');
   let current: unknown = value;
-  for (const key of path.split('.')) {
+  for (const key of normalized.split('.')) {
     if (current == null) return undefined;
     if (Array.isArray(current)) {
       if (key === 'length') {
@@ -39,7 +43,11 @@ export const resolvePath = (value: unknown, path: string | undefined): unknown =
         continue;
       }
       const idx = Number.parseInt(key, 10);
-      current = Number.isNaN(idx) ? undefined : current[idx];
+      if (Number.isNaN(idx)) {
+        current = undefined;
+        continue;
+      }
+      current = current[idx < 0 ? current.length + idx : idx];
       continue;
     }
     if (typeof current === 'object') {
