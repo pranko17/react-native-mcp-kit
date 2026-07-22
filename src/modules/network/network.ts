@@ -14,7 +14,22 @@ import {
   type RedactPatterns,
 } from '@/shared/projection/redact';
 
-import { type NetworkEntry, type NetworkModuleOptions } from './types';
+import {
+  applyMockToXhr,
+  clearMocks,
+  consumeMatch,
+  listMocks,
+  removeMock,
+  setMock,
+  type XhrMockMark,
+} from './mocks';
+import {
+  type MockMode,
+  type MockPatchSpec,
+  type MockResponseSpec,
+  type NetworkEntry,
+  type NetworkModuleOptions,
+} from './types';
 
 const DEFAULT_MAX_ENTRIES = 100;
 const DEFAULT_BODY_MAX_BYTES = 20_000;
@@ -297,7 +312,15 @@ const installPatches = (): void => {
 
     const startTime = Date.now();
 
-    this.addEventListener('loadend', () => {
+    // Recording must not depend on event delivery: RN's EventTarget refuses
+    // synthetically dispatched events for addEventListener listeners (only
+    // `onX` attribute handlers fire), so mock short-circuits invoke this
+    // recorder directly via __mcp_record. Real requests reach it through
+    // the native loadend dispatch. `recorded` keeps the two paths idempotent.
+    let recorded = false;
+    const recordResponse = () => {
+      if (recorded) return;
+      recorded = true;
       entry.duration = Date.now() - startTime;
       entry.status = this.status >= 200 && this.status < 400 ? 'success' : 'error';
 
@@ -336,7 +359,30 @@ const installPatches = (): void => {
         ),
         status: this.status,
       };
-    });
+
+      const mark = (this as unknown as Record<string, unknown>).__mcp_mock as
+        XhrMockMark | undefined;
+      if (mark) {
+        const originalStatus = mark.realStatus ? Number(mark.realStatus()) : undefined;
+        entry.mock = {
+          id: mark.id,
+          mode: mark.mode,
+          ...(originalStatus !== undefined && !Number.isNaN(originalStatus)
+            ? { originalStatus }
+            : {}),
+          ...(mark.patchError ? { patchError: mark.patchError } : {}),
+        };
+      }
+    };
+    this.addEventListener('loadend', recordResponse);
+    (this as unknown as Record<string, unknown>).__mcp_record = recordResponse;
+
+    const mock = consumeMatch(method ?? 'GET', url);
+    if (mock) {
+      console.info(`[mcp-kit] network mock #${mock.id} (${mock.mode}) → ${method} ${url}`);
+      const proceed = applyMockToXhr(this, mock);
+      if (!proceed) return;
+    }
 
     return originalSend.call(this, body);
   };
@@ -354,6 +400,38 @@ const resolveRedactList = (
 ): ReturnType<typeof compileRedact> => {
   // override === false → disable; undefined → defaults; array → override list
   return compileRedact(override ?? defaults);
+};
+
+const statsHandler = (): unknown => {
+  const byMethod: Record<string, number> = {};
+  const byStatus: Record<string, number> = { error: 0, pending: 0, success: 0 };
+  let bytes = 0;
+  const durations: number[] = [];
+
+  for (const entry of buffer) {
+    byMethod[entry.method] = (byMethod[entry.method] ?? 0) + 1;
+    byStatus[entry.status] = (byStatus[entry.status] ?? 0) + 1;
+    if (typeof entry.duration === 'number') durations.push(entry.duration);
+    bytes += entry.request.bodyBytes ?? 0;
+    bytes += entry.response?.bodyBytes ?? 0;
+  }
+
+  durations.sort((a, b) => {
+    return a - b;
+  });
+
+  return {
+    byMethod,
+    byStatus,
+    bytes,
+    durationMs: {
+      max: durations.length ? durations[durations.length - 1] : null,
+      min: durations.length ? durations[0] : null,
+      p50: percentile(durations, 50),
+      p95: percentile(durations, 95),
+    },
+    total: buffer.length,
+  };
 };
 
 export const networkModule = (options?: NetworkModuleOptions): McpModule => {
@@ -388,9 +466,31 @@ module-import time so cold-start traffic is not lost.
 
 Listing tools accept path / depth / maxBytes (default depth ${NETWORK_DEFAULT_DEPTH}). WebSocket /
 Metro / symbolicate traffic is auto-ignored. Buffer size, body cap, and
-redaction lists are configurable via networkModule options.`,
+redaction lists are configurable via networkModule options.
+
+MOCKING — set_mock / list_mocks / remove_mock / clear_mocks. Modes:
+\`replace\` (synthesize status/headers/body, request never leaves the app),
+\`modify\` (real request runs; patch status/headers/body — bodyMergePatch is
+RFC 7396: objects merge deep, null deletes a key; bodyJsonPatch is RFC 6902
+for array surgery: remove/insert/replace by index, applied after the merge
+patch), \`error\` (network failure), \`timeout\`. Matching: first-match-wins
+by insertion order; url is
+a substring or /regex/; optional method and times (consumed per hit).
+delayMs applies to replace/error/timeout. Mocks work at the XHR layer (RN
+fetch rides on XHR, so both are covered), are volatile — a JS reload clears
+them — and every affected buffer entry carries \`mock: { id, mode,
+originalStatus? }\` so captured traffic never silently lies about being fake.
+Mocked JSON stays in React Query caches after clear_mocks — invalidate via
+the query module when a screen must drop mocked data.`,
     name: 'network',
     tools: {
+      clear_mocks: {
+        description: 'Remove all mocks. Returns how many were removed.',
+        handler: () => {
+          return { removed: clearMocks() };
+        },
+        inputSchema: z.looseObject({}),
+      },
       clear_requests: {
         description: 'Clear the request buffer.',
         handler: () => {
@@ -437,37 +537,145 @@ redaction lists are configurable via networkModule options.`,
         description:
           'Counts — total, by status, by method — plus duration percentiles (min / p50 / p95 / max) and total captured body bytes.',
         handler: () => {
-          const byMethod: Record<string, number> = {};
-          const byStatus: Record<string, number> = { error: 0, pending: 0, success: 0 };
-          let bytes = 0;
-          const durations: number[] = [];
-
-          for (const entry of buffer) {
-            byMethod[entry.method] = (byMethod[entry.method] ?? 0) + 1;
-            byStatus[entry.status] = (byStatus[entry.status] ?? 0) + 1;
-            if (typeof entry.duration === 'number') durations.push(entry.duration);
-            bytes += entry.request.bodyBytes ?? 0;
-            bytes += entry.response?.bodyBytes ?? 0;
-          }
-
-          durations.sort((a, b) => {
-            return a - b;
-          });
-
-          return {
-            byMethod,
-            byStatus,
-            bytes,
-            durationMs: {
-              max: durations.length ? durations[durations.length - 1] : null,
-              min: durations.length ? durations[0] : null,
-              p50: percentile(durations, 50),
-              p95: percentile(durations, 95),
-            },
-            total: buffer.length,
-          };
+          return statsHandler();
         },
         inputSchema: z.looseObject({}),
+      },
+      list_mocks: {
+        description:
+          'Active and exhausted mocks with hit counters. `active: false` means times ran out.',
+        handler: () => {
+          return listMocks().map((mock) => {
+            return {
+              active: mock.remaining === null || mock.remaining > 0,
+              createdAt: mock.createdAt,
+              delayMs: mock.delayMs,
+              hits: mock.hits,
+              id: mock.id,
+              method: mock.method,
+              mode: mock.mode,
+              remaining: mock.remaining,
+              url: mock.url,
+            };
+          });
+        },
+        inputSchema: z.looseObject({}),
+      },
+      remove_mock: {
+        description: 'Remove one mock by id.',
+        handler: (args) => {
+          return { removed: removeMock(args.id as number) };
+        },
+        inputSchema: z.looseObject({
+          id: z.number().int().describe('Mock id from set_mock / list_mocks.'),
+        }),
+      },
+      set_mock: {
+        description:
+          'Register a network mock; returns its id. First matching mock wins. See the module description for modes and matching.',
+        handler: (args) => {
+          const result = setMock({
+            delayMs: args.delayMs as number | undefined,
+            errorMessage: args.errorMessage as string | undefined,
+            method: args.method as string | undefined,
+            mode: args.mode as MockMode,
+            patch: args.patch as MockPatchSpec | undefined,
+            response: args.response as MockResponseSpec | undefined,
+            times: args.times as number | undefined,
+            url: args.url as string,
+          });
+          if ('error' in result) return result;
+          return {
+            active: true,
+            id: result.id,
+            mode: result.mode,
+            remaining: result.remaining,
+            url: result.url,
+          };
+        },
+        inputSchema: z.looseObject({
+          delayMs: z
+            .number()
+            .min(0)
+            .max(60_000)
+            .describe('Delay before the mocked outcome fires (replace / error / timeout only).')
+            .optional(),
+          errorMessage: z
+            .string()
+            .describe("Message recorded for mode 'error'. Default: 'Mocked network error'.")
+            .optional(),
+          method: z
+            .string()
+            .describe('HTTP method filter; omit to match any.')
+            .meta({ examples: ['GET', 'POST'] })
+            .optional(),
+          mode: z
+            .enum(['error', 'modify', 'replace', 'timeout'])
+            .describe(
+              'replace: synthesize the whole response. modify: run the real request, patch it. error: network failure. timeout: never respond.'
+            ),
+          patch: z
+            .looseObject({
+              body: z.unknown().describe('Full body replacement.').optional(),
+              bodyJsonPatch: z
+                .array(
+                  z.looseObject({
+                    from: z.string().describe('Source pointer for move / copy.').optional(),
+                    op: z.enum(['add', 'copy', 'move', 'remove', 'replace', 'test']),
+                    path: z
+                      .string()
+                      .describe('RFC 6901 JSON Pointer, e.g. "/items/2"; "-" appends.'),
+                    value: z.unknown().describe('Value for add / replace / test.').optional(),
+                  })
+                )
+                .min(1)
+                .describe(
+                  'RFC 6902 ops over the real JSON body — array surgery by index. Applied sequentially (indices shift after each remove); runs after bodyMergePatch. On failure the body is delivered unpatched and the entry carries mock.patchError.'
+                )
+                .meta({
+                  examples: [
+                    [
+                      { op: 'remove', path: '/items/2' },
+                      { op: 'remove', path: '/items/0' },
+                    ],
+                  ],
+                })
+                .optional(),
+              bodyMergePatch: z
+                .record(z.string(), z.unknown())
+                .describe('RFC 7396 merge patch over the real JSON body; null deletes a key.')
+                .optional(),
+              headers: z
+                .record(z.string(), z.string())
+                .describe('Header overrides (case-insensitive merge).')
+                .optional(),
+              status: z.number().int().describe('Status override.').optional(),
+            })
+            .describe("mode 'modify': what to change in the real response.")
+            .optional(),
+          response: z
+            .looseObject({
+              body: z.unknown().describe('String or JSON-serializable body.').optional(),
+              headers: z.record(z.string(), z.string()).optional(),
+              status: z.number().int().describe('Default 200.').optional(),
+              statusText: z.string().optional(),
+            })
+            .describe("mode 'replace': the synthesized response.")
+            .optional(),
+          times: z
+            .number()
+            .int()
+            .min(1)
+            .describe('Max hits before the mock deactivates; omit for unlimited.')
+            .optional(),
+          url: z
+            .string()
+            .min(1)
+            .describe('URL substring or /regex/ to match.')
+            .meta({
+              examples: ['/orders', '/\\/products\\/\\d+/'],
+            }),
+        }),
       },
     },
   };

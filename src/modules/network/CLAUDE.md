@@ -64,3 +64,19 @@ Description (line 378) doubles as agent-facing guidance. `inputSchema` uses the 
 ### clear_requests
 
 `clear_requests` (line 392). `buffer.length = 0`; `nextId` is not reset, so IDs keep monotonically increasing across clears.
+
+## Mocks ([mocks.ts](mocks.ts))
+
+Engine: store + matcher + XHR appliers. Tools: `set_mock` / `list_mocks` / `remove_mock` / `clear_mocks`; modes `replace` / `modify` / `error` / `timeout` (see the module description string for agent-facing semantics).
+
+Invariants:
+
+- **XHR layer only.** RN's fetch polyfill rides on XHR, so one interception point covers fetch and every other JS-side HTTP client, and each logical request consumes a matching mock exactly once. The fetch wrapper stays observation-only — do not add matching there, it would double-count hits. Fetch-layer duplicate entries record mocked values naturally (they read from the mocked XHR) but carry no `mock` flag; only the XHR-layer entry does.
+- **`modify` uses lazy instance shadows, not event listeners.** Values are patched via `Object.defineProperty` shadows installed before `send` that apply once `readyState === 4` — app handlers registered *before* our internal listener (HTTP clients typically set `onloadend` before calling send) still read patched values. Two property layouts are handled: own data props (RN's `status` — accessor with a backing store so runtime writes keep flowing) and prototype getters (RN's `responseText` / `response` — instance delegate). Don't "simplify" to a loadend listener: listener registration order would silently break clients that register handlers before send.
+- **`replace` / `error` / `timeout` never call the real `send`** and fire the standard event sequence themselves (`readystatechange` → `load` / `error` / `timeout` → `loadend`) through the XHR's own `dispatchEvent`, so the module's loadend recorder captures mocked traffic through the same path as real traffic. `new Event` may not exist in RN runtimes — `fireEvent` falls back to a `{ type }` plain object (RN's EventTarget accepts it).
+- **Volatile by design.** Mocks live in module memory and die on JS reload — the failsafe against a forgotten mock gaslighting a human tester. Don't move them to the daemon or persist them. Every hit logs `console.info`; every affected entry carries `mock: { id, mode, originalStatus? }`.
+- `bodyMergePatch` (RFC 7396) is for objects, `bodyJsonPatch` (RFC 6902) is for array surgery — remove/insert/replace by index, `-` appends, move/copy/test, `~0`/`~1` pointer escapes. Ops run sequentially on a clone (indices shift after each remove) and AFTER the merge patch when both are given. A failed op delivers the body unpatched and stamps `mock.patchError` on the entry — never a half-applied patch.
+- Mocked JSON survives in React Query caches after `clear_mocks` — pairing with query invalidation is the consumer's job (documented in the tool description).
+- The integration suite pins the total module-tool count (`directRegistration.test.ts`) — adding/removing network tools requires bumping that constant.
+
+Tests: [`tests/modules/networkMock.test.ts`](../../../tests/modules/networkMock.test.ts) — RN-shaped FakeXHR (own-prop `status`, proto-getter `responseText`/`response`, worst-case event order: `onX` before listeners) installed as the global before the module import.

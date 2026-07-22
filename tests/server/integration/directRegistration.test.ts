@@ -211,11 +211,11 @@ describe('direct tool registration (integration)', () => {
     }
   });
 
-  it('registers every module tool when a client connects (49 + 2 wrappers)', async () => {
+  it('registers every module tool when a client connects (53 + 2 wrappers)', async () => {
     const before = listChangedCount;
     wsA = await connectClient(realModules, ID_A);
     const names = await listToolNames();
-    expect(MODULE_TOOL_COUNT).toBe(49);
+    expect(MODULE_TOOL_COUNT).toBe(53);
     expect(names).toHaveLength(MODULE_TOOL_COUNT + WRAPPER_TOOL_COUNT);
     expect(names).toContain('fiber_tree__query');
     await vi.waitFor(() => {

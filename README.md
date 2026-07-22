@@ -150,7 +150,7 @@ A separate module that talks to the Metro instance each app was bundled from —
 | ------------ | ------------------------------------------------------------------------------------------ |
 | `fiber_tree` | Search and read the component tree — the heart of UI inspection ([details](#fiber_tree))   |
 | `navigation` | Current route (+ rendering component), state, history; navigate / pop / reset / go_back    |
-| `network`    | fetch + XHR log with redaction: method, URL, status, duration, headers, bodies             |
+| `network`    | fetch + XHR log with redaction, plus request mocking: replace / modify / error / timeout   |
 | `console`    | Ring buffer over console.* with stacks and monotonic ids                                   |
 | `errors`     | Unhandled errors + promise rejections, stacks pre-parsed for symbolication                 |
 | `redux`      | State tree reads + dispatch                                                                |
@@ -176,6 +176,17 @@ What you can select per match:
 - `refMethods` — native-ref methods (`focus`, `scrollTo`, …) callable via `fiber_tree__call({ method })`; `fiber_tree__call({ prop: 'onPress' })` invokes callback props directly when the gesture pipeline is unwanted.
 
 Every hook entry and every stamped component carries an `mcpId` of the form `Name:file:line` — the agent can jump from a running component straight to its source line.
+
+### network — mocking
+
+`set_mock` / `list_mocks` / `remove_mock` / `clear_mocks` let the agent control what the app receives from the backend — the missing half of the verify loop: error states a dev backend will never serve on demand. Four modes:
+
+- **`replace`** — synthesize the whole response (status / headers / body); the request never leaves the app;
+- **`modify`** — the real request runs, then status / headers / body are patched before the app sees them. `bodyMergePatch` is RFC 7396: take the real payload and flip one field (`{ "feature": { "enabled": false } }`), objects merge deep, `null` deletes a key; `bodyJsonPatch` is RFC 6902 for array surgery — `[{ "op": "remove", "path": "/items/2" }]` drops one element of the real response;
+- **`error`** — network failure;
+- **`timeout`** — the request never settles.
+
+Matching is first-match-wins: `url` substring or `/regex/`, optional `method` and `times` (each hit consumes one), `delayMs` for latency simulation. Mocks apply at the XHR layer — RN's fetch rides on XHR, so every JS-side HTTP client is covered by one interception point. They are deliberately volatile (a JS reload clears them), every mock hit is logged to the console, and affected `get_requests` entries carry `mock: { id, mode, originalStatus? }` — captured traffic never silently lies about being fake.
 
 ## Your own tools
 
